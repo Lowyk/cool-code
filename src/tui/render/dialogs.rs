@@ -1,6 +1,6 @@
 use crate::agent::ToolApproval;
-use crate::policy::{MODES, mode_label};
-use crate::tui::render::centered_rect;
+use crate::policy::MODES;
+use crate::tui::render::{centered_rect, mode_span};
 use crate::tui::state::{App, PrivacyPrompt};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -248,16 +248,12 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
         .style(Style::default().bg(Color::Rgb(25, 32, 38)));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let options = MODES.iter().enumerate().map(|(index, (label, _))| {
+    let options = MODES.iter().enumerate().map(|(index, (_, mode))| {
         if index == app.mode_index {
-            Span::styled(
-                format!("[ {label} ]"),
-                Style::default()
-                    .fg(Color::Rgb(120, 220, 245))
-                    .add_modifier(Modifier::BOLD),
-            )
+            let span = mode_span(mode, true);
+            Span::styled(format!("[ {} ]", span.content), span.style)
         } else {
-            Span::styled(*label, Style::default().fg(Color::Gray))
+            mode_span(mode, false)
         }
     });
     let mut spans = Vec::new();
@@ -272,10 +268,10 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
         Line::from(""),
         Line::from(spans),
         Line::from(""),
-        Line::from(Span::styled(
-            format!("Current: {}", mode_label(selected)),
-            Style::default().fg(Color::Gray),
-        )),
+        Line::from(vec![
+            Span::styled("Current: ", Style::default().fg(Color::Gray)),
+            mode_span(selected, true),
+        ]),
         Line::from(Span::styled(
             "←/→ browse   Enter select   Esc cancel",
             Style::default().fg(Color::DarkGray),

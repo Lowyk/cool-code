@@ -17,6 +17,33 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
+fn mode_color(mode: &str) -> Color {
+    match mode {
+        "accept-everything" => Color::Rgb(235, 80, 80),
+        "accept-edits" => Color::Rgb(180, 130, 255),
+        "auto" => Color::Rgb(110, 220, 130),
+        "plan" => Color::Rgb(240, 210, 90),
+        "accept-minimal" => Color::Rgb(98, 213, 244),
+        _ => Color::Gray,
+    }
+}
+
+pub(super) fn mode_span(mode: &str, selected: bool) -> Span<'static> {
+    let label = mode_label(mode);
+    let text = if mode == "accept-everything" {
+        format!("⚠ {label}")
+    } else {
+        label.to_owned()
+    };
+    let color = mode_color(mode);
+    let style = if selected {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color).add_modifier(Modifier::DIM)
+    };
+    Span::styled(text, style)
+}
+
 pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, usize)) {
     use unicode_width::UnicodeWidthChar as _;
 
@@ -281,10 +308,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         )]
     };
     let mut status_spans = vec![
-        Span::styled(
-            mode_label(&app.settings.permission_mode),
-            Style::default().fg(Color::Rgb(98, 213, 244)),
-        ),
+        mode_span(&app.settings.permission_mode, true),
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
         Span::styled(model, Style::default().fg(Color::White)),
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
@@ -353,8 +377,65 @@ pub(super) fn centered_rect(width_percent: u16, height_percent: u16, area: Rect)
 
 #[cfg(test)]
 mod tests {
-    use super::{input_prompt_height, input_visual_lines, wrap_input_text};
+    use super::{draw, input_prompt_height, input_visual_lines, mode_span, wrap_input_text};
+    use crate::Settings;
+    use crate::tui::state::App;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier};
+
+    const MODE_COLORS: [(&str, Color); 5] = [
+        ("accept-everything", Color::Rgb(235, 80, 80)),
+        ("accept-edits", Color::Rgb(180, 130, 255)),
+        ("auto", Color::Rgb(110, 220, 130)),
+        ("plan", Color::Rgb(240, 210, 90)),
+        ("accept-minimal", Color::Rgb(98, 213, 244)),
+    ];
+
+    #[test]
+    fn each_permission_mode_has_its_own_color() {
+        for (mode, color) in MODE_COLORS {
+            let span = mode_span(mode, true);
+            assert_eq!(span.style.fg, Some(color), "{mode}");
+            assert!(span.style.add_modifier.contains(Modifier::BOLD), "{mode}");
+            assert!(
+                !mode_span(mode, false)
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+            );
+        }
+    }
+
+    #[test]
+    fn only_accept_everything_carries_a_warning_sign() {
+        assert_eq!(
+            mode_span("accept-everything", true).content,
+            "⚠ Accept Everything"
+        );
+        for mode in ["accept-edits", "auto", "plan", "accept-minimal"] {
+            assert!(!mode_span(mode, true).content.contains('⚠'), "{mode}");
+        }
+    }
+
+    #[test]
+    fn status_row_renders_the_mode_in_its_color() {
+        for (mode, color) in MODE_COLORS {
+            let mut settings = Settings::default();
+            settings.permission_mode = mode.to_owned();
+            let mut app = App::new(settings);
+            app.trust_prompt = false;
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("test terminal");
+            terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+            let buffer = terminal.backend().buffer();
+            let found = buffer
+                .content()
+                .iter()
+                .any(|cell| cell.fg == color && cell.symbol() != " ");
+            assert!(found, "{mode} label not drawn in {color:?}");
+        }
+    }
 
     #[test]
     fn long_prompt_wraps_and_grows_the_input_area() {
