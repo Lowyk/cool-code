@@ -97,11 +97,25 @@ pub(super) fn model_id_for_profile(profile: &ProviderProfile, model_id: &str) ->
             .eq_ignore_ascii_case(model_id)
             .then(|| profile.model.clone());
     }
-    profile
+    if let Some(exact) = profile
         .models
         .iter()
         .find(|model| model.id.eq_ignore_ascii_case(model_id))
-        .map(|model| model.id.clone())
+    {
+        return Some(exact.id.clone());
+    }
+    // Providers such as Groq register author-prefixed IDs (`openai/gpt-oss-120b`);
+    // accept the bare name only when it identifies exactly one model.
+    let mut suffix_matches = profile.models.iter().filter(|model| {
+        model
+            .id
+            .rsplit_once('/')
+            .is_some_and(|(_, name)| name.eq_ignore_ascii_case(model_id))
+    });
+    match (suffix_matches.next(), suffix_matches.next()) {
+        (Some(model), None) => Some(model.id.clone()),
+        _ => None,
+    }
 }
 
 pub(super) fn resolve_model_reference(
@@ -481,6 +495,69 @@ mod tests {
         assert!(model_author_matches("anthropic", "claude-opus-5"));
         assert!(model_author_matches("openai", "gpt-6-luna"));
         assert!(!model_author_matches("anthropic", "gpt-6-luna"));
+    }
+
+    fn profile(id: &str, adapter: &str, models: &[&str], auto_switch: bool) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            adapter: adapter.to_owned(),
+            model: models[0].to_owned(),
+            models: models
+                .iter()
+                .map(|model| ModelProfile {
+                    id: (*model).to_owned(),
+                    name: String::new(),
+                })
+                .collect(),
+            draft: false,
+            auto_switch,
+            base_url: None,
+        }
+    }
+
+    #[test]
+    fn bare_model_name_resolves_to_provider_with_author_prefixed_id() {
+        let mut settings = Settings::default();
+        settings.default_provider_id = Some("google".to_owned());
+        settings.providers = vec![
+            profile("google", "google", &["gemini-flash-latest"], true),
+            profile(
+                "groq",
+                "openai-compatible",
+                &["qwen/qwen3.8-27b", "openai/gpt-oss-120b"],
+                true,
+            ),
+        ];
+        let (resolved, matches) = resolve_model_reference(&settings, "gpt-oss-120b");
+        assert_eq!(resolved, "gpt-oss-120b");
+        assert_eq!(matches, vec![(1, "openai/gpt-oss-120b".to_owned())]);
+    }
+
+    #[test]
+    fn bare_model_name_is_not_guessed_when_a_profile_has_several_author_matches() {
+        let mut settings = Settings::default();
+        settings.providers = vec![profile(
+            "router",
+            "openai-compatible",
+            &["openai/shared-model", "meta/shared-model"],
+            true,
+        )];
+        let (_, matches) = resolve_model_reference(&settings, "shared-model");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn exact_model_id_wins_over_author_suffix_match() {
+        let mut settings = Settings::default();
+        settings.providers = vec![profile(
+            "router",
+            "openai-compatible",
+            &["openai/gpt-oss-120b", "gpt-oss-120b"],
+            true,
+        )];
+        let (_, matches) = resolve_model_reference(&settings, "gpt-oss-120b");
+        assert_eq!(matches, vec![(0, "gpt-oss-120b".to_owned())]);
     }
 
     #[test]
