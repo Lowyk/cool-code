@@ -49,7 +49,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 
 ## Terminal experience
 
-The default interactive launch should feel like a coding workspace, not a bare prompt loop: a centered project wordmark in ASCII art, a comfortable prompt area with subtle contrast, and a status strip showing permission mode, model, and effort separated by small dots. The UI must adapt to terminal width, support reduced/no color, and keep status visible during a session. The selected brand name remains undecided.
+The default interactive launch should feel like a coding workspace, not a bare prompt loop: a centered project wordmark in ASCII art, a comfortable prompt area with subtle contrast, and a status strip showing permission mode, model, and effort separated by small dots. The UI must adapt to terminal width, support reduced/no color, and keep status visible during a session. The welcome screen shows a sparse, dim backdrop of drifting ice crystals in three depth layers; it is hidden once a conversation starts, can be turned off under Settings → General → Background, and is disabled when `NO_COLOR` is set. The selected brand name remains undecided.
 
 ## Effort semantics
 
