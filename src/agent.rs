@@ -1,11 +1,23 @@
-use crate::policy::{auto_approve_command, auto_approve_create, auto_approve_edit};
-use crate::tui::state::{PendingEvent, ToolApproval, mode_label};
+use crate::policy::{auto_approve_command, auto_approve_create, auto_approve_edit, mode_label};
 use crate::{Settings, provider};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, SyncSender};
 
-pub(super) fn run_agent_turns(
+pub(crate) enum PendingEvent {
+    ToolAction(String),
+    ConversationMessage(provider::ChatMessage),
+    ApprovalRequest(ToolApproval),
+    Finished(std::result::Result<provider::Completion, String>),
+}
+
+pub(crate) struct ToolApproval {
+    pub(crate) title: String,
+    pub(crate) details: String,
+    pub(crate) response: SyncSender<bool>,
+}
+
+pub(crate) fn run_agent_turns(
     settings: Settings,
     mut messages: Vec<provider::ChatMessage>,
     workspace_root: PathBuf,
@@ -76,7 +88,7 @@ pub(super) fn run_agent_turns(
     bail!("agent tool-call round limit reached without a final response")
 }
 
-pub(super) fn execute_agent_tool(
+fn execute_agent_tool(
     settings: &Settings,
     root: &Path,
     name: &str,
@@ -239,7 +251,7 @@ pub(super) fn execute_agent_tool(
     ))
 }
 
-pub(super) fn request_plan_approval(
+fn request_plan_approval(
     settings: &Settings,
     root: &Path,
     arguments: &serde_json::Value,
@@ -381,7 +393,7 @@ pub(super) fn request_plan_approval(
     }
 }
 
-pub(super) fn request_tool_approval(
+fn request_tool_approval(
     events: &mpsc::Sender<PendingEvent>,
     title: String,
     details: String,
@@ -398,7 +410,7 @@ pub(super) fn request_tool_approval(
         .context("waiting for the action approval decision")
 }
 
-pub(super) fn summarize_tool_result(result: &str) -> String {
+fn summarize_tool_result(result: &str) -> String {
     let one_line = result.lines().take(2).collect::<Vec<_>>().join(" · ");
     let shortened = one_line.chars().take(180).collect::<String>();
     if result.lines().count() > 2 || result.chars().count() > 180 {
@@ -407,6 +419,3 @@ pub(super) fn summarize_tool_result(result: &str) -> String {
         shortened
     }
 }
-
-#[cfg(test)]
-mod tests {}
