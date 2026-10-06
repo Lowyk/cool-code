@@ -1,4 +1,4 @@
-pub(super) const MODES: [(&str, &str); 5] = [
+pub(crate) const MODES: [(&str, &str); 5] = [
     ("Auto", "auto"),
     ("Accept Edits", "accept-edits"),
     ("Accept Minimal", "accept-minimal"),
@@ -6,7 +6,7 @@ pub(super) const MODES: [(&str, &str); 5] = [
     ("Plan", "plan"),
 ];
 
-pub(super) fn auto_approve_create(
+pub(crate) fn auto_approve_create(
     permission_mode: &str,
     proposal: &crate::tools::CreateProposal,
 ) -> bool {
@@ -28,7 +28,7 @@ pub(super) fn auto_approve_create(
     }
 }
 
-pub(super) fn auto_approve_edit(
+pub(crate) fn auto_approve_edit(
     permission_mode: &str,
     proposal: &crate::tools::EditProposal,
 ) -> bool {
@@ -51,7 +51,7 @@ pub(super) fn auto_approve_edit(
     }
 }
 
-pub(super) fn auto_approve_command(permission_mode: &str, command: &str) -> bool {
+pub(crate) fn auto_approve_command(permission_mode: &str, command: &str) -> bool {
     if permission_mode == "accept-everything" {
         return true;
     }
