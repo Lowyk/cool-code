@@ -311,7 +311,11 @@ fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-pub(crate) fn run_command(root: &Path, command: &str) -> Result<String> {
+pub(crate) fn run_command(
+    root: &Path,
+    command: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String> {
     let command = command.trim();
     if command.is_empty() || command.len() > 8 * 1024 || command.contains('\0') {
         bail!("command must be non-empty and no longer than 8 KiB");
@@ -345,6 +349,11 @@ pub(crate) fn run_command(root: &Path, command: &str) -> Result<String> {
     let status = loop {
         if let Some(status) = child.try_wait().context("waiting for command")? {
             break status;
+        }
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("command cancelled");
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -733,5 +742,36 @@ mod tests {
         assert!(prepare_create_file(&root, "new.rs", "replacement").is_err());
         assert!(apply_create(&root, &proposal).is_err());
         fs::remove_dir_all(root).expect("remove workspace");
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::run_command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn cancelled_command_is_killed() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trigger = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            trigger.store(true, Ordering::Relaxed);
+        });
+        let command = if cfg!(windows) {
+            "Start-Sleep -Seconds 20"
+        } else {
+            "sleep 20"
+        };
+        let started = Instant::now();
+        let error = run_command(&std::env::temp_dir(), command, &cancel).expect_err("cancelled");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert!(error.to_string().contains("cancelled"), "{error}");
     }
 }

@@ -11,7 +11,7 @@ use crate::tui::render::dialogs::{
     draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
 };
 use crate::tui::settings::draw_settings_view;
-use crate::tui::state::{App, TranscriptKind};
+use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::wordmark::cool_code_wordmark;
 use crate::{Effort, provider};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
@@ -44,6 +44,49 @@ pub(super) fn mode_span(mode: &str, selected: bool) -> Span<'static> {
         Style::default().fg(color).add_modifier(Modifier::DIM)
     };
     Span::styled(text, style)
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub(super) fn status_line(turn: &StreamingTurn, now: std::time::Instant) -> String {
+    let elapsed = now.saturating_duration_since(turn.started);
+    let spinner = SPINNER[(elapsed.as_millis() / 80) as usize % SPINNER.len()];
+    if let Some((label, started)) = &turn.tool {
+        let seconds = now.saturating_duration_since(*started).as_secs_f32();
+        return format!("{spinner} {label} · {seconds:.1}s · Esc to cancel");
+    }
+    let tokens = match turn.usage {
+        Some(tokens) => format!("{tokens} tokens"),
+        // Rough estimate when the provider does not report usage while streaming.
+        None => format!("~{} tokens", turn.text.chars().count() / 4),
+    };
+    format!(
+        "{spinner} {:.1}s · {tokens} · Esc to cancel",
+        elapsed.as_secs_f32()
+    )
+}
+
+fn streaming_lines(turn: &StreamingTurn) -> Vec<Line<'static>> {
+    let marker = Style::default()
+        .fg(Color::Rgb(165, 236, 250))
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(Color::White);
+    let cursor = Span::styled("▍", Style::default().fg(Color::Rgb(98, 213, 244)));
+    let mut lines = turn
+        .text
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            Line::from(vec![
+                Span::styled(if index == 0 { "• " } else { "  " }, marker),
+                Span::styled(line.to_owned(), text_style),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if let Some(last) = lines.last_mut() {
+        last.spans.push(cursor);
+    }
+    lines
 }
 
 pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, usize)) {
@@ -197,6 +240,11 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
             }
             lines.push(Line::from(""));
         }
+        if let Some(turn) = app.streaming.as_ref()
+            && turn.tool.is_none()
+        {
+            lines.extend(streaming_lines(turn));
+        }
         let wrapped_line_count = lines
             .iter()
             .map(|line| {
@@ -291,6 +339,13 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
             Style::default().fg(Color::DarkGray),
         ),
     ]);
+    let help = match app.streaming.as_ref() {
+        Some(turn) => Line::from(Span::styled(
+            status_line(turn, std::time::Instant::now()),
+            Style::default().fg(Color::Rgb(120, 170, 200)),
+        )),
+        None => help,
+    };
     frame.render_widget(Paragraph::new(help).alignment(Alignment::Center), help_area);
 
     let model = app
@@ -387,14 +442,20 @@ pub(super) fn centered_rect(width_percent: u16, height_percent: u16, area: Rect)
 
 #[cfg(test)]
 mod tests {
-    use super::{draw, input_prompt_height, input_visual_lines, mode_span, wrap_input_text};
+    use super::{
+        draw, input_prompt_height, input_visual_lines, mode_span, status_line, wrap_input_text,
+    };
     use crate::Settings;
+    use crate::agent::PendingEvent;
     use crate::tui::backdrop::PARTICLE_GLYPHS;
-    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use crate::tui::state::{App, StreamingTurn, TranscriptEntry, TranscriptKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
 
     const MODE_COLORS: [(&str, Color); 5] = [
         ("accept-everything", Color::Rgb(235, 80, 80)),
@@ -515,5 +576,85 @@ mod backdrop_tests {
     #[test]
     fn backdrop_setting_turns_it_off() {
         assert_eq!(particle_count(&app(false)), 0);
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::{draw, status_line};
+    use crate::Settings;
+    use crate::agent::PendingEvent;
+    use crate::tui::state::{App, StreamingTurn};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    fn turn(text: &str, usage: Option<u64>, tool: Option<&str>) -> (StreamingTurn, Instant) {
+        let mut turn = StreamingTurn::new(Arc::new(AtomicBool::new(false)));
+        let now = turn.started + Duration::from_millis(4_200);
+        turn.text = text.to_owned();
+        turn.usage = usage;
+        turn.tool = tool.map(|label| (label.to_owned(), turn.started));
+        (turn, now)
+    }
+
+    #[test]
+    fn status_line_uses_reported_usage() {
+        let (turn, now) = turn("hello", Some(512), None);
+        let line = status_line(&turn, now);
+        assert!(
+            line.ends_with("4.2s · 512 tokens · Esc to cancel"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn status_line_estimates_without_usage() {
+        let (turn, now) = turn(&"x".repeat(40), None, None);
+        assert!(status_line(&turn, now).contains("~10 tokens"));
+    }
+
+    #[test]
+    fn status_line_shows_running_tool() {
+        let (turn, now) = turn("", None, Some("cargo test"));
+        let line = status_line(&turn, now);
+        assert!(
+            line.ends_with("cargo test · 4.2s · Esc to cancel"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn streaming_turn_renders_text_cursor_and_status() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.transcript.push(crate::tui::state::TranscriptEntry {
+            kind: crate::tui::state::TranscriptKind::User,
+            text: "hi".to_owned(),
+        });
+        let (sender, receiver) = mpsc::channel();
+        app.pending = Some(receiver);
+        app.streaming = Some(StreamingTurn::new(Arc::new(AtomicBool::new(false))));
+        sender
+            .send(PendingEvent::TextDelta("Hel".to_owned()))
+            .unwrap();
+        sender
+            .send(PendingEvent::TextDelta("lo".to_owned()))
+            .unwrap();
+        app.poll_response();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Hello▍"), "{text}");
+        assert!(text.contains("Esc to cancel"), "{text}");
     }
 }
