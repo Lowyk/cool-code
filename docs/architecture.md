@@ -23,6 +23,26 @@ The policy engine is authoritative. Model-generated reasoning may recommend acti
 
 The system prompt has three separately labeled sources: an immutable, versioned-in-code harness policy; optional user-authored global instructions at `~/.coolcode/COOL.md`; and project context from a trusted workspace's `COOL.md`. User instructions express the user's preferences but cannot override harness policy. Repository context and tool output are untrusted data and cannot grant permissions. The harness owns a provider-neutral tool registry; OpenAI-compatible, Anthropic, and Google adapters translate its schemas and normalized tool results into their native API formats. The agent loop includes bounded repository inspection, exact-snippet edits, and permission-gated platform shell commands. Tool proposals cannot change harness policy. Modes have deterministic rules: Plan starts read-only, then grants only the exact action list shown in an approved plan; Accept Edits auto-approves edits; Accept Minimal auto-approves edits and a literal verification-command allowlist; Auto auto-approves small non-sensitive edits and that allowlist; Accept Everything auto-approves both edits and commands. Other actions require an explicit user decision. Shell execution uses an explicit PowerShell or POSIX shell profile and is bounded by a time and output limit.
 
+## Source layout
+
+| Path | Responsibility |
+| --- | --- |
+| `src/main.rs` | CLI entry point, settings types, and config commands |
+| `src/agent.rs` | Bounded agent turn loop, tool execution, and the event/approval types the UI consumes; has no terminal-UI dependencies |
+| `src/policy.rs` | Deterministic permission rules (`auto_approve_*`) and the permission-mode table |
+| `src/provider.rs` | Provider adapters and model fallback |
+| `src/tools.rs` | Workspace tools, edit and create proposals |
+| `src/secrets.rs` | OS credential-store access |
+| `src/tui/mod.rs` | Terminal setup and the event loop |
+| `src/tui/state.rs` | Application state, draft structs, and constants |
+| `src/tui/commands.rs` | Prompt submission and slash-command handling |
+| `src/tui/models.rs` | Model, provider, and chain resolution and activation |
+| `src/tui/forms.rs` | Provider and chain editing forms and settings key handling |
+| `src/tui/context.rs` | Workspace trust and `COOL.md` / `@path` context loading |
+| `src/tui/render/` | Frame drawing: `mod.rs` (layout and input), `settings.rs`, `dialogs.rs` |
+| `src/tui/effort.rs` | Effort slider rendering and animation |
+| `src/tui/wordmark.rs` | Welcome wordmark and gradient |
+
 ## Terminal experience
 
 The default interactive launch should feel like a coding workspace, not a bare prompt loop: a centered project wordmark in ASCII art, a comfortable prompt area with subtle contrast, and a status strip showing permission mode, model, and effort separated by small dots. The UI must adapt to terminal width, support reduced/no color, and keep status visible during a session. The selected brand name remains undecided.
