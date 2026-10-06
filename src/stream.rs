@@ -295,6 +295,63 @@ pub(crate) fn parse_anthropic_stream(reader: impl BufRead, stream: &Stream) -> R
     finish(text.into_inner(), tool_calls)
 }
 
+pub(crate) fn parse_google_stream(reader: impl BufRead, stream: &Stream) -> Result<AgentTurn> {
+    let text = std::cell::RefCell::new(String::new());
+    let mut tool_calls = Vec::new();
+    drive(reader, stream, &text, |data| {
+        let Ok(chunk) = serde_json::from_str::<Value>(data) else {
+            return Ok(());
+        };
+        if let Some(error) = chunk.get("error") {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            return Err(interrupted(
+                &text.borrow(),
+                format!("provider error: {message}"),
+            ));
+        }
+        if let Some(tokens) = chunk
+            .pointer("/usageMetadata/candidatesTokenCount")
+            .and_then(Value::as_u64)
+        {
+            stream.emit(StreamEvent::Usage(tokens));
+        }
+        for part in chunk
+            .pointer("/candidates/0/content/parts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(piece) = part.get("text").and_then(Value::as_str) {
+                push_text(&text, stream, piece);
+            }
+            if let Some(call) = part.get("functionCall") {
+                let Some(name) = call.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                tool_calls.push(ToolCall {
+                    id: call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            format!("google-call-{}", uuid::Uuid::new_v4().simple())
+                        }),
+                    name: name.to_owned(),
+                    arguments: call
+                        .get("args")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                });
+            }
+        }
+        Ok(())
+    })?;
+    finish(text.into_inner(), tool_calls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Interrupted, Stream, StreamEvent, parse_openai_stream, sse_data};
@@ -370,6 +427,30 @@ data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\
         let interrupted = error.downcast_ref::<Interrupted>().expect("interrupted");
         assert_eq!(interrupted.partial, "half");
         assert!(interrupted.reason.contains("Overloaded"));
+    }
+
+    #[test]
+    fn google_stream_assembles_text_function_calls_and_usage() {
+        let fixture = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\r\n\r\n\
+data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"},{\"functionCall\":{\"name\":\"read_file\",\"args\":{\"path\":\"a.rs\"}}}]}}],\"usageMetadata\":{\"candidatesTokenCount\":7}}\r\n\r\n";
+        let (result, events) = run_with(super::parse_google_stream, fixture);
+        let turn = result.expect("turn");
+        assert_eq!(turn.text, "Hello");
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].name, "read_file");
+        assert_eq!(turn.tool_calls[0].arguments["path"], "a.rs");
+        assert!(turn.tool_calls[0].id.starts_with("google-call-"));
+        assert!(events.contains(&StreamEvent::Usage(7)));
+    }
+
+    #[test]
+    fn google_error_payload_keeps_partial_text() {
+        let fixture = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"half\"}]}}]}\n\n\
+data: {\"error\":{\"code\":500,\"message\":\"Internal\"}}\n\n";
+        let (result, _) = run_with(super::parse_google_stream, fixture);
+        let error = result.expect_err("error");
+        let interrupted = error.downcast_ref::<Interrupted>().expect("interrupted");
+        assert_eq!(interrupted.partial, "half");
     }
 
     #[test]
