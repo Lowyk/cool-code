@@ -104,6 +104,7 @@ struct Settings {
     privacy_acknowledged: Vec<String>,
     privacy_image_acknowledged: Vec<String>,
     extreme_acknowledged: bool,
+    background_animation: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -162,6 +163,7 @@ impl Default for Settings {
             privacy_acknowledged: Vec::new(),
             privacy_image_acknowledged: Vec::new(),
             extreme_acknowledged: false,
+            background_animation: true,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

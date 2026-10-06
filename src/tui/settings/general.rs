@@ -5,6 +5,7 @@ use crate::tui::pickers::model::ModelPicker;
 use crate::tui::render::mode_span;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::{App, LEVELS};
+use crate::write_settings;
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
@@ -12,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 4;
+pub(super) const ROWS: usize = 5;
 
 pub(super) fn draw_general(
     frame: &mut ratatui::Frame<'_>,
@@ -56,8 +57,13 @@ pub(super) fn draw_general(
         )],
         vec![mode_span(&app.settings.permission_mode, true)],
         vec![trust],
+        vec![if app.settings.background_animation {
+            Span::styled("on", Style::default().fg(Color::Rgb(110, 220, 130)))
+        } else {
+            Span::styled("off", Style::default().fg(Color::Gray))
+        }],
     ];
-    let labels = ["Model", "Effort", "Mode", "Workspace trust"];
+    let labels = ["Model", "Effort", "Mode", "Workspace trust", "Background"];
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
     for (index, (label, value)) in labels.iter().zip(values).enumerate() {
@@ -113,7 +119,11 @@ impl App {
                         .unwrap_or(0);
                     self.mode_picker = true;
                 }
-                _ => self.set_workspace_trusted(!self.workspace_trusted)?,
+                3 => self.set_workspace_trusted(!self.workspace_trusted)?,
+                _ => {
+                    self.settings.background_animation = !self.settings.background_animation;
+                    write_settings(&self.settings)?;
+                }
             },
             _ => {}
         }

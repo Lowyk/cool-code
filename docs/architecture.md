@@ -45,6 +45,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/render/` | Frame drawing: `mod.rs` (layout and input), `forms.rs`, `dialogs.rs` |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
 | `src/tui/wordmark.rs` | Welcome wordmark and gradient |
+| `src/tui/backdrop.rs` | Drifting ice-crystal backdrop on the welcome screen |
 
 ## Terminal experience
 

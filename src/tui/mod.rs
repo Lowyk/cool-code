@@ -1,3 +1,4 @@
+mod backdrop;
 mod commands;
 mod context;
 mod effort;
