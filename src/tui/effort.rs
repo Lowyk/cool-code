@@ -34,14 +34,20 @@ fn smooth_noise(x: f32, y: f32) -> f32 {
     top + (bottom - top) * sy
 }
 
+fn fbm(x: f32, y: f32) -> f32 {
+    (smooth_noise(x, y) + 0.5 * smooth_noise(x * 2.1 + 17.0, y * 2.1 + 5.0)) / 1.5
+}
+
 /// Fraction of the bar's height that is lit for `effort` at horizontal position `x` (0..=1) and time `t` in seconds.
 pub(super) fn effort_level(effort: Effort, x: f32, t: f32) -> f32 {
     let level = match effort {
         Effort::Low => 0.18,
         Effort::Medium => 0.32,
         Effort::High => 0.48,
-        Effort::XHigh => 0.78 - 0.45 * x,
-        Effort::Max => 0.95 - 0.55 * x + 0.04 * (t * 2.0 + x * 6.0).sin(),
+        // Aurora: two curtains drifting at different speeds.
+        Effort::XHigh => 0.55 + 0.2 * (x * 5.0 + t * 0.9).sin() + 0.15 * (x * 11.0 - t * 1.7).sin(),
+        // Equalizer: every column bounces on its own smoothed noise.
+        Effort::Max => 0.25 + 0.75 * smooth_noise(x * 14.0, t * 2.2),
         Effort::Super => 0.5 + 0.35 * (std::f32::consts::TAU * (x * 2.0 - t * 0.6)).sin(),
         Effort::Extreme => 0.5 + 0.84 * (smooth_noise(x * 7.0, t * 2.0) - 0.5),
     };
@@ -68,6 +74,20 @@ fn hsv(hue: f32, saturation: f32, value: f32) -> Color {
     )
 }
 
+pub(super) const WHITE_HOT: Color = Color::Rgb(255, 246, 214);
+const PEAK_FALL_PER_SECOND: f32 = 0.35;
+
+/// Height of the Max equalizer's floating peak cap: the recent maximum, falling slowly.
+pub(super) fn max_peak(x: f32, t: f32) -> f32 {
+    (0..12)
+        .map(|step| {
+            let age = step as f32 * 0.1;
+            effort_level(Effort::Max, x, t - age) - age * PEAK_FALL_PER_SECOND
+        })
+        .fold(0.0_f32, f32::max)
+        .clamp(0.0, 1.0)
+}
+
 fn wave(phase: f32) -> f32 {
     0.5 + 0.5 * phase.sin()
 }
@@ -75,32 +95,22 @@ fn wave(phase: f32) -> f32 {
 /// Color of a lit cell; `height` is the cell's vertical position within the bar (0 bottom, 1 top).
 fn lit_color(effort: Effort, x: f32, height: f32, t: f32) -> Color {
     match effort {
-        Effort::XHigh => blend_color(
-            Color::Rgb(140, 170, 255),
-            Color::Rgb(196, 150, 255),
-            wave(x * 9.0 - t * 3.0),
-        ),
-        Effort::Max => hsv(x * 0.85 + t * 0.18, 0.62, 1.0),
+        Effort::XHigh => {
+            let curtain = blend_color(
+                Color::Rgb(110, 120, 255),
+                Color::Rgb(190, 130, 255),
+                wave(x * 4.0 + t * 0.7),
+            );
+            let crest = (height - 0.55).max(0.0) * 1.6 * wave(x * 9.0 - t * 1.3);
+            blend_color(curtain, Color::Rgb(120, 240, 220), crest.min(0.7))
+        }
+        Effort::Max => hsv(x * 0.85 + t * 0.12, 0.65, 0.75 + 0.25 * height),
         Effort::Super => blend_color(
             Color::Rgb(235, 150, 35),
             Color::Rgb(255, 235, 140),
             wave(std::f32::consts::TAU * (x * 2.0 - t * 0.6)),
         ),
-        Effort::Extreme => {
-            if height < 0.5 {
-                blend_color(
-                    Color::Rgb(160, 30, 60),
-                    Color::Rgb(250, 90, 55),
-                    height * 2.0,
-                )
-            } else {
-                blend_color(
-                    Color::Rgb(250, 90, 55),
-                    Color::Rgb(255, 222, 120),
-                    (height - 0.5) * 2.0,
-                )
-            }
-        }
+        Effort::Extreme => fire_color(1.0 - height),
         _ => effort_rgb(
             LEVELS
                 .iter()
@@ -112,23 +122,95 @@ fn lit_color(effort: Effort, x: f32, height: f32, t: f32) -> Color {
     }
 }
 
-fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> Vec<Line<'static>> {
+/// `heat` runs from 0 (flame tip) to 1 (white-hot base).
+fn fire_color(heat: f32) -> Color {
+    let stops = [
+        (0.0, Color::Rgb(120, 20, 40)),
+        (0.3, Color::Rgb(220, 50, 40)),
+        (0.55, Color::Rgb(255, 120, 40)),
+        (0.78, Color::Rgb(255, 205, 90)),
+        (1.0, WHITE_HOT),
+    ];
+    let heat = heat.clamp(0.0, 1.0);
+    for pair in stops.windows(2) {
+        let ((from_at, from), (to_at, to)) = (pair[0], pair[1]);
+        if heat <= to_at {
+            return blend_color(from, to, (heat - from_at) / (to_at - from_at));
+        }
+    }
+    WHITE_HOT
+}
+
+/// Rising flame surface: the column's flame height plus tongues of noise scrolling upward.
+fn flame_surface(x: f32, y: f32, t: f32) -> f32 {
+    effort_level(Effort::Extreme, x, t) + 0.35 * (fbm(x * 5.0, y * 3.0 - t * 2.4) - 0.5)
+}
+
+fn ember_at(column: usize, row_from_bottom: usize, rows: usize, t: f32) -> Option<&'static str> {
+    (0..3).find_map(|k| {
+        let seed = (column * 7 + k * 131) as i32;
+        let life = (t * (0.45 + 0.2 * hash(seed, 3)) + hash(seed, 9)).fract();
+        let y = 0.35 + life * 0.75;
+        let row = (y * rows as f32) as usize;
+        (hash(seed, 1) > 0.82 && row == row_from_bottom && life < 0.85).then_some(if k % 2 == 0 {
+            "·"
+        } else {
+            "'"
+        })
+    })
+}
+
+pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> Vec<Line<'static>> {
     let rows = rows as usize;
     let mut lines = vec![Vec::with_capacity(width); rows];
     for column in 0..width {
         let x = column as f32 / (width.saturating_sub(1).max(1)) as f32;
-        let eighths = (effort_level(effort, x, t) * (rows * 8) as f32).round() as usize;
+        let level = effort_level(effort, x, t);
+        let peak_eighths = (max_peak(x, t) * (rows * 8) as f32).round() as usize;
+        let level_eighths = (level * (rows * 8) as f32).round() as usize;
         for (row, line) in lines.iter_mut().enumerate() {
             let from_bottom = rows - 1 - row;
-            let fill = eighths.saturating_sub(from_bottom * 8).min(8);
-            let height = (from_bottom as f32 + fill as f32 / 8.0) / rows as f32;
+            let cell_bottom = from_bottom as f32 / rows as f32;
+            let cell_mid = (from_bottom as f32 + 0.5) / rows as f32;
+            let fill = if effort == Effort::Extreme {
+                let surface = flame_surface(x, cell_mid, t);
+                (((surface - cell_bottom) * rows as f32 * 8.0)
+                    .round()
+                    .clamp(0.0, 8.0)) as usize
+            } else {
+                level_eighths.saturating_sub(from_bottom * 8).min(8)
+            };
             let edge = if column == 0 || column + 1 == width {
                 0.9
             } else {
                 1.0
             };
-            let color = scale_color(lit_color(effort, x, height, t), edge);
-            line.push(Span::styled(GLYPHS[fill], Style::default().fg(color)));
+            let span = if fill > 0 {
+                let height = (from_bottom as f32 + fill as f32 / 8.0) / rows as f32;
+                let color = if effort == Effort::Extreme {
+                    let surface = flame_surface(x, cell_mid, t).max(0.05);
+                    let heat = (1.0 - cell_bottom / surface) * surface.min(1.0) * 1.15;
+                    fire_color(heat)
+                } else {
+                    lit_color(effort, x, height, t)
+                };
+                Span::styled(GLYPHS[fill], Style::default().fg(scale_color(color, edge)))
+            } else if effort == Effort::Max
+                && peak_eighths > level_eighths
+                && (peak_eighths - 1) / 8 == from_bottom
+            {
+                Span::styled(
+                    "▔",
+                    Style::default().fg(hsv(x * 0.85 + t * 0.12, 0.25, 1.0)),
+                )
+            } else if effort == Effort::Extreme
+                && let Some(spark) = ember_at(column, from_bottom, rows, t)
+            {
+                Span::styled(spark, Style::default().fg(fire_color(0.7)))
+            } else {
+                Span::raw(" ")
+            };
+            line.push(span);
         }
     }
     lines.into_iter().map(Line::from).collect()
@@ -408,7 +490,7 @@ pub(super) fn effort_label(effort: Effort) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_rows, effort_level, lit_color};
+    use super::{WHITE_HOT, bar_rows, effort_level, lit_color, max_peak, selected_bar};
     use crate::tui::render::draw;
     use crate::tui::state::App;
     use crate::{Effort, Settings};
@@ -520,7 +602,55 @@ mod tests {
         let medium = effort_level(Effort::Medium, 0.5, 0.0);
         let high = effort_level(Effort::High, 0.5, 0.0);
         assert!(low < medium && medium < high);
-        assert!(effort_level(Effort::Max, 0.0, 0.0) > high);
+        let mean = |effort| {
+            let samples =
+                (0..400).map(|i| effort_level(effort, (i % 20) as f32 / 19.0, i as f32 * 0.07));
+            samples.sum::<f32>() / 400.0
+        };
+        assert!(mean(Effort::Max) > high, "max mean {}", mean(Effort::Max));
+    }
+
+    #[test]
+    fn xhigh_aurora_ripples_over_time() {
+        let at = |t| effort_level(Effort::XHigh, 0.3, t);
+        assert!((at(0.0) - at(1.0)).abs() > 0.02);
+    }
+
+    #[test]
+    fn max_peak_caps_sit_at_or_above_the_bar() {
+        for step in 0..300 {
+            let t = step as f32 * 0.043;
+            for x in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                assert!(max_peak(x, t) >= effort_level(Effort::Max, x, t) - 1e-6);
+                assert!(max_peak(x, t) <= 1.0);
+            }
+        }
+    }
+
+    fn extreme_frames() -> Vec<Vec<ratatui::text::Line<'static>>> {
+        (0..60)
+            .map(|step| selected_bar(Effort::Extreme, 30, 4, step as f32 * 0.11))
+            .collect()
+    }
+
+    #[test]
+    fn extreme_fire_throws_embers_above_the_flames() {
+        let ember = extreme_frames()
+            .iter()
+            .flatten()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.content == "·" || span.content == "'");
+        assert!(ember);
+    }
+
+    #[test]
+    fn extreme_fire_has_a_white_hot_core() {
+        let hot = extreme_frames()
+            .iter()
+            .flatten()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.style.fg == Some(WHITE_HOT));
+        assert!(hot);
     }
 
     #[test]
