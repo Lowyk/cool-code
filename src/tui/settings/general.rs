@@ -5,7 +5,7 @@ use crate::tui::pickers::model::ModelPicker;
 use crate::tui::render::mode_span;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::{App, LEVELS};
-use crate::write_settings;
+use crate::{PulseMode, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 5;
+pub(super) const ROWS: usize = 6;
 
 pub(super) fn draw_general(
     frame: &mut ratatui::Frame<'_>,
@@ -62,8 +62,23 @@ pub(super) fn draw_general(
         } else {
             Span::styled("off", Style::default().fg(Color::Gray))
         }],
+        vec![Span::styled(
+            match app.settings.pulse {
+                PulseMode::Off => "off",
+                PulseMode::Words => "words",
+                PulseMode::Characters => "characters",
+            },
+            Style::default().fg(Color::White),
+        )],
     ];
-    let labels = ["Model", "Effort", "Mode", "Workspace trust", "Background"];
+    let labels = [
+        "Model",
+        "Effort",
+        "Mode",
+        "Workspace trust",
+        "Background",
+        "Pulse",
+    ];
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
     for (index, (label, value)) in labels.iter().zip(values).enumerate() {
@@ -120,8 +135,16 @@ impl App {
                     self.mode_picker = true;
                 }
                 3 => self.set_workspace_trusted(!self.workspace_trusted)?,
-                _ => {
+                4 => {
                     self.settings.background_animation = !self.settings.background_animation;
+                    write_settings(&self.settings)?;
+                }
+                _ => {
+                    self.settings.pulse = match self.settings.pulse {
+                        PulseMode::Words => PulseMode::Characters,
+                        PulseMode::Characters => PulseMode::Off,
+                        PulseMode::Off => PulseMode::Words,
+                    };
                     write_settings(&self.settings)?;
                 }
             },

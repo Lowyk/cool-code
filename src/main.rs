@@ -105,8 +105,19 @@ struct Settings {
     privacy_image_acknowledged: Vec<String>,
     extreme_acknowledged: bool,
     background_animation: bool,
+    pulse: PulseMode,
+    motion_prompt_answered: bool,
     effort: Effort,
     permission_mode: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PulseMode {
+    Off,
+    #[default]
+    Words,
+    Characters,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -164,6 +175,8 @@ impl Default for Settings {
             privacy_image_acknowledged: Vec::new(),
             extreme_acknowledged: false,
             background_animation: true,
+            pulse: PulseMode::Words,
+            motion_prompt_answered: false,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }
@@ -172,8 +185,24 @@ impl Default for Settings {
 
 #[cfg(not(test))]
 fn settings_path() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir().context("could not locate the user config directory")?;
-    Ok(config_dir.join("harness").join("config.toml"))
+    let home = dirs::home_dir().context("could not locate the home directory")?;
+    Ok(home.join(".coolcode").join("config.toml"))
+}
+
+#[cfg(not(test))]
+fn legacy_settings_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("harness").join("config.toml"))
+}
+
+#[cfg(test)]
+fn legacy_settings_path() -> Option<PathBuf> {
+    None
+}
+
+static SETTINGS_MIGRATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn settings_were_migrated() -> bool {
+    SETTINGS_MIGRATED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // Tests exercise code paths that persist settings; keep them away from the user's config.
@@ -184,8 +213,26 @@ fn settings_path() -> Result<PathBuf> {
         .join("config.toml"))
 }
 
+/// Copies the legacy config to the new location once; the legacy file is kept as a backup.
+fn migrate_settings(new: &std::path::Path, legacy: &std::path::Path) -> Result<bool> {
+    if new.exists() || !legacy.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = new.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    fs::copy(legacy, new)
+        .with_context(|| format!("copying {} to {}", legacy.display(), new.display()))?;
+    Ok(true)
+}
+
 fn read_settings() -> Result<Settings> {
     let path = settings_path()?;
+    if let Some(legacy) = legacy_settings_path()
+        && migrate_settings(&path, &legacy)?
+    {
+        SETTINGS_MIGRATED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if !path.exists() {
         return Ok(Settings::default());
     }
@@ -332,7 +379,69 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::settings_path;
+    use super::{PulseMode, Settings, migrate_settings, settings_path};
+    use std::fs;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("harness-migrate-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    #[test]
+    fn migration_copies_legacy_config_and_keeps_it() {
+        let dir = temp_dir("copy");
+        let legacy = dir.join("legacy").join("config.toml");
+        let new = dir.join("new").join("config.toml");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "permission_mode = \"auto\"\n").unwrap();
+        assert!(migrate_settings(&new, &legacy).expect("migrate"));
+        assert_eq!(
+            fs::read_to_string(&new).unwrap(),
+            "permission_mode = \"auto\"\n"
+        );
+        assert!(legacy.exists());
+    }
+
+    #[test]
+    fn migration_skips_when_new_config_exists() {
+        let dir = temp_dir("skip");
+        let legacy = dir.join("legacy.toml");
+        let new = dir.join("new.toml");
+        fs::write(&legacy, "permission_mode = \"auto\"\n").unwrap();
+        fs::write(&new, "permission_mode = \"plan\"\n").unwrap();
+        assert!(!migrate_settings(&new, &legacy).expect("migrate"));
+        assert_eq!(
+            fs::read_to_string(&new).unwrap(),
+            "permission_mode = \"plan\"\n"
+        );
+        assert!(
+            !migrate_settings(
+                &dir.join("absent-new.toml"),
+                &dir.join("absent-legacy.toml")
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn old_config_without_new_fields_loads_with_defaults() {
+        let settings: Settings = toml::from_str("permission_mode = \"auto\"\n").expect("parse");
+        assert_eq!(settings.pulse, PulseMode::Words);
+        assert!(!settings.motion_prompt_answered);
+        assert!(settings.background_animation);
+        let round_trip: Settings = toml::from_str(
+            &toml::to_string(&Settings {
+                pulse: PulseMode::Characters,
+                ..settings
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(round_trip.pulse, PulseMode::Characters);
+    }
 
     #[test]
     fn tests_never_touch_the_real_config_file() {
