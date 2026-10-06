@@ -1,5 +1,5 @@
 mod dialogs;
-mod settings;
+pub(super) mod settings;
 
 use crate::policy::mode_label;
 use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient_name};
@@ -9,7 +9,7 @@ use crate::tui::render::dialogs::{
     draw_extreme_confirmation, draw_mode_picker, draw_model_provider_picker,
     draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
 };
-use crate::tui::render::settings::draw_settings;
+use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, TranscriptKind};
 use crate::tui::wordmark::cool_code_wordmark;
 use crate::{Effort, provider};
@@ -327,6 +327,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         status_area,
     );
 
+    if app.settings_view.is_some() {
+        draw_settings_view(frame, area, app);
+    }
     if app.picker {
         draw_effort_picker(frame, area, app, animation_tick);
     }
@@ -339,9 +342,6 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
             .as_ref()
             .is_some_and(provider::message_contains_image);
         draw_privacy_confirmation(frame, area, prompt, has_image);
-    }
-    if app.settings_menu {
-        draw_settings(frame, area, app);
     }
     if app.mode_picker {
         draw_mode_picker(frame, area, app);

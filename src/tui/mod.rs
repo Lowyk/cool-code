@@ -5,6 +5,7 @@ mod forms;
 mod models;
 mod pickers;
 mod render;
+mod settings;
 mod state;
 mod widgets;
 mod wordmark;
@@ -206,8 +207,6 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
             }
         } else if app.model_picker.is_some() {
             app.handle_model_picker_key(key)?;
-        } else if app.settings_menu {
-            app.handle_settings_key(key)?;
         } else if app.mode_picker {
             match key.code {
                 KeyCode::Left => app.mode_index = app.mode_index.saturating_sub(1),
@@ -227,6 +226,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
                 }
                 _ => {}
             }
+        } else if app.settings_view.is_some() {
+            app.handle_settings_view_key(key)?;
         } else {
             match key.code {
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {

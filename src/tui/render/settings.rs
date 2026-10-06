@@ -1,33 +1,17 @@
 use crate::Settings;
-use crate::tui::effort::effort_name;
 use crate::tui::forms::provider_focus_layout;
 use crate::tui::models::{available_chain_models, model_display_for_profile};
-use crate::tui::render::centered_rect;
 use crate::tui::state::{App, ChainDraft, PROVIDER_PRESETS, SettingsTab};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) fn draw_settings(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let popup = centered_rect(82, 78, area);
-    frame.render_widget(Clear, popup);
-    let title = if app.provider_form.is_some() {
-        " Add provider "
-    } else if app.chain_form.is_some() {
-        " Edit model chain "
-    } else {
-        " Settings "
-    };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(98, 213, 244)))
-        .style(Style::default().bg(Color::Rgb(29, 30, 32)))
-        .padding(ratatui::widgets::Padding::horizontal(2));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
+pub(in crate::tui) fn draw_settings_content(
+    frame: &mut ratatui::Frame<'_>,
+    inner: Rect,
+    app: &App,
+) {
     if let Some(form) = &app.provider_form {
         if form.choosing_preset {
             let mut lines = vec![Line::from("Choose a provider preset:"), Line::from("")];
@@ -231,107 +215,8 @@ pub(super) fn draw_settings(frame: &mut ratatui::Frame<'_>, area: Rect, app: &Ap
         return;
     }
 
-    let tabs = Line::from(vec![
-        Span::styled(
-            " General ",
-            if app.settings_tab == SettingsTab::General {
-                Style::default()
-                    .fg(Color::Rgb(98, 213, 244))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            },
-        ),
-        Span::raw("   "),
-        Span::styled(
-            " Providers ",
-            if app.settings_tab == SettingsTab::Providers {
-                Style::default()
-                    .fg(Color::Rgb(98, 213, 244))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            },
-        ),
-        Span::raw("   "),
-        Span::styled(
-            " Auto-switch models ",
-            if app.settings_tab == SettingsTab::AutoSwitch {
-                Style::default()
-                    .fg(Color::Rgb(98, 213, 244))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            },
-        ),
-        Span::raw("   "),
-        Span::styled(
-            " Privacy ",
-            if app.settings_tab == SettingsTab::Privacy {
-                Style::default()
-                    .fg(Color::Rgb(98, 213, 244))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            },
-        ),
-    ]);
-    frame.render_widget(
-        Paragraph::new(tabs).alignment(Alignment::Center),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-
     match app.settings_tab {
-        SettingsTab::General => {
-            let model = app.settings.model.as_deref().unwrap_or("not set");
-            let provider = app
-                .settings
-                .provider
-                .as_deref()
-                .unwrap_or("openai-compatible");
-            let lines = vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Provider   ", Style::default().fg(Color::Gray)),
-                    Span::raw(provider),
-                ]),
-                Line::from(vec![
-                    Span::styled("Model      ", Style::default().fg(Color::Gray)),
-                    Span::raw(model),
-                ]),
-                Line::from(vec![
-                    Span::styled("Effort     ", Style::default().fg(Color::Gray)),
-                    Span::raw(effort_name(app.settings.effort)),
-                ]),
-                Line::from(vec![
-                    Span::styled("Permissions ", Style::default().fg(Color::Gray)),
-                    Span::raw(&app.settings.permission_mode),
-                ]),
-                Line::from(
-                    "Plan: approve an exact action plan first · Accept Edits: edits auto, commands ask",
-                ),
-                Line::from(
-                    "Accept Minimal: edits + verification-command allowlist · Auto: safe edits/checks auto",
-                ),
-                Line::from(
-                    "Accept Everything: edits and shell commands run without per-action approval",
-                ),
-                Line::from(""),
-                Line::from(
-                    "API keys are kept in the OS credential store, never plain-text config.",
-                ),
-                Line::from("Use the Providers tab to add a connection and choose it for chat."),
-            ];
-            frame.render_widget(
-                Paragraph::new(lines).wrap(Wrap { trim: true }),
-                Rect::new(
-                    inner.x,
-                    inner.y + 2,
-                    inner.width,
-                    inner.height.saturating_sub(4),
-                ),
-            );
-        }
+        SettingsTab::General => {}
         SettingsTab::Providers => {
             if app.settings.providers.is_empty() {
                 frame.render_widget(

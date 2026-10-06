@@ -35,7 +35,7 @@ pub(super) struct App {
     pub(super) transcript: Vec<TranscriptEntry>,
     pub(super) pending: Option<Receiver<PendingEvent>>,
     pub(super) history_scroll: u16,
-    pub(super) settings_menu: bool,
+    pub(super) settings_view: Option<crate::tui::settings::SettingsView>,
     pub(super) settings_tab: SettingsTab,
     pub(super) provider_index: usize,
     pub(super) provider_form: Option<ProviderDraft>,
@@ -180,26 +180,6 @@ pub(super) fn mode_alias(mode: &str) -> String {
     }
 }
 
-pub(super) fn adjacent_settings_tab(current: SettingsTab, forward: bool) -> SettingsTab {
-    let index = match current {
-        SettingsTab::General => 0,
-        SettingsTab::Providers => 1,
-        SettingsTab::AutoSwitch => 2,
-        SettingsTab::Privacy => 3,
-    };
-    let next = if forward {
-        (index + 1) % 4
-    } else {
-        (index + 3) % 4
-    };
-    match next {
-        0 => SettingsTab::General,
-        1 => SettingsTab::Providers,
-        2 => SettingsTab::AutoSwitch,
-        _ => SettingsTab::Privacy,
-    }
-}
-
 pub(super) fn edit_string(value: &mut String, key: event::KeyEvent) {
     match key.code {
         KeyCode::Backspace => {
@@ -255,7 +235,7 @@ impl App {
             transcript: Vec::new(),
             pending: None,
             history_scroll: 0,
-            settings_menu: false,
+            settings_view: None,
             settings_tab: SettingsTab::General,
             provider_index,
             provider_form: None,
