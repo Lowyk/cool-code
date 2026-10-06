@@ -1,5 +1,6 @@
 use crate::Effort;
-use crate::tui::{App, LEVELS, centered_rect};
+use crate::tui::centered_rect;
+use crate::tui::state::{App, LEVELS};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -409,7 +410,8 @@ pub(super) fn effort_label(effort: Effort) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{animated_effort_color, height_glyph, selected_bar_height};
-    use crate::tui::{App, draw};
+    use crate::tui::draw;
+    use crate::tui::state::App;
     use crate::{Effort, Settings};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
