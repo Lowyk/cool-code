@@ -1,7 +1,9 @@
 mod general;
+mod providers;
 
 use crate::tui::render::settings::draw_settings_content;
 use crate::tui::settings::general::draw_general;
+use crate::tui::settings::providers::draw_providers;
 use crate::tui::state::{App, SettingsTab};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
@@ -71,6 +73,7 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) section: Section,
     pub(in crate::tui) focus: Focus,
     pub(in crate::tui) row: usize,
+    pub(in crate::tui) confirm_delete: bool,
 }
 
 impl SettingsView {
@@ -79,6 +82,7 @@ impl SettingsView {
             section,
             focus: Focus::Sidebar,
             row: 0,
+            confirm_delete: false,
         }
     }
 }
@@ -90,9 +94,19 @@ impl App {
     }
 
     pub(in crate::tui) fn handle_settings_view_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        // Open forms receive every key so shortcut letters can be typed into fields.
+        if self.provider_form.is_some() {
+            return self.handle_provider_form(key);
+        }
+        if self.chain_form.is_some() {
+            return self.handle_chain_form(key);
+        }
         let Some(view) = self.settings_view.as_mut() else {
             return Ok(());
         };
+        if view.confirm_delete {
+            return self.handle_providers_key(key);
+        }
         match view.focus {
             Focus::Sidebar => match key.code {
                 KeyCode::Up | KeyCode::Down => {
@@ -114,6 +128,7 @@ impl App {
                 KeyCode::Esc | KeyCode::Left => view.focus = Focus::Sidebar,
                 _ => match view.section {
                     Section::General => self.handle_general_key(key)?,
+                    Section::Providers => self.handle_providers_key(key)?,
                     Section::Models => {}
                     _ => self.handle_settings_key(key)?,
                 },
@@ -169,6 +184,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
 
     match view.section {
         Section::General => draw_general(frame, content, app, view),
+        Section::Providers => draw_providers(frame, content, app, view),
         Section::Models => frame.render_widget(
             Paragraph::new("Model management is coming soon. Use Providers to edit models.")
                 .style(Style::default().fg(Color::DarkGray))
@@ -177,13 +193,23 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         ),
         _ => draw_settings_content(frame, content, app),
     }
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            footer_hint(view),
-            Style::default().fg(Color::DarkGray),
-        )),
-        footer,
-    );
+    let footer_line = if view.confirm_delete {
+        let name = app
+            .settings
+            .providers
+            .get(view.row)
+            .map(|profile| profile.name.as_str())
+            .unwrap_or("this provider");
+        Span::styled(
+            format!("Delete {name} and its saved API key? y/n"),
+            Style::default()
+                .fg(Color::Rgb(235, 80, 80))
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(footer_hint(view), Style::default().fg(Color::DarkGray))
+    };
+    frame.render_widget(Paragraph::new(footer_line), footer);
 }
 
 fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView) {
@@ -221,6 +247,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
     match (view.focus, view.section) {
         (Focus::Sidebar, _) => "↑↓ section   →/Enter open   Esc close",
         (Focus::Content, Section::General) => "↑↓ move   Enter change   ← sections   Esc back",
+        (Focus::Content, Section::Providers) => {
+            "↑↓ move   Enter edit   n add   d default   a auto   x delete   Esc back"
+        }
         (Focus::Content, _) => "← sections   Esc back",
     }
 }
