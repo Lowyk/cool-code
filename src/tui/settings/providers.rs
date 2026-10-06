@@ -1,4 +1,4 @@
-use crate::tui::render::settings::draw_settings_content;
+use crate::tui::render::forms::draw_open_form;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::{App, ProviderDraft};
 use crate::tui::widgets::list::{ListItem, ListState, draw_list};
@@ -51,7 +51,7 @@ pub(super) fn draw_providers(
     view: &SettingsView,
 ) {
     if app.provider_form.is_some() {
-        draw_settings_content(frame, area, app);
+        draw_open_form(frame, area, app);
         return;
     }
     let items = provider_items(&app.settings);

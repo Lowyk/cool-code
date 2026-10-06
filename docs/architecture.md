@@ -37,9 +37,12 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/state.rs` | Application state, draft structs, and constants |
 | `src/tui/commands.rs` | Prompt submission and slash-command handling |
 | `src/tui/models.rs` | Model, provider, and chain resolution and activation |
-| `src/tui/forms.rs` | Provider and chain editing forms and settings key handling |
+| `src/tui/forms.rs` | Provider and chain editing forms: state changes and key handling |
 | `src/tui/context.rs` | Workspace trust and `COOL.md` / `@path` context loading |
-| `src/tui/render/` | Frame drawing: `mod.rs` (layout and input), `settings.rs`, `dialogs.rs` |
+| `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `providers`, `models`, `auto_switch`, `privacy`) |
+| `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
+| `src/tui/widgets/` | Reusable widgets, such as the filterable selectable list |
+| `src/tui/render/` | Frame drawing: `mod.rs` (layout and input), `forms.rs`, `dialogs.rs` |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
 | `src/tui/wordmark.rs` | Welcome wordmark and gradient |
 

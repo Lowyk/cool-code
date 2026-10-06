@@ -1,5 +1,5 @@
 mod dialogs;
-pub(super) mod settings;
+pub(super) mod forms;
 
 use crate::policy::mode_label;
 use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient_name};
