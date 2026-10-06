@@ -1,5 +1,5 @@
+use crate::tui::context::workspace_is_trusted;
 use crate::tui::effort::effort_name;
-use crate::tui::workspace_is_trusted;
 use crate::{ChainModel, Effort, Settings, provider, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers};
