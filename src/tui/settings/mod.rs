@@ -1,8 +1,10 @@
 mod general;
+mod models;
 mod providers;
 
 use crate::tui::render::settings::draw_settings_content;
 use crate::tui::settings::general::draw_general;
+use crate::tui::settings::models::{ModelEdit, draw_models, model_rows};
 use crate::tui::settings::providers::draw_providers;
 use crate::tui::state::{App, SettingsTab};
 use anyhow::Result;
@@ -10,7 +12,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum Section {
@@ -74,6 +76,7 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) focus: Focus,
     pub(in crate::tui) row: usize,
     pub(in crate::tui) confirm_delete: bool,
+    pub(in crate::tui) model_edit: Option<ModelEdit>,
 }
 
 impl SettingsView {
@@ -83,6 +86,7 @@ impl SettingsView {
             focus: Focus::Sidebar,
             row: 0,
             confirm_delete: false,
+            model_edit: None,
         }
     }
 }
@@ -104,8 +108,11 @@ impl App {
         let Some(view) = self.settings_view.as_mut() else {
             return Ok(());
         };
-        if view.confirm_delete {
-            return self.handle_providers_key(key);
+        if view.confirm_delete || view.model_edit.is_some() {
+            return match view.section {
+                Section::Models => self.handle_models_key(key),
+                _ => self.handle_providers_key(key),
+            };
         }
         match view.focus {
             Focus::Sidebar => match key.code {
@@ -129,7 +136,7 @@ impl App {
                 _ => match view.section {
                     Section::General => self.handle_general_key(key)?,
                     Section::Providers => self.handle_providers_key(key)?,
-                    Section::Models => {}
+                    Section::Models => self.handle_models_key(key)?,
                     _ => self.handle_settings_key(key)?,
                 },
             },
@@ -185,23 +192,30 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
     match view.section {
         Section::General => draw_general(frame, content, app, view),
         Section::Providers => draw_providers(frame, content, app, view),
-        Section::Models => frame.render_widget(
-            Paragraph::new("Model management is coming soon. Use Providers to edit models.")
-                .style(Style::default().fg(Color::DarkGray))
-                .wrap(Wrap { trim: true }),
-            content,
-        ),
+        Section::Models => draw_models(frame, content, app, view),
         _ => draw_settings_content(frame, content, app),
     }
     let footer_line = if view.confirm_delete {
-        let name = app
-            .settings
-            .providers
-            .get(view.row)
-            .map(|profile| profile.name.as_str())
-            .unwrap_or("this provider");
+        let question = if view.section == Section::Models {
+            let rows = model_rows(&app.settings);
+            let id = rows
+                .get(view.row.min(rows.len().saturating_sub(1)))
+                .map(|(_, (provider, model))| {
+                    app.settings.providers[*provider].models[*model].id.clone()
+                })
+                .unwrap_or_default();
+            format!("Remove {id}? y/n")
+        } else {
+            let name = app
+                .settings
+                .providers
+                .get(view.row)
+                .map(|profile| profile.name.as_str())
+                .unwrap_or("this provider");
+            format!("Delete {name} and its saved API key? y/n")
+        };
         Span::styled(
-            format!("Delete {name} and its saved API key? y/n"),
+            question,
             Style::default()
                 .fg(Color::Rgb(235, 80, 80))
                 .add_modifier(Modifier::BOLD),
@@ -244,8 +258,14 @@ fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView)
 }
 
 fn footer_hint(view: &SettingsView) -> &'static str {
+    if view.model_edit.is_some() {
+        return "Enter confirm   Esc cancel";
+    }
     match (view.focus, view.section) {
         (Focus::Sidebar, _) => "↑↓ section   →/Enter open   Esc close",
+        (Focus::Content, Section::Models) => {
+            "↑↓ move   n add   r rename   x remove   ← sections   Esc back"
+        }
         (Focus::Content, Section::General) => "↑↓ move   Enter change   ← sections   Esc back",
         (Focus::Content, Section::Providers) => {
             "↑↓ move   Enter edit   n add   d default   a auto   x delete   Esc back"
