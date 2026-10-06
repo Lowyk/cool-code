@@ -6,8 +6,8 @@ use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
 use crate::tui::settings::Section;
 use crate::tui::state::{
-    App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, PrivacyPrompt, TranscriptEntry,
-    TranscriptKind, mode_alias,
+    App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, PrivacyPrompt, StreamingTurn,
+    TranscriptEntry, TranscriptKind, mode_alias,
 };
 use crate::{Effort, provider, write_settings};
 use anyhow::{Context, Result};
@@ -350,6 +350,8 @@ impl App {
             .context("resolving workspace root")?;
         let workspace_trusted = self.workspace_trusted;
         let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.streaming = Some(StreamingTurn::new(cancel.clone()));
         thread::spawn(move || {
             let result = run_agent_turns(
                 settings,
@@ -357,6 +359,7 @@ impl App {
                 workspace_root,
                 workspace_trusted,
                 &sender,
+                cancel,
             )
             .map_err(|error| format!("{error:#}"));
             let _ = sender.send(PendingEvent::Finished(result));
@@ -366,12 +369,79 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn poll_response(&mut self) {
-        let Some(receiver) = self.pending.as_ref() else {
+    /// Stops the running turn immediately; the worker notices the flag and exits on its own.
+    pub(super) fn cancel_turn(&mut self) {
+        let Some(turn) = self.streaming.take() else {
             return;
         };
-        match receiver.try_recv() {
+        turn.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.pending = None;
+        self.keep_partial_answer(&turn.text);
+        self.notice = "Turn cancelled.".to_owned();
+    }
+
+    /// Keeps an interrupted answer visible and in context so the model can continue from it.
+    fn keep_partial_answer(&mut self, partial: &str) {
+        if !partial.trim().is_empty() {
+            self.transcript.push(TranscriptEntry {
+                kind: TranscriptKind::Assistant,
+                text: partial.to_owned(),
+            });
+            self.messages.push(provider::ChatMessage::assistant(format!(
+                "{partial}\n\n[interrupted by the user]"
+            )));
+        }
+        self.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::CommandOutput,
+            text: "(interrupted)".to_owned(),
+        });
+        self.history_scroll = 0;
+    }
+
+    /// Applies every event the worker has sent since the last frame.
+    pub(super) fn poll_response(&mut self) {
+        while let Some(receiver) = self.pending.as_ref() {
+            let event = receiver.try_recv();
+            let keep_going = matches!(
+                event,
+                Ok(PendingEvent::TextDelta(_)
+                    | PendingEvent::Usage(_)
+                    | PendingEvent::ToolStarted(_)
+                    | PendingEvent::ToolAction(_)
+                    | PendingEvent::ConversationMessage(_))
+            );
+            self.apply_pending_event(event);
+            if !keep_going {
+                break;
+            }
+        }
+    }
+
+    fn apply_pending_event(&mut self, event: Result<PendingEvent, TryRecvError>) {
+        let now = std::time::Instant::now();
+        match event {
+            Ok(PendingEvent::TextDelta(delta)) => {
+                if let Some(turn) = self.streaming.as_mut() {
+                    turn.arrivals.push((turn.text.len(), now));
+                    turn.text.push_str(&delta);
+                    turn.tool = None;
+                }
+            }
+            Ok(PendingEvent::Usage(tokens)) => {
+                if let Some(turn) = self.streaming.as_mut() {
+                    turn.usage = Some(tokens);
+                }
+            }
+            Ok(PendingEvent::ToolStarted(label)) => {
+                if let Some(turn) = self.streaming.as_mut() {
+                    turn.tool = Some((label, now));
+                }
+            }
             Ok(PendingEvent::ToolAction(action)) => {
+                if let Some(turn) = self.streaming.as_mut() {
+                    turn.tool = None;
+                }
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::CommandOutput,
                     text: action,
@@ -379,6 +449,18 @@ impl App {
                 self.notice = "Workspace tool completed; continuing model turn…".to_owned();
             }
             Ok(PendingEvent::ConversationMessage(message)) => {
+                // Text streamed before a tool round becomes its own transcript entry.
+                if message.role == "assistant"
+                    && message.tool_calls.is_some()
+                    && let Some(turn) = self.streaming.as_mut()
+                    && !turn.text.trim().is_empty()
+                {
+                    self.transcript.push(TranscriptEntry {
+                        kind: TranscriptKind::Assistant,
+                        text: std::mem::take(&mut turn.text),
+                    });
+                    turn.arrivals.clear();
+                }
                 self.messages.push(message);
             }
             Ok(PendingEvent::ApprovalRequest(request)) => {
@@ -387,6 +469,7 @@ impl App {
                 self.notice = "The assistant is waiting for your approval.".to_owned();
             }
             Ok(PendingEvent::Finished(Ok(response))) => {
+                self.streaming = None;
                 self.messages
                     .push(provider::ChatMessage::assistant(response.text.clone()));
                 self.transcript.push(TranscriptEntry {
@@ -418,6 +501,9 @@ impl App {
             }
             Ok(PendingEvent::Finished(Err(error))) => {
                 self.pending = None;
+                if let Some(turn) = self.streaming.take() {
+                    self.keep_partial_answer(&turn.text);
+                }
                 let (title, details) = format_provider_error(&error);
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::Error,
@@ -428,6 +514,7 @@ impl App {
             }
             Err(TryRecvError::Disconnected) => {
                 self.pending = None;
+                self.streaming = None;
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::Error,
                     text: "Request worker stopped unexpectedly.".to_owned(),
@@ -472,6 +559,84 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::sync::mpsc;
+
+    fn streaming_app() -> (App, mpsc::Sender<PendingEvent>) {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        let (sender, receiver) = mpsc::channel();
+        app.pending = Some(receiver);
+        app.streaming = Some(crate::tui::state::StreamingTurn::new(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )));
+        (app, sender)
+    }
+
+    #[test]
+    fn poll_drains_all_waiting_events() {
+        let (mut app, sender) = streaming_app();
+        for piece in ["a", "b", "c"] {
+            sender
+                .send(PendingEvent::TextDelta(piece.to_owned()))
+                .unwrap();
+        }
+        sender.send(PendingEvent::Usage(3)).unwrap();
+        app.poll_response();
+        let turn = app.streaming.as_ref().expect("streaming");
+        assert_eq!(turn.text, "abc");
+        assert_eq!(turn.usage, Some(3));
+        assert_eq!(turn.arrivals.len(), 3);
+    }
+
+    #[test]
+    fn tool_round_text_moves_into_transcript() {
+        let (mut app, sender) = streaming_app();
+        sender
+            .send(PendingEvent::TextDelta("Let me check.".to_owned()))
+            .unwrap();
+        sender
+            .send(PendingEvent::ConversationMessage(
+                provider::ChatMessage::assistant_tool_calls("Let me check.".to_owned(), Vec::new()),
+            ))
+            .unwrap();
+        sender
+            .send(PendingEvent::ToolStarted("cargo test".to_owned()))
+            .unwrap();
+        app.poll_response();
+        assert_eq!(
+            app.transcript.last().map(|entry| entry.text.as_str()),
+            Some("Let me check.")
+        );
+        let turn = app.streaming.as_ref().expect("streaming");
+        assert!(turn.text.is_empty());
+        assert_eq!(
+            turn.tool.as_ref().map(|(label, _)| label.as_str()),
+            Some("cargo test")
+        );
+    }
+
+    #[test]
+    fn finished_turn_replaces_streaming_with_final_entry() {
+        let (mut app, sender) = streaming_app();
+        sender
+            .send(PendingEvent::TextDelta("Done.".to_owned()))
+            .unwrap();
+        sender
+            .send(PendingEvent::Finished(Ok(provider::Completion {
+                text: "Done.".to_owned(),
+                provider_id: None,
+                model_id: "m".to_owned(),
+                failed_over: false,
+                tool_calls: Vec::new(),
+            })))
+            .unwrap();
+        app.poll_response();
+        assert!(app.streaming.is_none());
+        assert!(app.pending.is_none());
+        assert_eq!(
+            app.transcript.last().map(|entry| entry.text.as_str()),
+            Some("Done.")
+        );
+    }
 
     #[test]
     fn slash_command_is_rendered_as_user_input_and_plain_command_output() {

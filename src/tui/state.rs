@@ -18,6 +18,29 @@ pub(super) const LEVELS: [Effort; 7] = [
     Effort::Extreme,
 ];
 
+/// Live state of the turn currently streaming from the provider.
+pub(super) struct StreamingTurn {
+    pub(super) text: String,
+    pub(super) arrivals: Vec<(usize, std::time::Instant)>,
+    pub(super) started: std::time::Instant,
+    pub(super) usage: Option<u64>,
+    pub(super) tool: Option<(String, std::time::Instant)>,
+    pub(super) cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StreamingTurn {
+    pub(super) fn new(cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            text: String::new(),
+            arrivals: Vec::new(),
+            started: std::time::Instant::now(),
+            usage: None,
+            tool: None,
+            cancel,
+        }
+    }
+}
+
 pub(super) struct App {
     pub(super) settings: Settings,
     pub(super) input: String,
@@ -34,6 +57,7 @@ pub(super) struct App {
     pub(super) messages: Vec<provider::ChatMessage>,
     pub(super) transcript: Vec<TranscriptEntry>,
     pub(super) pending: Option<Receiver<PendingEvent>>,
+    pub(super) streaming: Option<StreamingTurn>,
     pub(super) history_scroll: u16,
     pub(super) settings_view: Option<crate::tui::settings::SettingsView>,
     pub(super) provider_index: usize,
@@ -235,6 +259,7 @@ impl App {
             messages: Vec::new(),
             transcript: Vec::new(),
             pending: None,
+            streaming: None,
             history_scroll: 0,
             settings_view: None,
             provider_index,

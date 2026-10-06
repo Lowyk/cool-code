@@ -1,10 +1,14 @@
 use crate::policy::{auto_approve_command, auto_approve_create, auto_approve_edit, mode_label};
+use crate::stream::{Stream, StreamEvent};
 use crate::{Settings, provider};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender};
 
 pub(crate) enum PendingEvent {
+    TextDelta(String),
+    Usage(u64),
+    ToolStarted(String),
     ToolAction(String),
     ConversationMessage(provider::ChatMessage),
     ApprovalRequest(ToolApproval),
@@ -23,21 +27,28 @@ pub(crate) fn run_agent_turns(
     workspace_root: PathBuf,
     workspace_trusted: bool,
     events: &mpsc::Sender<PendingEvent>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<provider::Completion> {
     const MAX_TOOL_ROUNDS: usize = 6;
     const MAX_TOOL_CALLS: usize = 16;
     let mut calls_run = 0usize;
     let mut approved_plan: Vec<(String, serde_json::Value)> = Vec::new();
-    // Live delta forwarding and cancellation are wired in with the TUI rendering work.
-    let never_cancelled = std::sync::atomic::AtomicBool::new(false);
-    let ignore = |_| {};
-    let silent = crate::stream::Stream {
-        on_event: &ignore,
-        cancel: &never_cancelled,
+    let forward = |event| {
+        let _ = events.send(match event {
+            StreamEvent::TextDelta(text) => PendingEvent::TextDelta(text),
+            StreamEvent::Usage(tokens) => PendingEvent::Usage(tokens),
+        });
+    };
+    let stream = Stream {
+        on_event: &forward,
+        cancel: &cancel,
     };
     for _ in 0..=MAX_TOOL_ROUNDS {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!("cancelled");
+        }
         let mut completion =
-            provider::complete_with_fallback(&settings, &messages, workspace_trusted, &silent)?;
+            provider::complete_with_fallback(&settings, &messages, workspace_trusted, &stream)?;
         if completion.tool_calls.is_empty() {
             if !approved_plan.is_empty() {
                 completion.text.push_str(&format!(
@@ -74,7 +85,18 @@ pub(crate) fn run_agent_turns(
         messages.push(assistant_tool_message.clone());
         let _ = events.send(PendingEvent::ConversationMessage(assistant_tool_message));
         for call in completion.tool_calls {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                bail!("cancelled");
+            }
             calls_run += 1;
+            let label = call
+                .arguments
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .filter(|_| call.name == "run_command")
+                .unwrap_or(&call.name)
+                .to_owned();
+            let _ = events.send(PendingEvent::ToolStarted(label));
             let result = execute_agent_tool(
                 &settings,
                 &workspace_root,
@@ -82,6 +104,7 @@ pub(crate) fn run_agent_turns(
                 &call.arguments,
                 events,
                 &mut approved_plan,
+                &cancel,
             )
             .unwrap_or_else(|error| format!("Tool error: {error:#}"));
             let summary = summarize_tool_result(&result);
@@ -102,6 +125,7 @@ fn execute_agent_tool(
     arguments: &serde_json::Value,
     events: &mpsc::Sender<PendingEvent>,
     approved_plan: &mut Vec<(String, serde_json::Value)>,
+    cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<String> {
     if name == "request_plan_approval" {
         return request_plan_approval(settings, root, arguments, events, approved_plan);
@@ -153,7 +177,7 @@ fn execute_agent_tool(
                 );
             }
         }
-        return crate::tools::run_command(root, command);
+        return crate::tools::run_command(root, command, cancel);
     }
     if !matches!(name, "replace_in_file" | "write_to_file" | "create_file") {
         return crate::tools::execute_read_only(root, name, arguments);
