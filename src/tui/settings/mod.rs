@@ -367,6 +367,22 @@ mod tests {
     }
 
     #[test]
+    fn general_background_row_toggles_the_animation() {
+        let mut app = app();
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..4 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        let before = app.settings.background_animation;
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("toggle");
+        assert_eq!(app.settings.background_animation, !before);
+    }
+
+    #[test]
     fn general_rows_open_the_matching_pickers() {
         let mut app = app();
         app.open_settings(Section::General);

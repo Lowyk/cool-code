@@ -2,6 +2,7 @@ mod dialogs;
 pub(super) mod forms;
 
 use crate::policy::mode_label;
+use crate::tui::backdrop::{backdrop_enabled, draw_backdrop};
 use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient_name};
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::draw_model_picker;
@@ -132,6 +133,11 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                 layout[5],
             )
         };
+
+    let no_color = std::env::var_os("NO_COLOR").is_some();
+    if app.transcript.is_empty() && backdrop_enabled(app.settings.background_animation, no_color) {
+        draw_backdrop(frame, area, app.launched_at.elapsed().as_secs_f32());
+    }
 
     let logo_elapsed = app.launched_at.elapsed().as_secs_f32().min(1.0);
     let logo_lines = cool_code_wordmark(logo_elapsed);
@@ -383,7 +389,8 @@ pub(super) fn centered_rect(width_percent: u16, height_percent: u16, area: Rect)
 mod tests {
     use super::{draw, input_prompt_height, input_visual_lines, mode_span, wrap_input_text};
     use crate::Settings;
-    use crate::tui::state::App;
+    use crate::tui::backdrop::PARTICLE_GLYPHS;
+    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -458,5 +465,55 @@ mod tests {
         let (wide_lines, wide_cursor) = wrap_input_text("ab界c", 6);
         assert_eq!(wide_lines, ["ab界", "c"]);
         assert_eq!(wide_cursor, (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod backdrop_tests {
+    use super::draw;
+    use crate::Settings;
+    use crate::tui::backdrop::PARTICLE_GLYPHS;
+    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn particle_count(app: &App) -> usize {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| PARTICLE_GLYPHS.contains(&cell.symbol()))
+            .count()
+    }
+
+    fn app(background: bool) -> App {
+        let mut settings = Settings::default();
+        settings.background_animation = background;
+        let mut app = App::new(settings);
+        app.trust_prompt = false;
+        app
+    }
+
+    #[test]
+    fn welcome_screen_shows_the_backdrop() {
+        assert!(particle_count(&app(true)) > 10);
+    }
+
+    #[test]
+    fn backdrop_stays_off_during_a_conversation() {
+        let mut app = app(true);
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::User,
+            text: "hello".to_owned(),
+        });
+        assert_eq!(particle_count(&app), 0);
+    }
+
+    #[test]
+    fn backdrop_setting_turns_it_off() {
+        assert_eq!(particle_count(&app(false)), 0);
     }
 }
