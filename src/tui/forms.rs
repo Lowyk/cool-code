@@ -1,7 +1,6 @@
 use crate::tui::models::{available_chain_models, model_name, slug};
 use crate::tui::state::{
-    App, ChainDraft, ModelDraft, PROVIDER_PRESETS, ProviderDraft, SettingsTab,
-    adjacent_settings_tab, edit_string,
+    App, ChainDraft, ModelDraft, PROVIDER_PRESETS, ProviderDraft, SettingsTab, edit_string,
 };
 use crate::{
     ModelChain, ModelProfile, ProviderProfile, Settings, provider, secrets, write_settings,
@@ -332,7 +331,6 @@ impl App {
             return Err(error);
         }
         self.provider_form = None;
-        self.settings_menu = false;
         self.notice = if as_draft {
             format!("{name} saved as a draft.")
         } else {
@@ -459,11 +457,6 @@ impl App {
 
     pub(super) fn handle_settings_key(&mut self, key: event::KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.settings_menu = false,
-            KeyCode::Tab | KeyCode::Right => {
-                self.settings_tab = adjacent_settings_tab(self.settings_tab, true)
-            }
-            KeyCode::Left => self.settings_tab = adjacent_settings_tab(self.settings_tab, false),
             KeyCode::Char('n') if self.settings_tab == SettingsTab::Providers => {
                 self.provider_form = Some(ProviderDraft {
                     choosing_preset: true,
@@ -813,26 +806,11 @@ impl App {
 mod tests {
     use super::{remove_provider_profile, unique_provider_alias};
     use crate::tui::render::draw;
-    use crate::tui::state::{App, ModelDraft, ProviderDraft, SettingsTab, adjacent_settings_tab};
+    use crate::tui::settings::Section;
+    use crate::tui::state::{App, ModelDraft, ProviderDraft};
     use crate::{ChainModel, ModelChain, ProviderProfile, Settings};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-
-    #[test]
-    fn settings_left_arrow_moves_to_previous_tab() {
-        assert_eq!(
-            adjacent_settings_tab(SettingsTab::General, false),
-            SettingsTab::Privacy
-        );
-        assert_eq!(
-            adjacent_settings_tab(SettingsTab::Privacy, true),
-            SettingsTab::General
-        );
-        assert_eq!(
-            adjacent_settings_tab(SettingsTab::AutoSwitch, false),
-            SettingsTab::Providers
-        );
-    }
 
     #[test]
     fn duplicate_adapter_profiles_get_distinct_aliases() {
@@ -908,8 +886,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("test terminal");
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
-        app.settings_menu = true;
-        app.settings_tab = SettingsTab::Providers;
+        app.open_settings(Section::Providers);
         app.provider_form = Some(ProviderDraft {
             choosing_preset: false,
             existing_id: None,

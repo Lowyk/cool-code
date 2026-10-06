@@ -4,9 +4,10 @@ use crate::tui::context::{build_user_message, read_cool_file, read_user_instruct
 use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
+use crate::tui::settings::Section;
 use crate::tui::state::{
-    App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, PrivacyPrompt, SettingsTab,
-    TranscriptEntry, TranscriptKind, mode_alias,
+    App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, PrivacyPrompt, TranscriptEntry,
+    TranscriptKind, mode_alias,
 };
 use crate::{Effort, provider, write_settings};
 use anyhow::{Context, Result};
@@ -71,14 +72,17 @@ impl App {
             return Ok(());
         }
         if value == "/settings" {
-            self.settings_menu = true;
-            self.settings_tab = SettingsTab::General;
+            self.open_settings(Section::General);
             self.finish_command("Opened Settings.");
             return Ok(());
         }
+        if value == "/provider" {
+            self.open_settings(Section::Providers);
+            self.finish_command("Opened providers in Settings.");
+            return Ok(());
+        }
         if value == "/chain" {
-            self.settings_menu = true;
-            self.settings_tab = SettingsTab::AutoSwitch;
+            self.open_settings(Section::AutoSwitch);
             self.finish_command("Opened model chains in Settings.");
             return Ok(());
         }
