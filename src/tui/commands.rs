@@ -3,6 +3,7 @@ use crate::policy::{MODES, mode_label};
 use crate::tui::context::{build_user_message, read_cool_file, read_user_instructions};
 use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
+use crate::tui::pickers::model::ModelPicker;
 use crate::tui::state::{
     App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, PrivacyPrompt, SettingsTab,
     TranscriptEntry, TranscriptKind, mode_alias,
@@ -148,6 +149,11 @@ impl App {
                 self.notice = "Choose low, medium, high, xhigh, max, super, or extreme.".to_owned();
             }
             self.finish_command(self.notice.clone());
+            return Ok(());
+        }
+        if value == "/model" {
+            self.model_picker = Some(ModelPicker::new(&self.settings));
+            self.finish_command("Opened the model picker.");
             return Ok(());
         }
         if let Some(model) = value.strip_prefix("/model ") {

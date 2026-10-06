@@ -4,6 +4,7 @@ mod settings;
 use crate::policy::mode_label;
 use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient_name};
 use crate::tui::models::selected_model_name;
+use crate::tui::pickers::model::draw_model_picker;
 use crate::tui::render::dialogs::{
     draw_extreme_confirmation, draw_mode_picker, draw_model_provider_picker,
     draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
@@ -347,6 +348,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     }
     if app.model_choices.is_some() {
         draw_model_provider_picker(frame, area, app);
+    }
+    if let Some(picker) = app.model_picker.as_ref() {
+        draw_model_picker(frame, area, picker);
     }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);

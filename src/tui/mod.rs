@@ -3,8 +3,10 @@ mod context;
 mod effort;
 mod forms;
 mod models;
+mod pickers;
 mod render;
 mod state;
+mod widgets;
 mod wordmark;
 
 use crate::policy::MODES;
@@ -202,6 +204,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
                 }
                 _ => {}
             }
+        } else if app.model_picker.is_some() {
+            app.handle_model_picker_key(key)?;
         } else if app.settings_menu {
             app.handle_settings_key(key)?;
         } else if app.mode_picker {
