@@ -12,6 +12,7 @@ mod agent;
 mod policy;
 mod provider;
 mod secrets;
+mod stream;
 mod tools;
 mod tui;
 

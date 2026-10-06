@@ -28,9 +28,16 @@ pub(crate) fn run_agent_turns(
     const MAX_TOOL_CALLS: usize = 16;
     let mut calls_run = 0usize;
     let mut approved_plan: Vec<(String, serde_json::Value)> = Vec::new();
+    // Live delta forwarding and cancellation are wired in with the TUI rendering work.
+    let never_cancelled = std::sync::atomic::AtomicBool::new(false);
+    let ignore = |_| {};
+    let silent = crate::stream::Stream {
+        on_event: &ignore,
+        cancel: &never_cancelled,
+    };
     for _ in 0..=MAX_TOOL_ROUNDS {
         let mut completion =
-            provider::complete_with_fallback(&settings, &messages, workspace_trusted)?;
+            provider::complete_with_fallback(&settings, &messages, workspace_trusted, &silent)?;
         if completion.tool_calls.is_empty() {
             if !approved_plan.is_empty() {
                 completion.text.push_str(&format!(

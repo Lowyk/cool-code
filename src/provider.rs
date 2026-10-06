@@ -3,6 +3,8 @@ use std::{env, sync::OnceLock, thread, time::Duration};
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 use reqwest::blocking::Client;
+
+use crate::stream::{Interrupted, Restorer, Stream, StreamEvent, parse_openai_stream};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -119,13 +121,20 @@ impl ChatMessage {
 
 #[cfg(test)]
 pub(crate) fn complete(settings: &Settings, messages: &[ChatMessage]) -> Result<String> {
-    Ok(complete_turn(settings, messages, false)?.text)
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let ignore = |_| {};
+    let stream = Stream {
+        on_event: &ignore,
+        cancel: &cancel,
+    };
+    Ok(complete_turn(settings, messages, false, &stream)?.text)
 }
 
 fn complete_turn(
     settings: &Settings,
     messages: &[ChatMessage],
     allow_tools: bool,
+    stream: &Stream,
 ) -> Result<AgentTurn> {
     let profile = settings
         .active_provider_id
@@ -215,14 +224,30 @@ fn complete_turn(
         .filter(|value| !value.trim().is_empty())
         .with_context(|| format!("set {key_variable} or HARNESS_API_KEY in your environment"))?;
 
+    // Streamed answers can run long; cap the whole request generously and fail fast on connect.
     let client = Client::builder()
-        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(600))
         .build()
         .context("creating HTTP client")?;
     let (safe_messages, redactions) = if risk.is_some() {
         redact_messages(messages, &load_redaction_values()?)
     } else {
         (messages.to_vec(), Vec::new())
+    };
+    let restorer = std::cell::RefCell::new(Restorer::new(&redactions));
+    let forward = |event| match event {
+        StreamEvent::TextDelta(delta) => {
+            let shown = restorer.borrow_mut().push(&delta);
+            if !shown.is_empty() {
+                stream.emit(StreamEvent::TextDelta(shown));
+            }
+        }
+        other => stream.emit(other),
+    };
+    let restoring = Stream {
+        on_event: &forward,
+        cancel: stream.cancel,
     };
     let turn = match provider {
         "anthropic" | "anthropic-compatible" => complete_anthropic(
@@ -251,8 +276,20 @@ fn complete_turn(
             &safe_messages,
             allow_tools,
             settings.permission_mode == "plan",
+            &restoring,
         ),
-    }?;
+    };
+    let tail = restorer.borrow_mut().flush();
+    if !tail.is_empty() {
+        stream.emit(StreamEvent::TextDelta(tail));
+    }
+    let turn = turn.map_err(|error| match error.downcast::<Interrupted>() {
+        Ok(interrupted) => anyhow::Error::new(Interrupted {
+            partial: restore_redactions(interrupted.partial, &redactions),
+            reason: interrupted.reason,
+        }),
+        Err(error) => error,
+    })?;
     let mut tool_calls = turn.tool_calls;
     for call in &mut tool_calls {
         restore_redactions_value(&mut call.arguments, &redactions);
@@ -267,13 +304,14 @@ pub(crate) fn complete_with_fallback(
     settings: &Settings,
     messages: &[ChatMessage],
     allow_tools: bool,
+    stream: &Stream,
 ) -> Result<Completion> {
     let current_model = env::var("HARNESS_MODEL")
         .ok()
         .or_else(|| settings.model.clone())
         .unwrap_or_default();
     let current_provider = settings.active_provider_id.clone();
-    match complete_turn(settings, messages, allow_tools) {
+    match complete_turn(settings, messages, allow_tools, stream) {
         Ok(turn) => {
             return Ok(Completion {
                 text: turn.text,
@@ -315,7 +353,7 @@ pub(crate) fn complete_with_fallback(
                 fallback.base_url = profile.base_url.clone();
                 fallback.model = Some(member.model_id.clone());
                 fallback.api_key_env = None;
-                match complete_turn(&fallback, messages, allow_tools) {
+                match complete_turn(&fallback, messages, allow_tools, stream) {
                     Ok(turn) => {
                         return Ok(Completion {
                             text: turn.text,
@@ -528,9 +566,10 @@ fn complete_openai_compatible(
     messages: &[ChatMessage],
     allow_tools: bool,
     plan_mode: bool,
+    stream: &Stream,
 ) -> Result<AgentTurn> {
     let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
+    let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": true });
     if allow_tools {
         body["tools"] = openai_tool_specs(plan_mode);
         body["tool_choice"] = Value::String("auto".to_owned());
@@ -541,48 +580,20 @@ fn complete_openai_compatible(
         .json(&body)
         .send()
         .context("sending request to the OpenAI-compatible API")?;
-    let value = read_response(response)?;
-    let message = value
-        .pointer("/choices/0/message")
-        .context("provider response did not contain choices[0].message")?;
-    let text = message
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let calls = message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(|call| {
-            let function = call.get("function").context("tool call has no function")?;
-            let args = function
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or("{}");
-            Ok(ToolCall {
-                id: call
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .context("tool call has no ID")?
-                    .to_owned(),
-                name: function
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .context("tool call has no name")?
-                    .to_owned(),
-                arguments: serde_json::from_str(args).context("parsing tool call arguments")?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if text.is_empty() && calls.is_empty() {
-        bail!("provider response contained neither text nor tool calls");
+    parse_openai_stream(std::io::BufReader::new(successful(response)?), stream)
+}
+
+/// Returns the response for streaming, or the provider's error body as an error.
+fn successful(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
     }
-    Ok(AgentTurn {
-        text,
-        tool_calls: calls,
-    })
+    let body = response.text().unwrap_or_default();
+    bail!(
+        "provider returned {status}: {}",
+        body.chars().take(8 * 1024).collect::<String>()
+    )
 }
 
 fn openai_tool_specs(plan_mode: bool) -> Value {
