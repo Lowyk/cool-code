@@ -30,7 +30,10 @@ pub(super) fn draw_privacy(
         ),
         (
             "Redaction values",
-            Span::styled("clear", Style::default().fg(Color::White)),
+            Span::styled(
+                "kept in OS credential store · c to clear",
+                Style::default().fg(Color::White),
+            ),
             "Custom values live in the OS credential store. Add more with /privacy add <value>.",
         ),
         (
@@ -176,5 +179,6 @@ mod tests {
         assert!(text.contains("Workspace trust"), "{text}");
         assert!(text.contains("Redaction values"), "{text}");
         assert!(text.contains("Acknowledgements"), "{text}");
+        assert!(text.contains("c to clear"), "{text}");
     }
 }

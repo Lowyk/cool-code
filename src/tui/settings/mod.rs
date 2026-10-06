@@ -430,3 +430,43 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tiny_terminal_tests {
+    use super::Section;
+    use crate::tui::render::draw;
+    use crate::tui::state::App;
+    use crate::{ModelProfile, ProviderProfile, Settings};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn every_section_draws_on_tiny_terminals_without_panicking() {
+        let mut settings = Settings::default();
+        settings.providers = vec![ProviderProfile {
+            id: "groq".to_owned(),
+            name: "groq".to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            model: "qwen".to_owned(),
+            models: vec![ModelProfile {
+                id: "qwen".to_owned(),
+                name: String::new(),
+            }],
+            draft: false,
+            auto_switch: true,
+            base_url: None,
+        }];
+        for section in Section::ALL {
+            for (width, height) in [(20, 5), (12, 4), (40, 8), (69, 12)] {
+                let mut app = App::new(settings.clone());
+                app.trust_prompt = false;
+                app.open_settings(section);
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                terminal
+                    .draw(|frame| draw(frame, &app, 0))
+                    .unwrap_or_else(|_| panic!("{section:?} at {width}x{height}"));
+            }
+        }
+    }
+}

@@ -295,6 +295,24 @@ impl App {
         {
             self.settings.model = Some(replacement);
         }
+        for chain in &mut self.settings.model_chains {
+            chain.members.retain(|member| {
+                !(member.provider_id == provider_id
+                    && member.model_id.eq_ignore_ascii_case(&removed.id))
+            });
+        }
+        self.settings
+            .model_chains
+            .retain(|chain| !chain.members.is_empty());
+        if let Some(active) = self.settings.active_chain_id.as_deref()
+            && !self
+                .settings
+                .model_chains
+                .iter()
+                .any(|chain| chain.id == active)
+        {
+            self.settings.active_chain_id = None;
+        }
         self.notice = format!("Removed {}.", removed.id);
         write_settings(&self.settings)
     }
@@ -425,5 +443,51 @@ mod tests {
             app.settings_view.as_ref().map(|v| v.section),
             Some(Section::Models)
         );
+    }
+
+    #[test]
+    fn removing_a_model_prunes_it_from_chains() {
+        let mut settings = settings();
+        settings.model_chains = vec![
+            crate::ModelChain {
+                id: "mixed".to_owned(),
+                alias: String::new(),
+                members: vec![
+                    crate::ChainModel {
+                        provider_id: "groq".to_owned(),
+                        model_id: "qwen/qwen3.8-27b".to_owned(),
+                    },
+                    crate::ChainModel {
+                        provider_id: "google".to_owned(),
+                        model_id: "gemini-pro-latest".to_owned(),
+                    },
+                ],
+                activate_on_select: false,
+            },
+            crate::ModelChain {
+                id: "solo".to_owned(),
+                alias: String::new(),
+                members: vec![crate::ChainModel {
+                    provider_id: "groq".to_owned(),
+                    model_id: "qwen/qwen3.8-27b".to_owned(),
+                }],
+                activate_on_select: false,
+            },
+        ];
+        settings.active_chain_id = Some("solo".to_owned());
+        let mut app = App::new(settings);
+        app.trust_prompt = false;
+        app.open_settings(Section::Models);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.settings.model_chains.len(), 1);
+        assert_eq!(app.settings.model_chains[0].members.len(), 1);
+        assert_eq!(
+            app.settings.model_chains[0].members[0].provider_id,
+            "google"
+        );
+        assert_eq!(app.settings.active_chain_id, None);
     }
 }
