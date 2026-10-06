@@ -22,8 +22,6 @@ use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::time::Duration;
 
-impl App {}
-
 pub(crate) fn run() -> Result<()> {
     let mut terminal = setup_terminal()?;
     let result = run_app(&mut terminal);
@@ -253,6 +251,3 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {}
