@@ -184,7 +184,17 @@ pub(super) fn edit_string(value: &mut String, key: event::KeyEvent) {
 }
 
 impl App {
-    pub(super) fn new(mut settings: Settings) -> Self {
+    pub(super) fn new(settings: Settings) -> Self {
+        let mut app = Self::from_settings(settings);
+        if crate::settings_were_migrated() {
+            app.notice =
+                "Settings moved to ~/.coolcode/config.toml; the old file was kept as a backup."
+                    .to_owned();
+        }
+        app
+    }
+
+    fn from_settings(mut settings: Settings) -> Self {
         if settings.default_provider_id.is_none() {
             settings.default_provider_id = settings.active_provider_id.clone();
         }

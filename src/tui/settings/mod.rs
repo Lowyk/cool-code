@@ -310,7 +310,7 @@ mod tests {
     use super::{Focus, Section, SettingsView};
     use crate::tui::render::draw;
     use crate::tui::state::App;
-    use crate::{ModelProfile, ProviderProfile, Settings};
+    use crate::{ModelProfile, ProviderProfile, PulseMode, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -364,6 +364,25 @@ mod tests {
         assert!(!narrow.contains("Auto-switch"), "{narrow}");
         let _ = screen(&app, 40, 10);
         let _ = screen(&app, 20, 5);
+    }
+
+    #[test]
+    fn general_pulse_row_cycles_modes() {
+        use crate::PulseMode;
+        let mut app = app();
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..5 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        assert_eq!(app.settings.pulse, PulseMode::Words);
+        for expected in [PulseMode::Characters, PulseMode::Off, PulseMode::Words] {
+            app.handle_settings_view_key(key(KeyCode::Enter))
+                .expect("cycle");
+            assert_eq!(app.settings.pulse, expected);
+        }
     }
 
     #[test]

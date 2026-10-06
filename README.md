@@ -59,7 +59,7 @@ For Gemini/Google or GLM/Z.ai, the first request shows a warning and requires ex
 
 Settings and interactive selectors support arrow-key navigation as well as Tab/Enter controls. Use Left and Right to switch settings tabs; the movement is directional (Left no longer advances to the next tab).
 
-Settings are stored in the platform's user config directory under `harness/config.toml`. API credentials will use environment variables or an OS credential store; they will not be written to this TOML file.
+Settings are stored in `~/.coolcode/config.toml`, next to the optional global `~/.coolcode/COOL.md`. On first launch, an existing config from the previous location (the platform's user config directory under `harness/config.toml`) is copied over and the old file is kept as a backup. API credentials use environment variables or the OS credential store; they are never written to this TOML file.
 
 ## Product principles
 
