@@ -111,15 +111,26 @@ fn lit_color(effort: Effort, x: f32, height: f32, t: f32) -> Color {
             wave(std::f32::consts::TAU * (x * 2.0 - t * 0.6)),
         ),
         Effort::Extreme => fire_color(1.0 - height),
-        _ => effort_rgb(
-            LEVELS
-                .iter()
-                .position(|level| *level == effort)
-                .unwrap_or(0),
-            0,
-            1.0,
+        Effort::Low => scale_color(effort_rgb(0, 0, 1.0), 0.9 + 0.12 * wave(t * 1.3)),
+        Effort::Medium => glint(effort_rgb(1, 0, 1.0), x, t, 0.35),
+        Effort::High => glint(
+            scale_color(
+                effort_rgb(2, 0, 1.0),
+                0.95 + 0.08 * wave(x * 10.0 - t * 2.0),
+            ),
+            x,
+            t,
+            0.3,
         ),
     }
+}
+
+/// A soft highlight sweeping left to right every few seconds.
+fn glint(base: Color, x: f32, t: f32, strength: f32) -> Color {
+    let position = (t * 0.35).fract() * 1.4 - 0.2;
+    let distance = x - position;
+    let amount = strength * (-(distance * distance) / 0.01).exp();
+    blend_color(base, Color::Rgb(255, 255, 255), amount)
 }
 
 /// `heat` runs from 0 (flame tip) to 1 (white-hot base).
@@ -490,7 +501,7 @@ pub(super) fn effort_label(effort: Effort) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{WHITE_HOT, bar_rows, effort_level, lit_color, max_peak, selected_bar};
+    use super::{WHITE_HOT, bar_rows, effort_level, effort_rgb, lit_color, max_peak, selected_bar};
     use crate::tui::render::draw;
     use crate::tui::state::App;
     use crate::{Effort, Settings};
@@ -536,6 +547,34 @@ mod tests {
                 lit_color(effort, 0.5, 0.6, 0.0),
                 lit_color(effort, 0.5, 0.6, 0.7),
                 "{effort:?} highlight should animate"
+            );
+        }
+    }
+
+    fn brightness(color: ratatui::style::Color) -> f32 {
+        match color {
+            ratatui::style::Color::Rgb(r, g, b) => (r as f32 + g as f32 + b as f32) / 3.0,
+            _ => panic!("expected rgb"),
+        }
+    }
+
+    #[test]
+    fn calm_tiers_animate_their_light_subtly() {
+        for (index, effort) in [Effort::Low, Effort::Medium, Effort::High]
+            .into_iter()
+            .enumerate()
+        {
+            let base = brightness(effort_rgb(index, 0, 1.0));
+            let samples = (0..80)
+                .map(|step| brightness(lit_color(effort, 0.4, 0.5, step as f32 * 0.1)))
+                .collect::<Vec<_>>();
+            let (min, max) = samples
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+            assert!(max - min > 3.0, "{effort:?} should change over time");
+            assert!(
+                min >= base * 0.75 && max <= base * 1.3 + 1.0,
+                "{effort:?} too strong: {min}..{max} around {base}"
             );
         }
     }
