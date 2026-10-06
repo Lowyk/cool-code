@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+mod agent;
 mod policy;
 mod provider;
 mod secrets;

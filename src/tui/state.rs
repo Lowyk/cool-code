@@ -1,10 +1,11 @@
-use crate::policy::MODES;
+use crate::agent::{PendingEvent, ToolApproval};
+use crate::policy::{MODES, mode_label};
 use crate::tui::context::workspace_is_trusted;
 use crate::tui::effort::effort_name;
 use crate::{ChainModel, Effort, Settings, provider, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers};
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 pub(super) const LEVELS: [Effort; 7] = [
@@ -63,19 +64,6 @@ pub(super) enum TranscriptKind {
 pub(super) struct TranscriptEntry {
     pub(super) kind: TranscriptKind,
     pub(super) text: String,
-}
-
-pub(super) enum PendingEvent {
-    ToolAction(String),
-    ConversationMessage(provider::ChatMessage),
-    ApprovalRequest(ToolApproval),
-    Finished(std::result::Result<provider::Completion, String>),
-}
-
-pub(super) struct ToolApproval {
-    pub(super) title: String,
-    pub(super) details: String,
-    pub(super) response: SyncSender<bool>,
 }
 
 pub(super) struct PrivacyPrompt {
@@ -189,14 +177,6 @@ pub(super) fn mode_alias(mode: &str) -> String {
         "accept-everything" => "all".to_owned(),
         other => other.to_owned(),
     }
-}
-
-pub(super) fn mode_label(mode: &str) -> &'static str {
-    MODES
-        .iter()
-        .find(|(_, value)| *value == mode)
-        .map(|(label, _)| *label)
-        .unwrap_or("Plan")
 }
 
 pub(super) fn adjacent_settings_tab(current: SettingsTab, forward: bool) -> SettingsTab {

@@ -1,6 +1,7 @@
-use crate::policy::MODES;
+use crate::agent::ToolApproval;
+use crate::policy::{MODES, mode_label};
 use crate::tui::render::centered_rect;
-use crate::tui::state::{App, PrivacyPrompt, ToolApproval, mode_label};
+use crate::tui::state::{App, PrivacyPrompt};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

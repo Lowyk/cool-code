@@ -70,6 +70,14 @@ pub(crate) fn auto_approve_command(permission_mode: &str, command: &str) -> bool
     )
 }
 
+pub(crate) fn mode_label(mode: &str) -> &'static str {
+    MODES
+        .iter()
+        .find(|(_, value)| *value == mode)
+        .map(|(label, _)| *label)
+        .unwrap_or("Plan")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{auto_approve_command, auto_approve_create, auto_approve_edit};

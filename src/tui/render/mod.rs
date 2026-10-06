@@ -1,6 +1,7 @@
 mod dialogs;
 mod settings;
 
+use crate::policy::mode_label;
 use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient_name};
 use crate::tui::models::selected_model_name;
 use crate::tui::render::dialogs::{
@@ -8,7 +9,7 @@ use crate::tui::render::dialogs::{
     draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
 };
 use crate::tui::render::settings::draw_settings;
-use crate::tui::state::{App, TranscriptKind, mode_label};
+use crate::tui::state::{App, TranscriptKind};
 use crate::tui::wordmark::cool_code_wordmark;
 use crate::{Effort, provider};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
