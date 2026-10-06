@@ -168,9 +168,18 @@ impl Default for Settings {
     }
 }
 
+#[cfg(not(test))]
 fn settings_path() -> Result<PathBuf> {
     let config_dir = dirs::config_dir().context("could not locate the user config directory")?;
     Ok(config_dir.join("harness").join("config.toml"))
+}
+
+// Tests exercise code paths that persist settings; keep them away from the user's config.
+#[cfg(test)]
+fn settings_path() -> Result<PathBuf> {
+    Ok(std::env::temp_dir()
+        .join(format!("harness-test-{}", std::process::id()))
+        .join("config.toml"))
 }
 
 fn read_settings() -> Result<Settings> {
@@ -316,5 +325,20 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("error: {error:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settings_path;
+
+    #[test]
+    fn tests_never_touch_the_real_config_file() {
+        let path = settings_path().expect("settings path");
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "tests must use a temporary config, got {}",
+            path.display()
+        );
     }
 }
