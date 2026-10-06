@@ -990,18 +990,20 @@ fn extract_response(value: &Value) -> Result<String> {
     bail!("provider returned an empty or unsupported message content format")
 }
 
+pub(crate) const PRIVACY_FAMILIES: [&str; 2] = ["Google/Gemini", "GLM/Z.ai"];
+
 fn privacy_risk(provider: &str, model: &str, base_url: &str) -> Option<&'static str> {
     let identity = format!("{provider} {model} {base_url}").to_ascii_lowercase();
     if ["gemini", "google", "generativelanguage", "googleapis.com"]
         .iter()
         .any(|marker| identity.contains(marker))
     {
-        Some("Google/Gemini")
+        Some(PRIVACY_FAMILIES[0])
     } else if ["glm", "z.ai", "z ai"]
         .iter()
         .any(|marker| identity.contains(marker))
     {
-        Some("GLM/Z.ai")
+        Some(PRIVACY_FAMILIES[1])
     } else {
         None
     }
