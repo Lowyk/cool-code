@@ -812,7 +812,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{remove_provider_profile, unique_provider_alias};
-    use crate::tui::draw;
+    use crate::tui::render::draw;
     use crate::tui::state::{App, ModelDraft, ProviderDraft, SettingsTab, adjacent_settings_tab};
     use crate::{ChainModel, ModelChain, ProviderProfile, Settings};
     use ratatui::Terminal;
