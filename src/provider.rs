@@ -4,7 +4,9 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use reqwest::blocking::Client;
 
-use crate::stream::{Interrupted, Restorer, Stream, StreamEvent, parse_openai_stream};
+use crate::stream::{
+    Interrupted, Restorer, Stream, StreamEvent, parse_anthropic_stream, parse_openai_stream,
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -258,6 +260,7 @@ fn complete_turn(
             &safe_messages,
             allow_tools,
             settings.permission_mode == "plan",
+            &restoring,
         ),
         "google" => complete_google(
             &client,
@@ -662,6 +665,7 @@ fn complete_anthropic(
     messages: &[ChatMessage],
     allow_tools: bool,
     plan_mode: bool,
+    stream: &Stream,
 ) -> Result<AgentTurn> {
     let system = messages
         .iter()
@@ -674,7 +678,7 @@ fn complete_anthropic(
         .filter(|message| message.role != "system")
         .map(anthropic_message)
         .collect::<Result<Vec<_>>>()?;
-    let mut body = serde_json::json!({ "model": model, "max_tokens": 4096, "messages": messages });
+    let mut body = serde_json::json!({ "model": model, "max_tokens": 4096, "messages": messages, "stream": true });
     if !system.is_empty() {
         body["system"] = Value::String(system);
     }
@@ -689,42 +693,7 @@ fn complete_anthropic(
         .json(&body)
         .send()
         .context("sending request to the Anthropic Messages API")?;
-    let value = read_response(response)?;
-    let content = value
-        .get("content")
-        .and_then(Value::as_array)
-        .context("Anthropic response did not contain content blocks")?;
-    let text = content
-        .iter()
-        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<String>();
-    let tool_calls = content
-        .iter()
-        .filter(|part| part.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .map(|part| {
-            Ok(ToolCall {
-                id: part
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .context("Anthropic tool call has no ID")?
-                    .to_owned(),
-                name: part
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .context("Anthropic tool call has no name")?
-                    .to_owned(),
-                arguments: part
-                    .get("input")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({})),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if text.is_empty() && tool_calls.is_empty() {
-        bail!("Anthropic response contained neither text nor tool calls");
-    }
-    Ok(AgentTurn { text, tool_calls })
+    parse_anthropic_stream(std::io::BufReader::new(successful(response)?), stream)
 }
 
 fn anthropic_message(message: &ChatMessage) -> Result<Value> {

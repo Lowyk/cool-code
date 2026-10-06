@@ -204,6 +204,97 @@ pub(crate) fn parse_openai_stream(reader: impl BufRead, stream: &Stream) -> Resu
     finish(text.into_inner(), tool_calls)
 }
 
+pub(crate) fn parse_anthropic_stream(reader: impl BufRead, stream: &Stream) -> Result<AgentTurn> {
+    let text = std::cell::RefCell::new(String::new());
+    let mut blocks: Vec<Option<PartialCall>> = Vec::new();
+    drive(reader, stream, &text, |data| {
+        let Ok(event) = serde_json::from_str::<Value>(data) else {
+            return Ok(());
+        };
+        let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        match event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "content_block_start" => {
+                let block = event.get("content_block");
+                if block.and_then(|b| b.get("type")).and_then(Value::as_str) == Some("tool_use") {
+                    if blocks.len() <= index {
+                        blocks.resize_with(index + 1, || None);
+                    }
+                    let field = |name| {
+                        block
+                            .and_then(|b| b.get(name))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    };
+                    blocks[index] = Some(PartialCall {
+                        id: field("id"),
+                        name: field("name"),
+                        arguments: String::new(),
+                    });
+                }
+            }
+            "content_block_delta" => {
+                let delta = event.get("delta");
+                match delta.and_then(|d| d.get("type")).and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let piece = delta
+                            .and_then(|d| d.get("text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        push_text(&text, stream, piece);
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(Some(call)) = blocks.get_mut(index) {
+                            let piece = delta
+                                .and_then(|d| d.get("partial_json"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            call.arguments.push_str(piece);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "message_delta" => {
+                if let Some(tokens) = event
+                    .pointer("/usage/output_tokens")
+                    .and_then(Value::as_u64)
+                {
+                    stream.emit(StreamEvent::Usage(tokens));
+                }
+            }
+            "error" => {
+                let message = event
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown error");
+                return Err(interrupted(
+                    &text.borrow(),
+                    format!("provider error: {message}"),
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    let tool_calls = blocks
+        .into_iter()
+        .flatten()
+        .map(|call| {
+            Ok(ToolCall {
+                id: call.id,
+                name: call.name,
+                arguments: parse_arguments(&call.arguments)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    finish(text.into_inner(), tool_calls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Interrupted, Stream, StreamEvent, parse_openai_stream, sse_data};
@@ -223,6 +314,62 @@ mod tests {
         };
         let result = parse_openai_stream(Cursor::new(fixture.to_owned()), &stream);
         (result, events.into_inner())
+    }
+
+    fn run_with(
+        parse: fn(Cursor<String>, &Stream) -> anyhow::Result<crate::provider::AgentTurn>,
+        fixture: &str,
+    ) -> (anyhow::Result<crate::provider::AgentTurn>, Vec<StreamEvent>) {
+        let cancel = AtomicBool::new(false);
+        let events = RefCell::new(Vec::new());
+        let on_event = |event| events.borrow_mut().push(event);
+        let stream = Stream {
+            on_event: &on_event,
+            cancel: &cancel,
+        };
+        let result = parse(Cursor::new(fixture.to_owned()), &stream);
+        (result, events.into_inner())
+    }
+
+    #[test]
+    fn anthropic_text_stream_emits_deltas_and_output_usage() {
+        let fixture = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n\
+event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n\
+event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\n\n\
+event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":15}}\n\n\
+event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+        let (result, events) = run_with(super::parse_anthropic_stream, fixture);
+        assert_eq!(result.expect("turn").text, "Hello");
+        assert_eq!(
+            events.first(),
+            Some(&StreamEvent::TextDelta("Hel".to_owned()))
+        );
+        assert!(events.contains(&StreamEvent::Usage(15)));
+    }
+
+    #[test]
+    fn anthropic_tool_use_input_is_assembled_from_json_deltas() {
+        let fixture = "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\",\"input\":{}}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"pa\"}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"th\\\":\\\"a.rs\\\"}\"}}\n\n\
+data: {\"type\":\"message_stop\"}\n\n";
+        let (result, _) = run_with(super::parse_anthropic_stream, fixture);
+        let turn = result.expect("turn");
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].id, "toolu_1");
+        assert_eq!(turn.tool_calls[0].arguments["path"], "a.rs");
+    }
+
+    #[test]
+    fn anthropic_error_event_keeps_partial_text() {
+        let fixture = "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"half\"}}\n\n\
+data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
+        let (result, _) = run_with(super::parse_anthropic_stream, fixture);
+        let error = result.expect_err("error");
+        let interrupted = error.downcast_ref::<Interrupted>().expect("interrupted");
+        assert_eq!(interrupted.partial, "half");
+        assert!(interrupted.reason.contains("Overloaded"));
     }
 
     #[test]
