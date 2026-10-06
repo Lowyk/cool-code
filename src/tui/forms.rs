@@ -1,10 +1,8 @@
 use crate::tui::models::{available_chain_models, model_name, slug};
 use crate::tui::state::{
-    App, ChainDraft, ModelDraft, PROVIDER_PRESETS, ProviderDraft, SettingsTab, edit_string,
+    App, ChainDraft, ModelDraft, PROVIDER_PRESETS, ProviderDraft, edit_string,
 };
-use crate::{
-    ModelChain, ModelProfile, ProviderProfile, Settings, provider, secrets, write_settings,
-};
+use crate::{ModelChain, ModelProfile, ProviderProfile, Settings, secrets, write_settings};
 use anyhow::{Context, Result};
 use crossterm::event::{self, KeyCode};
 
@@ -451,146 +449,6 @@ impl App {
                     }
                 }
             }
-        }
-        Ok(())
-    }
-
-    pub(super) fn handle_settings_key(&mut self, key: event::KeyEvent) -> Result<()> {
-        match key.code {
-            KeyCode::Char('n') if self.settings_tab == SettingsTab::Providers => {
-                self.provider_form = Some(ProviderDraft {
-                    choosing_preset: true,
-                    existing_id: None,
-                    preset: 0,
-                    alias: String::new(),
-                    base_url: String::new(),
-                    api_key: String::new(),
-                    models: Vec::new(),
-                    focus: 0,
-                });
-            }
-            KeyCode::Char('n') if self.settings_tab == SettingsTab::AutoSwitch => {
-                self.chain_form = Some(ChainDraft {
-                    original_id: None,
-                    alias: String::new(),
-                    id: String::new(),
-                    members: Vec::new(),
-                    activate_on_select: false,
-                    focus: 0,
-                    member_index: 0,
-                    picking_member: false,
-                    candidate_index: 0,
-                });
-            }
-            KeyCode::Up if self.settings_tab == SettingsTab::Providers => {
-                self.provider_index = self.provider_index.saturating_sub(1);
-            }
-            KeyCode::Char('e') if self.settings_tab == SettingsTab::Providers => {
-                self.edit_provider(self.provider_index);
-            }
-            KeyCode::Char('d') if self.settings_tab == SettingsTab::Providers => {
-                self.delete_provider(self.provider_index)?;
-            }
-            KeyCode::Char('e') if self.settings_tab == SettingsTab::AutoSwitch => {
-                self.edit_chain(self.chain_index);
-            }
-            KeyCode::Char('d') if self.settings_tab == SettingsTab::AutoSwitch => {
-                if let Some(chain) = self.settings.model_chains.get(self.chain_index) {
-                    let id = chain.id.clone();
-                    self.settings.model_chains.remove(self.chain_index);
-                    if self.settings.active_chain_id.as_deref() == Some(&id) {
-                        self.settings.active_chain_id = None;
-                    }
-                    self.chain_index = self
-                        .chain_index
-                        .min(self.settings.model_chains.len().saturating_sub(1));
-                    write_settings(&self.settings)?;
-                    self.notice = format!("Chain `{id}` removed.");
-                }
-            }
-            KeyCode::Up if self.settings_tab == SettingsTab::AutoSwitch => {
-                self.chain_index = self.chain_index.saturating_sub(1);
-            }
-            KeyCode::Down if self.settings_tab == SettingsTab::AutoSwitch => {
-                self.chain_index =
-                    (self.chain_index + 1).min(self.settings.model_chains.len().saturating_sub(1));
-            }
-            KeyCode::Enter if self.settings_tab == SettingsTab::AutoSwitch => {
-                if let Some(chain) = self.settings.model_chains.get(self.chain_index) {
-                    let id = chain.id.clone();
-                    self.activate_chain(&id)?;
-                }
-            }
-            KeyCode::Down if self.settings_tab == SettingsTab::Providers => {
-                self.provider_index =
-                    (self.provider_index + 1).min(self.settings.providers.len().saturating_sub(1));
-            }
-            KeyCode::Enter if self.settings_tab == SettingsTab::Providers => {
-                if let Some(profile) = self.settings.providers.get(self.provider_index).cloned() {
-                    if profile.draft {
-                        self.notice =
-                            "This provider is a draft; finish its setup before activating it."
-                                .to_owned();
-                    } else {
-                        self.settings.default_provider_id = Some(profile.id.clone());
-                        if self.settings.active_provider_id.is_none() {
-                            self.settings.active_provider_id = Some(profile.id.clone());
-                            self.settings.provider = Some(profile.adapter.clone());
-                            self.settings.model = profile
-                                .models
-                                .first()
-                                .map(|model| model.id.clone())
-                                .or_else(|| {
-                                    (!profile.model.is_empty()).then_some(profile.model.clone())
-                                });
-                            self.settings.base_url = profile.base_url.clone();
-                            self.settings.api_key_env = None;
-                        }
-                        write_settings(&self.settings)?;
-                        self.notice = format!(
-                            "{} is now the default provider; auto-switch activation is toggled with Space.",
-                            profile.name
-                        );
-                    }
-                }
-            }
-            KeyCode::Char(' ') if self.settings_tab == SettingsTab::Providers => {
-                if let Some(profile) = self.settings.providers.get_mut(self.provider_index) {
-                    if profile.draft {
-                        self.notice =
-                            "Finish this draft before enabling automatic model switching."
-                                .to_owned();
-                    } else {
-                        profile.auto_switch = !profile.auto_switch;
-                        self.notice = format!(
-                            "{} auto-switch {}.",
-                            profile.name,
-                            if profile.auto_switch {
-                                "enabled"
-                            } else {
-                                "disabled"
-                            }
-                        );
-                        write_settings(&self.settings)?;
-                    }
-                }
-            }
-            KeyCode::Char('t') if self.settings_tab == SettingsTab::Privacy => {
-                self.set_workspace_trusted(!self.workspace_trusted)?;
-            }
-            KeyCode::Char('r') if self.settings_tab == SettingsTab::Privacy => {
-                self.settings.privacy_acknowledged.clear();
-                self.settings.privacy_image_acknowledged.clear();
-                write_settings(&self.settings)?;
-                self.notice =
-                    "Privacy acknowledgements and image-content grants cleared.".to_owned();
-            }
-            KeyCode::Char('c') if self.settings_tab == SettingsTab::Privacy => {
-                provider::save_redaction_values(&[])?;
-                self.notice = "Custom local redaction values cleared from the OS credential store."
-                    .to_owned();
-            }
-            _ => {}
         }
         Ok(())
     }

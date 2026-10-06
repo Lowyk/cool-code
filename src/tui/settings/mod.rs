@@ -1,12 +1,15 @@
+mod auto_switch;
 mod general;
 mod models;
+mod privacy;
 mod providers;
 
-use crate::tui::render::settings::draw_settings_content;
+use crate::tui::settings::auto_switch::draw_auto_switch;
 use crate::tui::settings::general::draw_general;
 use crate::tui::settings::models::{ModelEdit, draw_models, model_rows};
+use crate::tui::settings::privacy::{draw_privacy, privacy_confirm_question};
 use crate::tui::settings::providers::draw_providers;
-use crate::tui::state::{App, SettingsTab};
+use crate::tui::state::App;
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
 use ratatui::layout::{Alignment, Rect};
@@ -48,16 +51,6 @@ impl Section {
             .position(|section| *section == self)
             .unwrap_or(0)
     }
-
-    // Unported sections still render and handle keys through the legacy tab code.
-    fn legacy_tab(self) -> SettingsTab {
-        match self {
-            Section::General | Section::Models => SettingsTab::General,
-            Section::Providers => SettingsTab::Providers,
-            Section::AutoSwitch => SettingsTab::AutoSwitch,
-            Section::Privacy => SettingsTab::Privacy,
-        }
-    }
 }
 
 const SIDEBAR_WIDTH: u16 = 18;
@@ -94,7 +87,16 @@ impl SettingsView {
 impl App {
     pub(in crate::tui) fn open_settings(&mut self, section: Section) {
         self.settings_view = Some(SettingsView::open(section));
-        self.settings_tab = section.legacy_tab();
+    }
+
+    fn handle_section_key(&mut self, section: Section, key: event::KeyEvent) -> Result<()> {
+        match section {
+            Section::General => self.handle_general_key(key),
+            Section::Providers => self.handle_providers_key(key),
+            Section::Models => self.handle_models_key(key),
+            Section::AutoSwitch => self.handle_auto_switch_key(key),
+            Section::Privacy => self.handle_privacy_key(key),
+        }
     }
 
     pub(in crate::tui) fn handle_settings_view_key(&mut self, key: event::KeyEvent) -> Result<()> {
@@ -109,10 +111,8 @@ impl App {
             return Ok(());
         };
         if view.confirm_delete || view.model_edit.is_some() {
-            return match view.section {
-                Section::Models => self.handle_models_key(key),
-                _ => self.handle_providers_key(key),
-            };
+            let section = view.section;
+            return self.handle_section_key(section, key);
         }
         match view.focus {
             Focus::Sidebar => match key.code {
@@ -125,7 +125,6 @@ impl App {
                     };
                     view.section = Section::ALL[next];
                     view.row = 0;
-                    self.settings_tab = view.section.legacy_tab();
                 }
                 KeyCode::Right | KeyCode::Enter | KeyCode::Tab => view.focus = Focus::Content,
                 KeyCode::Esc => self.settings_view = None,
@@ -133,12 +132,10 @@ impl App {
             },
             Focus::Content => match key.code {
                 KeyCode::Esc | KeyCode::Left => view.focus = Focus::Sidebar,
-                _ => match view.section {
-                    Section::General => self.handle_general_key(key)?,
-                    Section::Providers => self.handle_providers_key(key)?,
-                    Section::Models => self.handle_models_key(key)?,
-                    _ => self.handle_settings_key(key)?,
-                },
+                _ => {
+                    let section = view.section;
+                    self.handle_section_key(section, key)?
+                }
             },
         }
         Ok(())
@@ -193,27 +190,11 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         Section::General => draw_general(frame, content, app, view),
         Section::Providers => draw_providers(frame, content, app, view),
         Section::Models => draw_models(frame, content, app, view),
-        _ => draw_settings_content(frame, content, app),
+        Section::AutoSwitch => draw_auto_switch(frame, content, app, view),
+        Section::Privacy => draw_privacy(frame, content, app, view),
     }
     let footer_line = if view.confirm_delete {
-        let question = if view.section == Section::Models {
-            let rows = model_rows(&app.settings);
-            let id = rows
-                .get(view.row.min(rows.len().saturating_sub(1)))
-                .map(|(_, (provider, model))| {
-                    app.settings.providers[*provider].models[*model].id.clone()
-                })
-                .unwrap_or_default();
-            format!("Remove {id}? y/n")
-        } else {
-            let name = app
-                .settings
-                .providers
-                .get(view.row)
-                .map(|profile| profile.name.as_str())
-                .unwrap_or("this provider");
-            format!("Delete {name} and its saved API key? y/n")
-        };
+        let question = confirm_question(app, view);
         Span::styled(
             question,
             Style::default()
@@ -257,6 +238,40 @@ fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView)
     }
 }
 
+fn confirm_question(app: &App, view: &SettingsView) -> String {
+    match view.section {
+        Section::Models => {
+            let rows = model_rows(&app.settings);
+            let id = rows
+                .get(view.row.min(rows.len().saturating_sub(1)))
+                .map(|(_, (provider, model))| {
+                    app.settings.providers[*provider].models[*model].id.clone()
+                })
+                .unwrap_or_default();
+            format!("Remove {id}? y/n")
+        }
+        Section::AutoSwitch => {
+            let id = app
+                .settings
+                .model_chains
+                .get(view.row)
+                .map(|chain| chain.id.as_str())
+                .unwrap_or("this chain");
+            format!("Delete chain {id}? y/n")
+        }
+        Section::Privacy => privacy_confirm_question(view.row).to_owned(),
+        Section::General | Section::Providers => {
+            let name = app
+                .settings
+                .providers
+                .get(view.row)
+                .map(|profile| profile.name.as_str())
+                .unwrap_or("this provider");
+            format!("Delete {name} and its saved API key? y/n")
+        }
+    }
+}
+
 fn footer_hint(view: &SettingsView) -> &'static str {
     if view.model_edit.is_some() {
         return "Enter confirm   Esc cancel";
@@ -270,7 +285,10 @@ fn footer_hint(view: &SettingsView) -> &'static str {
         (Focus::Content, Section::Providers) => {
             "↑↓ move   Enter edit   n add   d default   a auto   x delete   Esc back"
         }
-        (Focus::Content, _) => "← sections   Esc back",
+        (Focus::Content, Section::AutoSwitch) => {
+            "↑↓ move   Enter edit   n new   Space activate   x delete   Esc back"
+        }
+        (Focus::Content, Section::Privacy) => "↑↓ move   Enter change   ← sections   Esc back",
     }
 }
 

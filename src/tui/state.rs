@@ -36,7 +36,6 @@ pub(super) struct App {
     pub(super) pending: Option<Receiver<PendingEvent>>,
     pub(super) history_scroll: u16,
     pub(super) settings_view: Option<crate::tui::settings::SettingsView>,
-    pub(super) settings_tab: SettingsTab,
     pub(super) provider_index: usize,
     pub(super) provider_form: Option<ProviderDraft>,
     pub(super) chain_form: Option<ChainDraft>,
@@ -70,14 +69,6 @@ pub(super) struct TranscriptEntry {
 pub(super) struct PrivacyPrompt {
     pub(super) risk: String,
     pub(super) allow_images: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum SettingsTab {
-    General,
-    Providers,
-    AutoSwitch,
-    Privacy,
 }
 
 pub(super) struct ProviderDraft {
@@ -236,7 +227,6 @@ impl App {
             pending: None,
             history_scroll: 0,
             settings_view: None,
-            settings_tab: SettingsTab::General,
             provider_index,
             provider_form: None,
             chain_form: None,
