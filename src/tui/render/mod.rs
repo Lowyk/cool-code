@@ -31,7 +31,7 @@ fn mode_color(mode: &str) -> Color {
 pub(super) fn mode_span(mode: &str, selected: bool) -> Span<'static> {
     let label = mode_label(mode);
     let text = if mode == "accept-everything" {
-        format!("⚠ {label}")
+        format!("!! {label} !!")
     } else {
         label.to_owned()
     };
@@ -409,13 +409,13 @@ mod tests {
     }
 
     #[test]
-    fn only_accept_everything_carries_a_warning_sign() {
+    fn only_accept_everything_carries_warning_marks() {
         assert_eq!(
             mode_span("accept-everything", true).content,
-            "⚠ Accept Everything"
+            "!! Accept Everything !!"
         );
         for mode in ["accept-edits", "auto", "plan", "accept-minimal"] {
-            assert!(!mode_span(mode, true).content.contains('⚠'), "{mode}");
+            assert!(!mode_span(mode, true).content.contains('!'), "{mode}");
         }
     }
 
