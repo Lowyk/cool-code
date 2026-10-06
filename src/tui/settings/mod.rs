@@ -7,7 +7,9 @@ mod providers;
 use crate::tui::settings::auto_switch::draw_auto_switch;
 use crate::tui::settings::general::draw_general;
 use crate::tui::settings::models::{ModelEdit, draw_models, model_rows};
-use crate::tui::settings::privacy::{draw_privacy, privacy_confirm_question};
+use crate::tui::settings::privacy::{
+    draw_privacy, draw_privacy_sub, privacy_confirm_question, privacy_sub_hint,
+};
 use crate::tui::settings::providers::draw_providers;
 use crate::tui::state::App;
 use anyhow::Result;
@@ -70,6 +72,7 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) row: usize,
     pub(in crate::tui) confirm_delete: bool,
     pub(in crate::tui) model_edit: Option<ModelEdit>,
+    pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
 }
 
 impl SettingsView {
@@ -80,6 +83,7 @@ impl SettingsView {
             row: 0,
             confirm_delete: false,
             model_edit: None,
+            privacy_sub: None,
         }
     }
 }
@@ -110,7 +114,7 @@ impl App {
         let Some(view) = self.settings_view.as_mut() else {
             return Ok(());
         };
-        if view.confirm_delete || view.model_edit.is_some() {
+        if view.confirm_delete || view.model_edit.is_some() || view.privacy_sub.is_some() {
             let section = view.section;
             return self.handle_section_key(section, key);
         }
@@ -191,7 +195,10 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         Section::Providers => draw_providers(frame, content, app, view),
         Section::Models => draw_models(frame, content, app, view),
         Section::AutoSwitch => draw_auto_switch(frame, content, app, view),
-        Section::Privacy => draw_privacy(frame, content, app, view),
+        Section::Privacy => match &view.privacy_sub {
+            Some(sub) => draw_privacy_sub(frame, content, app, sub),
+            None => draw_privacy(frame, content, app, view),
+        },
     }
     let footer_line = if view.confirm_delete {
         let question = confirm_question(app, view);
@@ -259,6 +266,9 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
                 .unwrap_or("this chain");
             format!("Delete chain {id}? y/n")
         }
+        Section::Privacy if view.privacy_sub.is_some() => {
+            "Remove this redaction value? y/n".to_owned()
+        }
         Section::Privacy => privacy_confirm_question(view.row).to_owned(),
         Section::General | Section::Providers => {
             let name = app
@@ -275,6 +285,9 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
 fn footer_hint(view: &SettingsView) -> &'static str {
     if view.model_edit.is_some() {
         return "Enter confirm   Esc cancel";
+    }
+    if let Some(sub) = &view.privacy_sub {
+        return privacy_sub_hint(sub);
     }
     match (view.focus, view.section) {
         (Focus::Sidebar, _) => "↑↓ section   →/Enter open   Esc close",
@@ -295,9 +308,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{Focus, Section, SettingsView};
-    use crate::Settings;
     use crate::tui::render::draw;
     use crate::tui::state::App;
+    use crate::{ModelProfile, ProviderProfile, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
