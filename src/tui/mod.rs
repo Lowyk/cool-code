@@ -55,7 +55,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> 
         app.poll_response();
         let animation_tick = (animation_start.elapsed().as_millis() / 280) as usize;
         terminal.draw(|frame| draw(frame, &app, animation_tick))?;
-        if !event::poll(Duration::from_millis(100)).context("waiting for terminal input")? {
+        // Redraw faster while the animated effort picker is open.
+        let frame_interval = Duration::from_millis(if app.picker { 40 } else { 100 });
+        if !event::poll(frame_interval).context("waiting for terminal input")? {
             continue;
         }
         let Event::Key(key) = event::read().context("reading terminal input")? else {
