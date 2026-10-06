@@ -1,10 +1,11 @@
+use crate::policy::MODES;
 use crate::tui::agent_bridge::run_agent_turns;
 use crate::tui::context::{build_user_message, read_cool_file, read_user_instructions};
 use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
 use crate::tui::state::{
-    App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, MODES, PendingEvent,
-    PrivacyPrompt, SettingsTab, TranscriptEntry, TranscriptKind, mode_alias, mode_label,
+    App, CORE_SYSTEM_PROMPT, CORE_SYSTEM_PROMPT_VERSION, LEVELS, PendingEvent, PrivacyPrompt,
+    SettingsTab, TranscriptEntry, TranscriptKind, mode_alias, mode_label,
 };
 use crate::{Effort, provider, write_settings};
 use anyhow::{Context, Result};

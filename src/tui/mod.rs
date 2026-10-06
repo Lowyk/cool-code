@@ -8,8 +8,9 @@ mod render;
 mod state;
 mod wordmark;
 
+use crate::policy::MODES;
 use crate::tui::render::draw;
-use crate::tui::state::{App, LEVELS, MODES, TranscriptEntry, TranscriptKind};
+use crate::tui::state::{App, LEVELS, TranscriptEntry, TranscriptKind};
 use crate::{Effort, provider, read_settings, write_settings};
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};

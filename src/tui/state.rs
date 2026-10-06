@@ -1,3 +1,4 @@
+use crate::policy::MODES;
 use crate::tui::context::workspace_is_trusted;
 use crate::tui::effort::effort_name;
 use crate::{ChainModel, Effort, Settings, provider, write_settings};
@@ -173,14 +174,6 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 6] = [
         custom: true,
         models: &[],
     },
-];
-
-pub(super) const MODES: [(&str, &str); 5] = [
-    ("Auto", "auto"),
-    ("Accept Edits", "accept-edits"),
-    ("Accept Minimal", "accept-minimal"),
-    ("Accept Everything", "accept-everything"),
-    ("Plan", "plan"),
 ];
 
 pub(super) const CORE_SYSTEM_PROMPT_VERSION: u32 = 1;
