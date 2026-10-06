@@ -5,7 +5,8 @@ use regex::Regex;
 use reqwest::blocking::Client;
 
 use crate::stream::{
-    Interrupted, Restorer, Stream, StreamEvent, parse_anthropic_stream, parse_openai_stream,
+    Interrupted, Restorer, Stream, StreamEvent, parse_anthropic_stream, parse_google_stream,
+    parse_openai_stream,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -270,6 +271,7 @@ fn complete_turn(
             &safe_messages,
             allow_tools,
             settings.permission_mode == "plan",
+            &restoring,
         ),
         _ => complete_openai_compatible(
             &client,
@@ -735,6 +737,7 @@ fn complete_google(
     messages: &[ChatMessage],
     allow_tools: bool,
     plan_mode: bool,
+    stream: &Stream,
 ) -> Result<AgentTurn> {
     // complete_turn enforces acknowledgement and redacts content before reaching this adapter.
     let system = messages
@@ -757,48 +760,11 @@ fn complete_google(
     }
     let model = model.strip_prefix("models/").unwrap_or(model);
     let endpoint = format!(
-        "{}/models/{model}:generateContent",
+        "{}/models/{model}:streamGenerateContent?alt=sse",
         base_url.trim_end_matches('/')
     );
-    let value = send_google_request(client, &endpoint, api_key, &body)?;
-    let parts = value
-        .get("candidates")
-        .and_then(Value::as_array)
-        .and_then(|candidates| candidates.first())
-        .and_then(|candidate| candidate.get("content"))
-        .and_then(|content| content.get("parts"))
-        .and_then(Value::as_array)
-        .context("Google response did not contain candidate content parts")?;
-    let text = parts
-        .iter()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<String>();
-    let tool_calls = parts
-        .iter()
-        .filter_map(|part| part.get("functionCall"))
-        .map(|call| {
-            Ok(ToolCall {
-                id: call
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("google-call-{}", uuid::Uuid::new_v4().simple())),
-                name: call
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .context("Google function call has no name")?
-                    .to_owned(),
-                arguments: call
-                    .get("args")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({})),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if text.is_empty() && tool_calls.is_empty() {
-        bail!("Google response contained neither text nor function calls");
-    }
-    Ok(AgentTurn { text, tool_calls })
+    let response = send_google_request(client, &endpoint, api_key, &body)?;
+    parse_google_stream(std::io::BufReader::new(response), stream)
 }
 
 fn send_google_request(
@@ -806,7 +772,7 @@ fn send_google_request(
     endpoint: &str,
     api_key: &str,
     body: &Value,
-) -> Result<Value> {
+) -> Result<reqwest::blocking::Response> {
     const MAX_RETRIES: usize = 3;
 
     for attempt in 0..=MAX_RETRIES {
@@ -817,10 +783,10 @@ fn send_google_request(
             .send()
             .context("sending request to the Google Generative Language API")?;
         if response.status().as_u16() != 503 {
-            return read_response(response);
+            return successful(response);
         }
         if attempt == MAX_RETRIES {
-            return read_response(response)
+            return successful(response)
                 .context("Gemini remained unavailable after 4 attempts (3 retries)");
         }
         let retry_after = response
@@ -869,18 +835,6 @@ fn google_message(message: &ChatMessage) -> Result<Value> {
         }));
     }
     Ok(serde_json::json!({"role":"user", "parts":google_parts(&message.content)?}))
-}
-
-fn read_response(response: reqwest::blocking::Response) -> Result<Value> {
-    let status = response.status();
-    let body = response.text().context("reading model response")?;
-    if !status.is_success() {
-        bail!(
-            "provider returned {status}: {}",
-            body.chars().take(8 * 1024).collect::<String>()
-        );
-    }
-    serde_json::from_str(&body).context("parsing provider response")
 }
 
 fn message_text(message: &ChatMessage) -> String {
