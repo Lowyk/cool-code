@@ -2,7 +2,7 @@ use crate::agent::{PendingEvent, ToolApproval};
 use crate::policy::{MODES, mode_label};
 use crate::tui::context::workspace_is_trusted;
 use crate::tui::effort::effort_name;
-use crate::{ChainModel, Effort, Settings, provider, write_settings};
+use crate::{ChainModel, Effort, PulseMode, Settings, provider, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use std::sync::mpsc::Receiver;
@@ -50,6 +50,8 @@ pub(super) struct App {
     pub(super) privacy_confirmation: Option<PrivacyPrompt>,
     pub(super) pending_privacy_message: Option<provider::ChatMessage>,
     pub(super) trust_prompt: bool,
+    pub(super) motion_prompt: bool,
+    pub(super) motion_choice: usize,
     pub(super) workspace_trusted: bool,
     pub(super) trust_choice: usize,
     pub(super) tool_approval: Option<ToolApproval>,
@@ -252,6 +254,8 @@ impl App {
             privacy_confirmation: None,
             pending_privacy_message: None,
             trust_prompt: !workspace_trusted,
+            motion_prompt: false,
+            motion_choice: 0,
             workspace_trusted,
             trust_choice: 1,
             tool_approval: None,
@@ -281,6 +285,16 @@ impl App {
             running: true,
             launched_at: std::time::Instant::now(),
         }
+    }
+
+    pub(super) fn answer_motion_prompt(&mut self, reduce_motion: bool) -> Result<()> {
+        if reduce_motion {
+            self.settings.pulse = PulseMode::Off;
+            self.settings.background_animation = false;
+        }
+        self.settings.motion_prompt_answered = true;
+        self.motion_prompt = false;
+        write_settings(&self.settings)
     }
 
     pub(super) fn finish_command(&mut self, output: impl Into<String>) {

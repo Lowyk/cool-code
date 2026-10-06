@@ -31,6 +31,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/agent.rs` | Bounded agent turn loop, tool execution, and the event/approval types the UI consumes; has no terminal-UI dependencies |
 | `src/policy.rs` | Deterministic permission rules (`auto_approve_*`) and the permission-mode table |
 | `src/provider.rs` | Provider adapters and model fallback |
+| `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
 | `src/tools.rs` | Workspace tools, edit and create proposals |
 | `src/secrets.rs` | OS credential-store access |
 | `src/tui/mod.rs` | Terminal setup and the event loop |
@@ -42,7 +43,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `providers`, `models`, `auto_switch`, `privacy`) |
 | `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
 | `src/tui/widgets/` | Reusable widgets, such as the filterable selectable list |
-| `src/tui/render/` | Frame drawing: `mod.rs` (layout and input), `forms.rs`, `dialogs.rs` |
+| `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs`, `motion.rs` (text pulse and reduced-motion prompt) |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
 | `src/tui/wordmark.rs` | Welcome wordmark and gradient |
 | `src/tui/backdrop.rs` | Drifting ice-crystal backdrop on the welcome screen |
@@ -89,7 +90,14 @@ Initial references checked 2026-09-28:
 
 The intended workflow is durable and observable: plan -> approve according to policy -> schedule independent tasks -> collect results -> verify or attempt refutation -> retry/refine where appropriate -> synthesize -> report. It needs explicit concurrency/resource limits, checkpoints, cancellation, and resumability. Workflow progress and cost/usage should be inspectable.
 
+## Streaming and cancellation
+
+All adapters request streamed responses and parse server-sent events line by line from a blocking response on the worker thread; text deltas and token usage reach the UI as events, while the adapter still returns the assembled turn, including tool calls stitched together from fragments. Redaction placeholders are restored as text streams in, holding back any unfinished placeholder so partial tokens are never shown. The UI renders the growing answer with a cursor and a status line (elapsed time, reported or estimated tokens, or the running tool). Esc cancels a running turn through a shared flag: the worker stops at the next chunk, skips pending tool calls, and kills a running command; the partial answer stays in the transcript marked as interrupted and in the conversation context. Newly arrived text can pulse by word or character, and a first-run prompt offers reduced motion.
+
 ## Configuration and secrets
+
+Settings live in `~/.coolcode/config.toml`. An existing config from the previous platform location is copied there on first launch and the old file is kept as a backup.
+
 
 Settings should support user-level defaults and project-level overrides with documented precedence. Credentials must not be stored in plain project config; use environment references or the OS credential store. Effective config display must redact secret values. The TUI Providers tab stores provider profiles in TOML and API keys in Windows Credential Manager, macOS Keychain, or Linux Secret Service. Profile IDs, not API key material, link the settings record to the credential-store entry. Custom endpoint configuration must show the full destination clearly before requests are sent.
 
