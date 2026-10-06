@@ -51,6 +51,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new(read_settings()?);
+    app.motion_prompt = !app.settings.motion_prompt_answered;
     let animation_start = std::time::Instant::now();
     while app.running {
         app.poll_response();
@@ -87,6 +88,15 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Char('n' | 'N') | KeyCode::Esc => app.set_workspace_trusted(false)?,
             KeyCode::Enter if app.trust_choice == 0 => app.set_workspace_trusted(true)?,
             KeyCode::Enter => app.set_workspace_trusted(false)?,
+            _ => {}
+        }
+    } else if app.motion_prompt {
+        match key.code {
+            KeyCode::Left => app.motion_choice = 0,
+            KeyCode::Right => app.motion_choice = 1,
+            KeyCode::Enter => app.answer_motion_prompt(app.motion_choice == 1)?,
+            KeyCode::Char('r' | 'R') => app.answer_motion_prompt(true)?,
+            KeyCode::Char('k' | 'K') | KeyCode::Esc => app.answer_motion_prompt(false)?,
             _ => {}
         }
     } else if app.tool_approval.is_some() {
@@ -334,6 +344,32 @@ mod tests {
         let _ = sender.send(PendingEvent::Finished(Err("cancelled".to_owned())));
         app.poll_response();
         assert_eq!(app.transcript.len(), before);
+    }
+
+    #[test]
+    fn motion_prompt_reduce_motion_disables_effects_and_is_answered_once() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.motion_prompt = true;
+        handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)).expect("right");
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).expect("enter");
+        assert!(!app.motion_prompt);
+        assert!(app.settings.motion_prompt_answered);
+        assert_eq!(app.settings.pulse, crate::PulseMode::Off);
+        assert!(!app.settings.background_animation);
+    }
+
+    #[test]
+    fn motion_prompt_keep_animations_leaves_effects_on() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.motion_prompt = true;
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).expect("enter");
+        assert!(!app.motion_prompt);
+        assert!(app.settings.motion_prompt_answered);
+        assert_eq!(app.settings.pulse, crate::PulseMode::Words);
+        assert!(app.settings.background_animation);
+        assert!(app.running);
     }
 
     #[test]

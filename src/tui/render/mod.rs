@@ -1,5 +1,6 @@
 mod dialogs;
 pub(super) mod forms;
+mod motion;
 
 use crate::policy::mode_label;
 use crate::tui::backdrop::{backdrop_enabled, draw_backdrop};
@@ -10,10 +11,11 @@ use crate::tui::render::dialogs::{
     draw_extreme_confirmation, draw_mode_picker, draw_model_provider_picker,
     draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
 };
+use crate::tui::render::motion::{draw_motion_prompt, pulse_spans};
 use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::wordmark::cool_code_wordmark;
-use crate::{Effort, provider};
+use crate::{Effort, PulseMode, provider};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -66,26 +68,30 @@ pub(super) fn status_line(turn: &StreamingTurn, now: std::time::Instant) -> Stri
     )
 }
 
-fn streaming_lines(turn: &StreamingTurn) -> Vec<Line<'static>> {
+fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> {
     let marker = Style::default()
         .fg(Color::Rgb(165, 236, 250))
         .add_modifier(Modifier::BOLD);
-    let text_style = Style::default().fg(Color::White);
-    let cursor = Span::styled("▍", Style::default().fg(Color::Rgb(98, 213, 244)));
-    let mut lines = turn
-        .text
-        .split('\n')
-        .enumerate()
-        .map(|(index, line)| {
-            Line::from(vec![
-                Span::styled(if index == 0 { "• " } else { "  " }, marker),
-                Span::styled(line.to_owned(), text_style),
-            ])
-        })
-        .collect::<Vec<_>>();
-    if let Some(last) = lines.last_mut() {
-        last.spans.push(cursor);
+    let mut lines = vec![Line::from(Span::styled("• ", marker))];
+    let spans = pulse_spans(&turn.text, &turn.arrivals, mode, std::time::Instant::now());
+    for span in spans {
+        let mut pieces = span.content.split('\n').peekable();
+        while let Some(piece) = pieces.next() {
+            if !piece.is_empty() {
+                let line = lines.last_mut().expect("at least one line");
+                line.spans.push(Span::styled(piece.to_owned(), span.style));
+            }
+            if pieces.peek().is_some() {
+                lines.push(Line::from(Span::styled("  ", marker)));
+            }
+        }
     }
+    let cursor = Span::styled("▍", Style::default().fg(Color::Rgb(98, 213, 244)));
+    lines
+        .last_mut()
+        .expect("at least one line")
+        .spans
+        .push(cursor);
     lines
 }
 
@@ -243,7 +249,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         if let Some(turn) = app.streaming.as_ref()
             && turn.tool.is_none()
         {
-            lines.extend(streaming_lines(turn));
+            lines.extend(streaming_lines(turn, app.settings.pulse));
         }
         let wrapped_line_count = lines
             .iter()
@@ -413,6 +419,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if let Some(picker) = app.model_picker.as_ref() {
         draw_model_picker(frame, area, picker);
     }
+    if app.motion_prompt && !app.trust_prompt {
+        draw_motion_prompt(frame, area, app.motion_choice);
+    }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);
     }
@@ -455,7 +464,7 @@ mod tests {
     use ratatui::style::{Color, Modifier};
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, mpsc};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const MODE_COLORS: [(&str, Color); 5] = [
         ("accept-everything", Color::Rgb(235, 80, 80)),
