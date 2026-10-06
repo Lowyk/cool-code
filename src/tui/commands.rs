@@ -454,7 +454,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::format_provider_error;
-    use crate::tui::draw;
+    use crate::tui::render::draw;
     use crate::tui::state::{App, PendingEvent, TranscriptEntry, TranscriptKind};
     use crate::{Settings, provider};
     use ratatui::Terminal;
