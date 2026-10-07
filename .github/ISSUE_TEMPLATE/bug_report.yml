@@ -59,9 +59,6 @@ body:
       options:
         - Windows
         - macOS
-        - Linux
-        - HarmonyOS
-        - Other (please specify under Additional Context)
     validations:
       required: true
 
@@ -70,7 +67,7 @@ body:
     attributes:
       label: OS Version and Architecture
       description: Provide the full operating system version and CPU architecture.
-      placeholder: "e.g. Windows 11 23H2 x86_64, macOS 15 arm64, Ubuntu 24.04 aarch64"
+      placeholder: "e.g. Windows 11 23H2 x86_64, macOS 15 arm64"
     validations:
       required: true
 
