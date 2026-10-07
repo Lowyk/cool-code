@@ -16,6 +16,7 @@ mod endpoints;
 mod policy;
 mod provider;
 mod secrets;
+mod session;
 mod stats;
 mod stream;
 mod tools;
@@ -26,6 +27,15 @@ mod tui;
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    /// Choose an earlier session in this folder to continue.
+    #[arg(long, conflicts_with = "latest")]
+    resume: bool,
+    /// Continue the most recent session in this folder.
+    #[arg(long)]
+    latest: bool,
+    /// With --resume or --latest, consider sessions from every folder.
+    #[arg(long)]
+    all_folders: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -283,8 +293,23 @@ fn write_settings(settings: &Settings) -> Result<()> {
 }
 
 fn run() -> Result<()> {
-    let Some(command) = Cli::parse().command else {
-        return tui::run();
+    let cli = Cli::parse();
+    if cli.all_folders && !(cli.resume || cli.latest) {
+        anyhow::bail!("--all-folders only applies together with --resume or --latest");
+    }
+    let Some(command) = cli.command else {
+        let resume = if cli.resume {
+            Some(tui::sessions::Resume::Pick {
+                all_folders: cli.all_folders,
+            })
+        } else if cli.latest {
+            Some(tui::sessions::Resume::Latest {
+                all_folders: cli.all_folders,
+            })
+        } else {
+            None
+        };
+        return tui::run(resume);
     };
     match command {
         Command::Init => {

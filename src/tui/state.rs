@@ -92,6 +92,10 @@ pub(super) struct App {
     pub(super) model_choice_index: usize,
     pub(super) pending_model: Option<String>,
     pub(super) model_picker: Option<crate::tui::pickers::model::ModelPicker>,
+    pub(super) session_picker: Option<crate::tui::sessions::SessionPicker>,
+    pub(super) session_id: String,
+    pub(super) session_created: i64,
+    pub(super) session_dir: std::path::PathBuf,
     pub(super) mode_picker: bool,
     pub(super) mode_index: usize,
     pub(super) effort_flash_until: Option<std::time::Instant>,
@@ -317,6 +321,7 @@ impl App {
         let workspace_trusted = std::env::current_dir()
             .ok()
             .is_some_and(|root| workspace_is_trusted(&root));
+        let session_created = chrono::Utc::now().timestamp();
         Self {
             settings,
             input: String::new(),
@@ -356,6 +361,10 @@ impl App {
             model_choice_index: 0,
             pending_model: None,
             model_picker: None,
+            session_picker: None,
+            session_id: crate::session::new_id(session_created),
+            session_created,
+            session_dir: crate::tui::sessions::default_session_dir(),
             mode_picker: false,
             mode_index,
             effort_flash_until: None,
