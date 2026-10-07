@@ -83,6 +83,16 @@ impl App {
             self.finish_command("Opened Settings.");
             return Ok(());
         }
+        if value == "/stats" {
+            self.open_stats(false);
+            self.finish_command("Opened usage stats.");
+            return Ok(());
+        }
+        if value == "/stats clear" {
+            self.open_stats(true);
+            self.finish_command("Confirm deleting the usage history.");
+            return Ok(());
+        }
         if value == "/provider" {
             self.open_settings(Section::Providers);
             self.finish_command("Opened providers in Settings.");
@@ -187,7 +197,7 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }
@@ -749,6 +759,24 @@ mod tests {
             r#"provider returned 429 Too Many Requests: {"error":{"message":"slow down"}}"#,
         );
         assert_eq!(rate_limited, "slow down");
+    }
+
+    #[test]
+    fn slash_stats_opens_the_view_and_stats_clear_asks_first() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.input = "/stats".to_owned();
+        app.submit().expect("stats");
+        let view = app.stats_view.as_ref().expect("view open");
+        assert!(!view.confirm_clear);
+        app.stats_view = None;
+        app.input = "/stats clear".to_owned();
+        app.submit().expect("clear");
+        assert!(app.stats_view.as_ref().expect("view open").confirm_clear);
+        app.input = "/help".to_owned();
+        app.stats_view = None;
+        app.submit().expect("help");
+        assert!(app.notice.contains("/stats"), "{}", app.notice);
     }
 
     #[test]

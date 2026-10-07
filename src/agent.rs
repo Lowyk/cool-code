@@ -34,6 +34,22 @@ pub(crate) fn round_limit_message(rounds: usize) -> String {
     )
 }
 
+/// Characters of text in a request, used only to estimate tokens a provider did not report.
+fn message_chars(messages: &[provider::ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|message| match &message.content {
+            serde_json::Value::String(text) => text.chars().count(),
+            serde_json::Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                .map(|text| text.chars().count())
+                .sum(),
+            _ => 0,
+        })
+        .sum()
+}
+
 pub(crate) fn run_agent_turns(
     settings: Settings,
     mut messages: Vec<provider::ChatMessage>,
@@ -45,11 +61,28 @@ pub(crate) fn run_agent_turns(
     let (max_rounds, max_calls) = tool_limits(&settings);
     let mut calls_run = 0usize;
     let mut approved_plan: Vec<(String, serde_json::Value)> = Vec::new();
+    let turn_id = uuid::Uuid::new_v4().simple().to_string();
+    let usage = std::cell::Cell::new((None::<u64>, None::<u64>));
+    let streamed_chars = std::cell::Cell::new(0usize);
     let forward = |event| {
-        let _ = events.send(match event {
+        match &event {
+            StreamEvent::TextDelta(text) => {
+                streamed_chars.set(streamed_chars.get() + text.chars().count());
+            }
+            StreamEvent::Usage { input, output } => {
+                let (previous_input, previous_output) = usage.get();
+                usage.set((input.or(previous_input), output.or(previous_output)));
+            }
+        }
+        let pending = match event {
             StreamEvent::TextDelta(text) => PendingEvent::TextDelta(text),
-            StreamEvent::Usage(tokens) => PendingEvent::Usage(tokens),
-        });
+            StreamEvent::Usage {
+                output: Some(tokens),
+                ..
+            } => PendingEvent::Usage(tokens),
+            StreamEvent::Usage { output: None, .. } => return,
+        };
+        let _ = events.send(pending);
     };
     let stream = Stream {
         on_event: &forward,
@@ -59,8 +92,59 @@ pub(crate) fn run_agent_turns(
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             bail!("cancelled");
         }
-        let mut completion =
-            provider::complete_with_fallback(&settings, &messages, workspace_trusted, &stream)?;
+        usage.set((None, None));
+        streamed_chars.set(0);
+        let started_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as i64);
+        let timer = std::time::Instant::now();
+        let result =
+            provider::complete_with_fallback(&settings, &messages, workspace_trusted, &stream);
+        if settings.stats_enabled {
+            let (provider_id, model, tool_calls, outcome) = match &result {
+                Ok(completion) => (
+                    completion.provider_id.clone(),
+                    completion.model_id.clone(),
+                    completion.tool_calls.len() as u32,
+                    crate::stats::Outcome::Done,
+                ),
+                Err(error) => {
+                    let cancelled = cancel.load(std::sync::atomic::Ordering::Relaxed)
+                        || error
+                            .downcast_ref::<crate::stream::Interrupted>()
+                            .is_some_and(|interrupted| interrupted.reason == "cancelled");
+                    (
+                        settings.active_provider_id.clone(),
+                        settings.model.clone().unwrap_or_default(),
+                        0,
+                        if cancelled {
+                            crate::stats::Outcome::Cancelled
+                        } else {
+                            crate::stats::Outcome::Failed
+                        },
+                    )
+                }
+            };
+            let provider_name = provider_id
+                .as_deref()
+                .and_then(|id| settings.providers.iter().find(|profile| profile.id == id))
+                .map_or_else(|| "unknown".to_owned(), |profile| profile.name.clone());
+            let (reported_input, reported_output) = usage.get();
+            crate::stats::record(&crate::stats::build_record(&crate::stats::Facts {
+                started_ts,
+                turn: &turn_id,
+                provider: &provider_name,
+                model: &model,
+                reported_input,
+                reported_output,
+                input_chars: message_chars(&messages),
+                output_chars: streamed_chars.get(),
+                duration_ms: timer.elapsed().as_millis() as u64,
+                tool_calls,
+                outcome,
+            }));
+        }
+        let mut completion = result?;
         if completion.tool_calls.is_empty() {
             if !approved_plan.is_empty() {
                 completion.text.push_str(&format!(
@@ -469,8 +553,21 @@ fn summarize_tool_result(result: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{round_limit_message, tool_limits};
+    use super::{message_chars, round_limit_message, tool_limits};
     use crate::Settings;
+
+    #[test]
+    fn message_chars_counts_text_but_not_images() {
+        use crate::provider::ChatMessage;
+        let text = ChatMessage::system("abcd".to_owned());
+        let mut with_image = ChatMessage::system(String::new());
+        with_image.content = serde_json::json!([
+            {"type": "text", "text": "hello"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAAAAAAAAAAAAAAAAAA"}}
+        ]);
+        assert_eq!(message_chars(&[text, with_image]), 9);
+        assert_eq!(message_chars(&[]), 0);
+    }
 
     #[test]
     fn default_budget_fits_building_an_app() {

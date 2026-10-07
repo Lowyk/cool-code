@@ -76,6 +76,9 @@ pub(super) struct App {
     pub(super) models_loading: std::collections::HashSet<String>,
     /// Per-provider description of the saved key's shape (never the key itself).
     pub(super) key_shapes: std::collections::HashMap<String, String>,
+    pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
+    pub(super) stats_prompt: bool,
+    pub(super) stats_choice: usize,
     #[cfg(test)]
     pub(super) spawned_tasks: usize,
     pub(super) history_scroll: u16,
@@ -337,6 +340,9 @@ impl App {
             limits: std::collections::HashMap::new(),
             models_loading: std::collections::HashSet::new(),
             key_shapes: std::collections::HashMap::new(),
+            stats_view: None,
+            stats_prompt: false,
+            stats_choice: 1,
             #[cfg(test)]
             spawned_tasks: 0,
             history_scroll: 0,
@@ -360,6 +366,19 @@ impl App {
             running: true,
             launched_at: std::time::Instant::now(),
         }
+    }
+
+    pub(super) fn answer_stats_prompt(&mut self, enable: bool) -> Result<()> {
+        self.settings.stats_enabled = enable;
+        self.settings.stats_prompt_answered = true;
+        self.stats_prompt = false;
+        write_settings(&self.settings)?;
+        self.notice = if enable {
+            "Usage stats are recorded on this computer. See them with /stats.".to_owned()
+        } else {
+            "Usage stats stay off. Turn them on any time in Settings.".to_owned()
+        };
+        Ok(())
     }
 
     pub(super) fn answer_motion_prompt(&mut self, reduce_motion: bool) -> Result<()> {

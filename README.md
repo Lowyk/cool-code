@@ -63,6 +63,12 @@ Settings and interactive selectors support arrow-key navigation as well as Tab/E
 
 Settings are stored in `~/.coolcode/config.toml`, next to the optional global `~/.coolcode/COOL.md`. On first launch, an existing config from the previous location (the platform's user config directory under `harness/config.toml`) is copied over and the old file is kept as a backup. API credentials use environment variables or the OS credential store; they are never written to this TOML file.
 
+## Usage stats
+
+`/stats` opens a full-screen summary of your usage: total tokens (input and output), your favorite model, requests and turns, active days and streaks, your most active day and peak hour, your longest turn, and an activity heatmap, with a Models tab ranking each model's share and speed. Switch between all time, the last 30 days, and the last 7 days with the arrow keys. `/stats clear` deletes the history after a confirmation.
+
+Recording is **opt-in**: on first launch a prompt asks, and the choice can be changed any time under Settings → General → Usage stats. When on, each model request appends one line to `~/.coolcode/stats.jsonl` with a timestamp, provider and model names, token counts, duration, tool-call count, and outcome. It never contains prompts or answers, and nothing is sent anywhere. Providers that do not report token usage are estimated from text length and shown with a `~`.
+
 ## Product principles
 
 - Standalone implementation; no harness fork.

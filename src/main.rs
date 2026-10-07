@@ -13,6 +13,7 @@ mod endpoints;
 mod policy;
 mod provider;
 mod secrets;
+mod stats;
 mod stream;
 mod tools;
 mod tui;
@@ -110,6 +111,9 @@ struct Settings {
     pulse: PulseMode,
     motion_prompt_answered: bool,
     max_tool_rounds: usize,
+    /// Usage stats are recorded locally only after the user opts in.
+    stats_enabled: bool,
+    stats_prompt_answered: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -200,6 +204,8 @@ impl Default for Settings {
             pulse: PulseMode::Words,
             motion_prompt_answered: false,
             max_tool_rounds: 40,
+            stats_enabled: false,
+            stats_prompt_answered: false,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }
@@ -455,6 +461,7 @@ mod tests {
         assert_eq!(settings.pulse, PulseMode::Words);
         assert!(!settings.motion_prompt_answered);
         assert_eq!(settings.max_tool_rounds, 40);
+        assert!(!settings.stats_enabled && !settings.stats_prompt_answered);
         assert!(settings.background_animation);
         let round_trip: Settings = toml::from_str(
             &toml::to_string(&Settings {
