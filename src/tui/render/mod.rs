@@ -616,6 +616,99 @@ mod backdrop_tests {
         assert_eq!(particle_count(&app), 0);
     }
 
+    fn chatting(settings: impl FnOnce(&mut Settings)) -> App {
+        let mut app = app(true);
+        settings(&mut app.settings);
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::Assistant,
+            text: "hello".to_owned(),
+        });
+        app
+    }
+
+    #[test]
+    fn the_chat_backdrop_is_off_until_asked_for() {
+        assert_eq!(particle_count(&chatting(|_| {})), 0);
+        assert!(particle_count(&chatting(|s| s.backdrop_in_chat = true)) > 5);
+    }
+
+    #[test]
+    fn the_chat_backdrop_ignores_the_welcome_switch() {
+        let on_in_chat_only = chatting(|s| {
+            s.background_animation = false;
+            s.backdrop_in_chat = true;
+        });
+        assert!(particle_count(&on_in_chat_only) > 5);
+        let welcome_only = chatting(|s| {
+            s.background_animation = true;
+            s.backdrop_in_chat = false;
+        });
+        assert_eq!(particle_count(&welcome_only), 0);
+    }
+
+    fn glyph_strength(app: &App) -> u32 {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| PARTICLE_GLYPHS.contains(&cell.symbol()))
+            .map(|cell| match cell.fg {
+                ratatui::style::Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn dimming_only_affects_the_conversation_not_the_welcome_screen() {
+        let bright = chatting(|s| {
+            s.backdrop_in_chat = true;
+            s.dim_backdrop_in_chat = false;
+        });
+        let dimmed = chatting(|s| {
+            s.backdrop_in_chat = true;
+            s.dim_backdrop_in_chat = true;
+        });
+        assert!(glyph_strength(&dimmed) * 10 < glyph_strength(&bright) * 7);
+        // The welcome screen is never dimmed, whatever the setting says.
+        let mut welcome_dim = app(true);
+        welcome_dim.settings.dim_backdrop_in_chat = true;
+        let mut welcome_bright = app(true);
+        welcome_bright.settings.dim_backdrop_in_chat = false;
+        // The animation clock moves between the two draws, so allow a little drift.
+        let (a, b) = (
+            glyph_strength(&welcome_dim),
+            glyph_strength(&welcome_bright),
+        );
+        assert!(a.abs_diff(b) * 50 < a, "{a} vs {b}");
+    }
+
+    #[test]
+    fn no_color_turns_off_the_chat_backdrop_too() {
+        // NO_COLOR is read from the environment; the guard itself is what is under test.
+        assert!(!crate::tui::backdrop::backdrop_enabled(true, true));
+    }
+
+    #[test]
+    fn the_theme_backdrop_replaces_the_original_one() {
+        let mut app = app(true);
+        app.settings.theme = crate::ThemeId::Sakura;
+        assert_eq!(particle_count(&app), 0, "snow glyphs are gone");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        let petals = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| ["✿", "❀"].contains(&cell.symbol()))
+            .count();
+        assert!(petals > 0, "petals fall on the Sakura welcome screen");
+    }
+
     #[test]
     fn backdrop_setting_turns_it_off() {
         assert_eq!(particle_count(&app(false)), 0);
