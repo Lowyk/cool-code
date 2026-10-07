@@ -18,6 +18,9 @@ pub(super) const LEVELS: [Effort; 7] = [
     Effort::Extreme,
 ];
 
+/// How long newly arrived text keeps glowing; matches the pulse fade in the renderer.
+const PULSE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Live state of the turn currently streaming from the provider.
 pub(super) struct StreamingTurn {
     pub(super) text: String,
@@ -29,6 +32,12 @@ pub(super) struct StreamingTurn {
 }
 
 impl StreamingTurn {
+    /// Drops arrival records whose pulse has finished, so redraw cost stays flat on long answers.
+    pub(super) fn prune_arrivals(&mut self, now: std::time::Instant) {
+        self.arrivals
+            .retain(|(_, at)| now.saturating_duration_since(*at) < PULSE_WINDOW);
+    }
+
     pub(super) fn new(cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
         Self {
             text: String::new(),

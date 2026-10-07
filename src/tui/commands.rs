@@ -371,14 +371,46 @@ impl App {
 
     /// Stops the running turn immediately; the worker notices the flag and exits on its own.
     pub(super) fn cancel_turn(&mut self) {
+        // Apply whatever the worker already sent: the turn may have just finished, and tool-call
+        // messages still queued must reach the context before it is repaired below.
+        self.poll_response();
         let Some(turn) = self.streaming.take() else {
             return;
         };
         turn.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.pending = None;
+        self.answer_unfinished_tool_calls();
         self.keep_partial_answer(&turn.text);
         self.notice = "Turn cancelled.".to_owned();
+    }
+
+    /// Gives every tool call without a result a cancelled result, so the next request stays valid.
+    fn answer_unfinished_tool_calls(&mut self) {
+        let answered = self
+            .messages
+            .iter()
+            .filter_map(|message| message.tool_call_id.clone())
+            .collect::<Vec<_>>();
+        let unanswered = self
+            .messages
+            .iter()
+            .filter_map(|message| message.tool_calls.as_ref())
+            .flatten()
+            .filter_map(|call| {
+                let id = call.get("id")?.as_str()?;
+                let name = call.pointer("/function/name")?.as_str()?;
+                (!answered.iter().any(|answered| answered == id))
+                    .then(|| (id.to_owned(), name.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        for (id, name) in unanswered {
+            self.messages.push(provider::ChatMessage::tool_result(
+                id,
+                name,
+                "Cancelled by the user before this tool ran.".to_owned(),
+            ));
+        }
     }
 
     /// Keeps an interrupted answer visible and in context so the model can continue from it.
@@ -401,6 +433,9 @@ impl App {
 
     /// Applies every event the worker has sent since the last frame.
     pub(super) fn poll_response(&mut self) {
+        if let Some(turn) = self.streaming.as_mut() {
+            turn.prune_arrivals(std::time::Instant::now());
+        }
         while let Some(receiver) = self.pending.as_ref() {
             let event = receiver.try_recv();
             let keep_going = matches!(
@@ -569,6 +604,104 @@ mod tests {
             std::sync::atomic::AtomicBool::new(false),
         )));
         (app, sender)
+    }
+
+    fn call(id: &str) -> serde_json::Value {
+        serde_json::json!({"id": id, "type": "function", "function": {"name": "read_file", "arguments": "{}"}})
+    }
+
+    fn unanswered_tool_calls(messages: &[provider::ChatMessage]) -> Vec<String> {
+        let answered = messages
+            .iter()
+            .filter_map(|message| message.tool_call_id.clone())
+            .collect::<Vec<_>>();
+        messages
+            .iter()
+            .filter_map(|message| message.tool_calls.as_ref())
+            .flatten()
+            .filter_map(|call| call.get("id").and_then(|id| id.as_str()))
+            .filter(|id| !answered.iter().any(|answered| answered == id))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn cancel_mid_tool_round_leaves_every_tool_call_answered() {
+        let (mut app, sender) = streaming_app();
+        sender
+            .send(PendingEvent::ConversationMessage(
+                provider::ChatMessage::assistant_tool_calls(
+                    String::new(),
+                    vec![call("A"), call("B")],
+                ),
+            ))
+            .unwrap();
+        sender
+            .send(PendingEvent::ConversationMessage(
+                provider::ChatMessage::tool_result(
+                    "A".to_owned(),
+                    "read_file".to_owned(),
+                    "contents".to_owned(),
+                ),
+            ))
+            .unwrap();
+        // Nothing has been polled yet: the events are still queued when the user cancels.
+        app.cancel_turn();
+        assert_eq!(unanswered_tool_calls(&app.messages), Vec::<String>::new());
+        let synthetic = app
+            .messages
+            .iter()
+            .find(|message| message.tool_call_id.as_deref() == Some("B"))
+            .expect("synthetic result for B");
+        assert!(
+            synthetic
+                .content
+                .as_str()
+                .is_some_and(|text| text.to_lowercase().contains("cancelled"))
+        );
+    }
+
+    #[test]
+    fn cancel_after_the_turn_already_finished_keeps_the_final_answer() {
+        let (mut app, sender) = streaming_app();
+        sender
+            .send(PendingEvent::TextDelta("Done.".to_owned()))
+            .unwrap();
+        sender
+            .send(PendingEvent::Finished(Ok(provider::Completion {
+                text: "Done.".to_owned(),
+                provider_id: None,
+                model_id: "m".to_owned(),
+                failed_over: false,
+                tool_calls: Vec::new(),
+            })))
+            .unwrap();
+        app.cancel_turn();
+        assert!(app.streaming.is_none());
+        assert_eq!(
+            app.transcript.last().map(|entry| entry.text.as_str()),
+            Some("Done.")
+        );
+        assert!(
+            app.transcript
+                .iter()
+                .all(|entry| entry.text != "(interrupted)")
+        );
+    }
+
+    #[test]
+    fn arrivals_older_than_the_pulse_are_pruned() {
+        let (mut app, _sender) = streaming_app();
+        let turn = app.streaming.as_mut().expect("streaming");
+        let now = std::time::Instant::now();
+        turn.arrivals = vec![
+            (0, now - std::time::Duration::from_secs(5)),
+            (10, now - std::time::Duration::from_secs(2)),
+            (20, now - std::time::Duration::from_millis(100)),
+        ];
+        turn.prune_arrivals(now);
+        assert_eq!(turn.arrivals.len(), 1);
+        assert_eq!(turn.arrivals[0].0, 20);
     }
 
     #[test]

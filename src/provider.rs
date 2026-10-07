@@ -326,7 +326,7 @@ pub(crate) fn complete_with_fallback(
                 tool_calls: turn.tool_calls,
             });
         }
-        Err(error) if !is_usage_limit_error(&format!("{error:#}")) => return Err(error),
+        Err(error) if !should_fall_back(&error) => return Err(error),
         Err(error) => {
             let Some(chain_id) = settings.active_chain_id.as_deref() else {
                 return Err(error);
@@ -368,7 +368,7 @@ pub(crate) fn complete_with_fallback(
                             tool_calls: turn.tool_calls,
                         });
                     }
-                    Err(error) if is_usage_limit_error(&format!("{error:#}")) => last_error = error,
+                    Err(error) if should_fall_back(&error) => last_error = error,
                     Err(error) => {
                         return Err(error.context(format!(
                             "fallback model {} via {} failed",
@@ -383,6 +383,14 @@ pub(crate) fn complete_with_fallback(
             )))
         }
     }
+}
+
+/// A usage-limit error may switch models, but never after text was already shown to the user.
+fn should_fall_back(error: &anyhow::Error) -> bool {
+    let text_already_shown = error
+        .downcast_ref::<Interrupted>()
+        .is_some_and(|interrupted| !interrupted.partial.is_empty());
+    !text_already_shown && is_usage_limit_error(&format!("{error:#}"))
 }
 
 pub(crate) fn is_usage_limit_error(message: &str) -> bool {
@@ -956,6 +964,7 @@ mod tests {
         openai_tool_specs, privacy_risk, redact_messages, restore_redactions,
         restore_redactions_value,
     };
+    use crate::stream::Interrupted;
 
     #[test]
     fn extracts_plain_and_segmented_responses() {
@@ -1110,6 +1119,25 @@ mod tests {
         let google = google_parts(&message).expect("Google parts");
         assert_eq!(google[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(google[1]["inlineData"]["data"], "aGVsbG8=");
+    }
+
+    #[test]
+    fn fallback_never_follows_visible_partial_output() {
+        let plain = anyhow::anyhow!("provider returned 429 Too Many Requests");
+        assert!(super::should_fall_back(&plain));
+        let early = anyhow::Error::new(Interrupted {
+            partial: String::new(),
+            reason: "provider error: quota exceeded".to_owned(),
+        });
+        assert!(super::should_fall_back(&early));
+        let late = anyhow::Error::new(Interrupted {
+            partial: "half an answer".to_owned(),
+            reason: "provider error: quota exceeded".to_owned(),
+        });
+        assert!(!super::should_fall_back(&late));
+        assert!(!super::should_fall_back(&anyhow::anyhow!(
+            "invalid api key"
+        )));
     }
 
     #[test]
