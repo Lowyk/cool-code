@@ -109,6 +109,26 @@ impl App {
             );
             return;
         }
+        if profile.adapter == "chatgpt" {
+            // A sign-in has no API key; the task trades the saved account for a token itself.
+            if !self.models_loading.insert(id.clone()) {
+                return;
+            }
+            self.notice = format!("Loading models for {name}…");
+            self.spawn_task(move || TaskResult::Models {
+                provider_id: id.clone(),
+                url: url.clone(),
+                promote,
+                result: crate::chatgpt_auth::fetch_models(
+                    &id,
+                    &url,
+                    crate::chatgpt_auth::TOKEN_URL,
+                )
+                .map(|value| parse_models(&value))
+                .map_err(|error| format!("{error:#}")),
+            });
+            return;
+        }
         // A save-triggered fetch (promote) is automatic; only a manual refresh may use the env key.
         let Some(key) = load_key(&id, !promote) else {
             self.notice = format!("Add an API key for {name} to load its models.");
@@ -283,6 +303,14 @@ impl App {
             }
         };
         let profile = &mut self.settings.providers[index];
+        if profile.adapter == "chatgpt" {
+            // The account's own list is authoritative, so retired models drop out.
+            profile.models.clear();
+            profile.model_info.clear();
+            if !fetched.iter().any(|model| model.id == profile.model) {
+                profile.model.clear();
+            }
+        }
         let added = merge_models(profile, &fetched);
         let total = profile.models.len();
         let enabled = promote && profile.draft && has_key && total > 0;
