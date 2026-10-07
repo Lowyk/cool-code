@@ -94,6 +94,8 @@ pub(super) struct App {
     pub(super) settings_view: Option<crate::tui::settings::SettingsView>,
     pub(super) provider_index: usize,
     pub(super) provider_form: Option<ProviderDraft>,
+    /// The ChatGPT sign-in screens (the method question, then waiting for the browser).
+    pub(super) chatgpt_login: Option<crate::tui::chatgpt_login::ChatGptLogin>,
     pub(super) chain_form: Option<ChainDraft>,
     pub(super) chain_index: usize,
     pub(super) model_choices: Option<Vec<(usize, String, String)>>,
@@ -366,6 +368,7 @@ impl App {
             settings_view: None,
             provider_index,
             provider_form: None,
+            chatgpt_login: None,
             chain_form: None,
             chain_index: 0,
             model_choices: None,

@@ -454,6 +454,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if let Some(picker) = app.session_picker.as_ref() {
         crate::tui::sessions::draw_session_picker(frame, area, picker);
     }
+    if let Some(login) = app.chatgpt_login.as_ref() {
+        crate::tui::chatgpt_login::draw_chatgpt_login(frame, area, login);
+    }
     if let Some(picker) = app.model_picker.as_ref() {
         draw_model_picker(frame, area, picker, &app.settings);
     }

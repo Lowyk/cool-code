@@ -1,4 +1,5 @@
 mod backdrop;
+mod chatgpt_login;
 mod commands;
 mod context;
 mod creators;
@@ -118,6 +119,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Enter => app.set_workspace_trusted(false)?,
             _ => {}
         }
+    } else if app.chatgpt_login.is_some() {
+        app.handle_chatgpt_login_key(key);
     } else if app.wizard.is_some() {
         app.handle_setup_key(key)?;
     } else if app.tool_approval.is_some() {

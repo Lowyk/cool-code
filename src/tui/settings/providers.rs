@@ -96,16 +96,26 @@ pub(super) fn draw_providers(
                             .unwrap_or_else(|| "preset default".to_owned()),
                     ),
                 ]),
-                Line::from(vec![
-                    label("API key   "),
-                    Span::styled(
-                        match app.key_shapes.get(&profile.id) {
-                            Some(shape) => format!("•••••••• OS credential store · {shape}"),
-                            None => "•••••••• (OS credential store)".to_owned(),
-                        },
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]),
+                if profile.adapter == "chatgpt" {
+                    Line::from(vec![
+                        label("Sign-in   "),
+                        Span::styled(
+                            "ChatGPT account (unofficial) · Enter signs in again",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])
+                } else {
+                    Line::from(vec![
+                        label("API key   "),
+                        Span::styled(
+                            match app.key_shapes.get(&profile.id) {
+                                Some(shape) => format!("•••••••• OS credential store · {shape}"),
+                                None => "•••••••• (OS credential store)".to_owned(),
+                            },
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])
+                },
                 models_line(app, profile),
             ];
             if profile.limits_url.is_some() {
@@ -242,7 +252,7 @@ impl App {
         let Some(profile) = self.settings.providers.get(index) else {
             return;
         };
-        if !force && self.key_shapes.contains_key(&profile.id) {
+        if profile.adapter == "chatgpt" || (!force && self.key_shapes.contains_key(&profile.id)) {
             return;
         }
         let id = profile.id.clone();

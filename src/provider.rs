@@ -176,7 +176,13 @@ fn complete_turn(
         .unwrap_or("openai-compatible");
     if !matches!(
         provider,
-        "openai-compatible" | "openai" | "groq" | "anthropic" | "anthropic-compatible" | "google"
+        "openai-compatible"
+            | "openai"
+            | "groq"
+            | "anthropic"
+            | "anthropic-compatible"
+            | "google"
+            | "chatgpt"
     ) {
         bail!("provider `{provider}` is not supported");
     }
@@ -195,6 +201,7 @@ fn complete_turn(
             "groq" => "https://api.groq.com/openai/v1".to_owned(),
             "anthropic" => "https://api.anthropic.com/v1".to_owned(),
             "google" => "https://generativelanguage.googleapis.com/v1beta".to_owned(),
+            "chatgpt" => crate::chatgpt_auth::API_BASE.to_owned(),
             _ => "https://api.openai.com/v1".to_owned(),
         });
     let risk = privacy_risk(provider, &model, &base_url);
@@ -237,12 +244,24 @@ fn complete_turn(
         .map(|profile: &ProviderProfile| secrets::load(&profile.id))
         .transpose()?
         .flatten();
-    let api_key = env::var("HARNESS_API_KEY")
-        .ok()
-        .or(stored_key)
-        .or_else(|| env::var(&key_variable).ok())
-        .filter(|value| !value.trim().is_empty())
-        .with_context(|| format!("set {key_variable} or HARNESS_API_KEY in your environment"))?;
+    // A ChatGPT sign-in has no API key: the saved account is exchanged for a short-lived token.
+    let (api_key, account_id) = if provider == "chatgpt" {
+        let id = profile
+            .map(|profile| profile.id.as_str())
+            .context("the ChatGPT sign-in needs its provider entry")?;
+        let session = crate::chatgpt_auth::session_for(id, crate::chatgpt_auth::TOKEN_URL)?;
+        (session.access_token, session.account_id)
+    } else {
+        let key = env::var("HARNESS_API_KEY")
+            .ok()
+            .or(stored_key)
+            .or_else(|| env::var(&key_variable).ok())
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| {
+                format!("set {key_variable} or HARNESS_API_KEY in your environment")
+            })?;
+        (key, None)
+    };
 
     // Streamed answers can run long; cap the whole request generously and fail fast on connect.
     let client = Client::builder()
@@ -273,6 +292,7 @@ fn complete_turn(
         (Some("openrouter"), _) => crate::effort_support::Api::OpenRouter,
         (_, "anthropic" | "anthropic-compatible") => crate::effort_support::Api::Anthropic,
         (_, "google") => crate::effort_support::Api::Google,
+        (_, "chatgpt") => crate::effort_support::Api::ChatGpt,
         _ => crate::effort_support::Api::OpenAiCompatible,
     };
     let request = Request {
@@ -287,10 +307,12 @@ fn complete_turn(
         messages: &safe_messages,
         tools,
         stream: &restoring,
+        account_id: account_id.as_deref(),
     };
     let turn = match provider {
         "anthropic" | "anthropic-compatible" => complete_anthropic(&request),
         "google" => complete_google(&request),
+        "chatgpt" => complete_chatgpt(&request),
         _ => complete_openai_compatible(&request),
     };
     let tail = restorer.borrow_mut().flush();
@@ -650,10 +672,51 @@ struct Request<'a> {
     messages: &'a [ChatMessage],
     tools: ToolSet,
     stream: &'a Stream<'a>,
+    /// The ChatGPT account a signed-in request belongs to.
+    account_id: Option<&'a str>,
+}
+
+/// A turn through the ChatGPT sign-in backend (the Responses format).
+fn complete_chatgpt(request: &Request) -> Result<AgentTurn> {
+    let Request {
+        account_id,
+        effort: _,
+        client,
+        base_url,
+        api_key,
+        model,
+        messages,
+        tools,
+        stream,
+    } = *request;
+    let endpoint = format!("{}/responses", base_url.trim_end_matches('/'));
+    let mut body = crate::responses::build_request(model, messages, tools, None);
+    let sent = add_effort(&mut body, request);
+    let session = uuid::Uuid::new_v4().to_string();
+    let response = send_with_effort_fallback(body, sent, |body| {
+        let mut builder = client
+            .post(&endpoint)
+            .bearer_auth(api_key)
+            .header("OpenAI-Beta", "responses=experimental")
+            .header("originator", "codex_cli_rs")
+            .header("session_id", &session)
+            .header("Accept", "text/event-stream");
+        if let Some(account) = account_id {
+            builder = builder.header("chatgpt-account-id", account);
+        }
+        successful(
+            builder
+                .json(body)
+                .send()
+                .context("sending request to the ChatGPT backend")?,
+        )
+    })?;
+    crate::stream::parse_responses_stream(std::io::BufReader::new(response), stream)
 }
 
 fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
     let Request {
+        account_id: _,
         effort: _,
         client,
         base_url,
@@ -756,6 +819,7 @@ fn openai_call_arguments(call: &Value) -> Result<Value> {
 
 fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
     let Request {
+        account_id: _,
         effort: _,
         client,
         base_url,
@@ -832,6 +896,7 @@ fn anthropic_message(message: &ChatMessage) -> Result<Value> {
 
 fn complete_google(request: &Request) -> Result<AgentTurn> {
     let Request {
+        account_id: _,
         effort: _,
         client,
         base_url,
@@ -1416,47 +1481,7 @@ mod tests {
         );
     }
 
-    /// A one-connection-at-a-time HTTP server that answers each request with the next canned
-    /// response and records the request bodies it received.
-    fn serve(
-        responses: Vec<(u16, &'static str, &'static str)>,
-    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-        use std::io::{BufRead, BufReader, Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let address = listener.local_addr().expect("address");
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let recorded = seen.clone();
-        std::thread::spawn(move || {
-            for (status, content_type, body) in responses {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut payload = vec![0u8; length];
-                reader.read_exact(&mut payload).expect("body");
-                recorded
-                    .lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&payload).into_owned());
-                let reply = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(reply.as_bytes());
-            }
-        });
-        (format!("http://{address}"), seen)
-    }
+    use crate::testutil::serve;
 
     const OK_STREAM: &str =
         "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n";
@@ -1486,6 +1511,7 @@ mod tests {
             messages: &messages,
             tools: crate::tools::ToolSet::None,
             stream: &stream,
+            account_id: None,
         };
         super::complete_openai_compatible(&request).map(|_| ())
     }
@@ -1533,6 +1559,129 @@ mod tests {
         let (base, seen) = serve(vec![(200, "text/event-stream", OK_STREAM)]);
         run_against(&base, model, crate::Effort::High).expect("ok");
         assert!(!seen.lock().unwrap()[0].contains("reasoning_effort"));
+    }
+
+    const CHATGPT_STREAM: &str = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi there\"}\n\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"list_files\",\"arguments\":\"{}\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n";
+
+    fn run_chatgpt(
+        base: &str,
+        model: &str,
+        effort: crate::Effort,
+        account: Option<&str>,
+    ) -> anyhow::Result<super::AgentTurn> {
+        let client = reqwest::blocking::Client::new();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let on_event = |_event: crate::stream::StreamEvent| {};
+        let stream = crate::stream::Stream {
+            on_event: &on_event,
+            cancel: &cancel,
+        };
+        let messages = [
+            super::ChatMessage::system("be brief".to_owned()),
+            super::ChatMessage::user_with_images("hi".to_owned(), "hi".to_owned(), Vec::new()),
+        ];
+        let request = super::Request {
+            effort: Some(super::EffortRequest {
+                api: crate::effort_support::Api::ChatGpt,
+                wanted: effort,
+            }),
+            client: &client,
+            base_url: base,
+            api_key: "access-token-123",
+            model,
+            messages: &messages,
+            tools: crate::tools::ToolSet::Explore,
+            stream: &stream,
+            account_id: account,
+        };
+        super::complete_chatgpt(&request)
+    }
+
+    #[test]
+    fn the_chatgpt_adapter_sends_the_account_headers_and_a_responses_body() {
+        let (base, seen) =
+            crate::testutil::serve_full(vec![(200, "text/event-stream", CHATGPT_STREAM)]);
+        let turn = run_chatgpt(
+            &format!("{base}/backend-api/codex"),
+            "gpt-6-chatgpt-test",
+            crate::Effort::High,
+            Some("acct-77"),
+        )
+        .expect("turn");
+        assert_eq!(turn.text, "Hi there");
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].name, "list_files");
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let (head, body) = &requests[0];
+        let lower = head.to_ascii_lowercase();
+        assert!(
+            head.starts_with("POST /backend-api/codex/responses "),
+            "{head}"
+        );
+        assert!(
+            lower.contains("authorization: bearer access-token-123"),
+            "{head}"
+        );
+        assert!(lower.contains("chatgpt-account-id: acct-77"), "{head}");
+        assert!(
+            lower.contains("openai-beta: responses=experimental"),
+            "{head}"
+        );
+        assert!(lower.contains("originator: codex_cli_rs"), "{head}");
+        assert!(lower.contains("accept: text/event-stream"), "{head}");
+        let sent: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(sent["instructions"], "be brief");
+        assert_eq!(sent["input"][0]["content"][0]["text"], "hi");
+        assert_eq!(sent["reasoning"]["effort"], "high");
+        assert_eq!(sent["store"], false);
+        assert!(
+            sent["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty())
+        );
+        assert!(
+            sent.get("messages").is_none(),
+            "not the chat-completions shape"
+        );
+    }
+
+    #[test]
+    fn the_chatgpt_adapter_omits_the_account_header_when_unknown_and_retries_without_rejected_effort()
+     {
+        let (base, seen) = crate::testutil::serve_full(vec![
+            (
+                400,
+                "application/json",
+                "{\"error\":{\"message\":\"Unsupported parameter: reasoning.effort\"}}",
+            ),
+            (200, "text/event-stream", CHATGPT_STREAM),
+        ]);
+        let turn = run_chatgpt(&base, "gpt-6-chatgpt-rejects", crate::Effort::Medium, None)
+            .expect("retried");
+        assert_eq!(turn.text, "Hi there");
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            !requests[0]
+                .0
+                .to_ascii_lowercase()
+                .contains("chatgpt-account-id")
+        );
+        assert!(requests[0].1.contains("\"reasoning\""));
+        assert!(
+            !requests[1].1.contains("\"reasoning\""),
+            "{}",
+            requests[1].1
+        );
+    }
+
+    #[test]
+    fn a_refused_chatgpt_request_reports_the_status() {
+        let (base, _) =
+            crate::testutil::serve_full(vec![(401, "application/json", "{\"error\":\"expired\"}")]);
+        let error = run_chatgpt(&base, "gpt-6-chatgpt-401", crate::Effort::Low, None).unwrap_err();
+        assert!(format!("{error:#}").contains("401"), "{error:#}");
     }
 
     #[test]

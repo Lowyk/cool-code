@@ -172,6 +172,8 @@ pub(crate) enum Api {
     OpenRouter,
     Anthropic,
     Google,
+    /// The ChatGPT sign-in backend, which speaks the Responses format.
+    ChatGpt,
 }
 
 fn name_of(level: Effort) -> &'static str {
@@ -209,6 +211,14 @@ pub(crate) fn apply_effort(
                 name_of(level)
             };
             body["reasoning_effort"] = json!(text);
+        }
+        Api::ChatGpt => {
+            let text = if level.model_level() == Effort::Max {
+                "xhigh"
+            } else {
+                name_of(level)
+            };
+            body["reasoning"] = json!({ "effort": text, "summary": "auto" });
         }
         Api::OpenRouter => {
             let text = if level.model_level() == Effort::Max {
@@ -424,6 +434,9 @@ mod tests {
             body["reasoning_effort"], "xhigh",
             "capped at the model's best"
         );
+        let (_, body) = apply(Api::ChatGpt, "gpt-6-astra", Max);
+        assert_eq!(body["reasoning"]["effort"], "xhigh");
+        assert_eq!(body["reasoning"]["summary"], "auto");
         let (_, body) = apply(Api::OpenRouter, "openai/gpt-6-astra", Medium);
         assert_eq!(body["reasoning"]["effort"], "medium");
         let (_, body) = apply(Api::Anthropic, "claude-opus-5-5", Ultimate);

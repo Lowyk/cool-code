@@ -23,6 +23,10 @@ pub(in crate::tui) enum TaskResult {
         url: String,
         result: Result<Vec<LimitLine>, String>,
     },
+    /// The browser sign-in for a ChatGPT account finished (or failed).
+    Login {
+        result: Result<(crate::chatgpt_auth::Account, crate::chatgpt_auth::Session), String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,7 +76,7 @@ fn endpoint_is_trusted(profile: &crate::ProviderProfile, url: &str) -> bool {
 }
 
 impl App {
-    fn spawn_task(&mut self, job: impl FnOnce() -> TaskResult + Send + 'static) {
+    pub(in crate::tui) fn spawn_task(&mut self, job: impl FnOnce() -> TaskResult + Send + 'static) {
         #[cfg(test)]
         {
             let _ = job;
@@ -188,6 +192,7 @@ impl App {
 
     pub(in crate::tui) fn apply_task_result(&mut self, result: TaskResult) {
         match result {
+            TaskResult::Login { result } => self.finish_chatgpt_login(result),
             TaskResult::Limits {
                 provider_id,
                 url,

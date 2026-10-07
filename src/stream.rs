@@ -225,6 +225,76 @@ pub(crate) fn parse_openai_stream(reader: impl BufRead, stream: &Stream) -> Resu
     finish(text.into_inner(), tool_calls)
 }
 
+/// Parses a Responses-API stream (what the ChatGPT sign-in backend speaks): text arrives as
+/// `response.output_text.delta` events, each function call as one `response.output_item.done`,
+/// and token counts with `response.completed`.
+pub(crate) fn parse_responses_stream(reader: impl BufRead, stream: &Stream) -> Result<AgentTurn> {
+    let text = std::cell::RefCell::new(String::new());
+    let mut calls: Vec<ToolCall> = Vec::new();
+    drive(reader, stream, &text, |data| {
+        let Ok(event) = serde_json::from_str::<Value>(data) else {
+            return Ok(());
+        };
+        match event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                    push_text(&text, stream, delta);
+                }
+            }
+            "response.output_item.done" => {
+                let Some(item) = event.get("item") else {
+                    return Ok(());
+                };
+                if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                    let field = |name| {
+                        item.get(name)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    };
+                    let name = field("name");
+                    if !name.is_empty() {
+                        calls.push(ToolCall {
+                            id: field("call_id"),
+                            name,
+                            arguments: parse_arguments(&field("arguments"))?,
+                            thought_signature: None,
+                        });
+                    }
+                }
+            }
+            "response.completed" | "response.incomplete" => {
+                emit_usage(
+                    stream,
+                    event
+                        .pointer("/response/usage/input_tokens")
+                        .and_then(Value::as_u64),
+                    event
+                        .pointer("/response/usage/output_tokens")
+                        .and_then(Value::as_u64),
+                );
+            }
+            "response.failed" | "error" => {
+                let message = ["/response/error/message", "/error/message", "/message"]
+                    .iter()
+                    .find_map(|pointer| event.pointer(pointer).and_then(Value::as_str))
+                    .unwrap_or("the request failed");
+                return Err(interrupted(
+                    &text.borrow(),
+                    format!("provider error: {message}"),
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    finish(text.into_inner(), calls)
+}
+
 pub(crate) fn parse_anthropic_stream(reader: impl BufRead, stream: &Stream) -> Result<AgentTurn> {
     let text = std::cell::RefCell::new(String::new());
     let mut blocks: Vec<Option<PartialCall>> = Vec::new();
@@ -446,7 +516,9 @@ impl<'a> Restorer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Interrupted, Stream, StreamEvent, parse_openai_stream, sse_data};
+    use super::{
+        Interrupted, Stream, StreamEvent, parse_openai_stream, parse_responses_stream, sse_data,
+    };
     use std::cell::RefCell;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -713,5 +785,83 @@ data: {\"error\":{\"message\":\"overloaded\"}}\n\n";
         let interrupted = error.downcast_ref::<Interrupted>().expect("interrupted");
         assert_eq!(interrupted.partial, "half");
         assert!(interrupted.reason.contains("overloaded"));
+    }
+
+    fn responses_fixture(events: &[&str]) -> String {
+        events
+            .iter()
+            .map(|event| format!("event: x\ndata: {event}\n\n"))
+            .collect()
+    }
+
+    #[test]
+    fn responses_stream_assembles_text_calls_and_usage() {
+        let fixture = responses_fixture(&[
+            r#"{"type":"response.created","response":{}}"#,
+            r#"{"type":"response.output_text.delta","delta":"Hel"}"#,
+            r#"{"type":"response.output_text.delta","delta":"lo"}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"reasoning","summary":[]}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"a.rs\"}"}}"#,
+            r#"{"type":"response.completed","response":{"usage":{"input_tokens":120,"output_tokens":9}}}"#,
+        ]);
+        let events = std::cell::RefCell::new(Vec::new());
+        let on_event = |event: StreamEvent| events.borrow_mut().push(event);
+        let cancel = AtomicBool::new(false);
+        let stream = Stream {
+            on_event: &on_event,
+            cancel: &cancel,
+        };
+        let turn = parse_responses_stream(fixture.as_bytes(), &stream).expect("turn");
+        assert_eq!(turn.text, "Hello");
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].id, "call_1");
+        assert_eq!(turn.tool_calls[0].name, "read_file");
+        assert_eq!(turn.tool_calls[0].arguments["path"], "a.rs");
+        let seen = events.borrow();
+        assert!(
+            seen.iter()
+                .any(|e| matches!(e, StreamEvent::TextDelta(d) if d == "Hel"))
+        );
+        assert!(seen.iter().any(|e| matches!(
+            e,
+            StreamEvent::Usage {
+                input: Some(120),
+                output: Some(9)
+            }
+        )));
+    }
+
+    #[test]
+    fn a_failed_responses_stream_keeps_the_partial_text() {
+        let fixture = responses_fixture(&[
+            r#"{"type":"response.output_text.delta","delta":"partial"}"#,
+            r#"{"type":"response.failed","response":{"error":{"message":"usage limit reached"}}}"#,
+        ]);
+        let on_event = |_event: StreamEvent| {};
+        let cancel = AtomicBool::new(false);
+        let stream = Stream {
+            on_event: &on_event,
+            cancel: &cancel,
+        };
+        let error = parse_responses_stream(fixture.as_bytes(), &stream).expect_err("failed");
+        let interrupted = error.downcast_ref::<Interrupted>().expect("interrupted");
+        assert_eq!(interrupted.partial, "partial");
+        assert!(
+            interrupted.reason.contains("usage limit reached"),
+            "{}",
+            interrupted.reason
+        );
+    }
+
+    #[test]
+    fn an_empty_responses_stream_is_an_error_and_odd_events_are_ignored() {
+        let on_event = |_event: StreamEvent| {};
+        let cancel = AtomicBool::new(false);
+        let stream = Stream {
+            on_event: &on_event,
+            cancel: &cancel,
+        };
+        let fixture = responses_fixture(&[r#"{"type":"response.in_progress"}"#, "not json"]);
+        assert!(parse_responses_stream(fixture.as_bytes(), &stream).is_err());
     }
 }

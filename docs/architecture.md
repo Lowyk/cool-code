@@ -31,6 +31,9 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/agent.rs` | Bounded agent turn loop, tool execution, and the event/approval types the UI consumes; has no terminal-UI dependencies |
 | `src/policy.rs` | Deterministic permission rules (`auto_approve_*`) and the permission-mode table |
 | `src/provider.rs` | Provider adapters and model fallback |
+| `src/chatgpt_auth.rs` | The unofficial ChatGPT Plus/Pro sign-in: OAuth with PKCE through a local redirect server, token renewal, and the account kept in the credential store (access tokens only in memory) |
+| `src/responses.rs` | Builds requests in the OpenAI Responses format, which the ChatGPT sign-in backend speaks |
+| `src/tui/chatgpt_login.rs` | The sign-in screens: the API-key-or-subscription question, waiting for the browser, and saving the finished sign-in as a provider |
 | `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
 | `src/endpoints.rs` | Provider models and limits endpoints: same-host URL validation, tolerant model-list parsing and merging, usage summaries, and the redirect-refusing fetch |
 | `src/stats.rs` | Opt-in usage recording to `~/.coolcode/stats.jsonl` (metadata only), the pure summary engine (totals, favorite model, streaks, peak hour, heatmap grid), and the fun size comparison |
