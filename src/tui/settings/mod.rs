@@ -459,6 +459,7 @@ mod tests {
             "Load CLAUDE.md",
             "Load AGENTS.md",
             "Global CLAUDE.md",
+            "Dynamic workflows",
             "Reset",
         ] {
             assert!(
@@ -467,6 +468,33 @@ mod tests {
 {shown}"
             );
         }
+    }
+
+    #[test]
+    fn the_dynamic_workflows_switch_unlocks_and_relocks_the_tiers() {
+        let mut app = app();
+        assert!(!app.settings.dynamic_workflows);
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..10 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("unlock");
+        assert!(app.settings.dynamic_workflows);
+        assert!(app.notice.contains("unlocked"), "{}", app.notice);
+        app.settings.effort = crate::Effort::Ultimate;
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("lock again");
+        assert!(!app.settings.dynamic_workflows);
+        assert_eq!(
+            app.settings.effort,
+            crate::Effort::Max,
+            "dropped out of Ultimate"
+        );
+        assert!(app.notice.contains("locked"), "{}", app.notice);
     }
 
     #[test]

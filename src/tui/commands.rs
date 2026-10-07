@@ -173,7 +173,9 @@ impl App {
             {
                 self.picker_index = index;
                 let selected = LEVELS[index];
-                if selected == Effort::Ultimate && !self.settings.ultimate_acknowledged {
+                if self.workflow_tier_is_locked(selected) {
+                    self.picker = false;
+                } else if selected == Effort::Ultimate && !self.settings.ultimate_acknowledged {
                     self.picker = false;
                     self.confirm_ultimate = true;
                 } else {
@@ -896,11 +898,53 @@ mod tests {
     }
 
     #[test]
+    fn super_and_ultimate_are_locked_until_dynamic_workflows_are_on() {
+        for name in ["super", "ultimate", "extreme"] {
+            let mut app = App::new(Settings::default());
+            app.trust_prompt = false;
+            app.settings.ultimate_acknowledged = true;
+            let before = app.settings.effort;
+            app.input = format!("/effort {name}");
+            app.submit().expect("submit");
+            assert_eq!(app.settings.effort, before, "{name} must not apply");
+            assert!(app.notice.contains("locked"), "{name}: {}", app.notice);
+            assert!(
+                !app.confirm_ultimate,
+                "no confirmation for something locked"
+            );
+            assert!(!app.picker);
+        }
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.input = "/effort max".to_owned();
+        app.submit().expect("max");
+        assert_eq!(
+            app.settings.effort,
+            crate::Effort::Max,
+            "ordinary levels stay open"
+        );
+    }
+
+    #[test]
+    fn a_saved_workflow_tier_is_pulled_back_when_workflows_are_locked() {
+        let mut settings = Settings::default();
+        settings.effort = crate::Effort::Ultimate;
+        let app = App::new(settings);
+        assert_eq!(app.settings.effort, crate::Effort::Max);
+        assert!(app.notice.contains("locked"), "{}", app.notice);
+        let mut unlocked = Settings::default();
+        unlocked.effort = crate::Effort::Super;
+        unlocked.dynamic_workflows = true;
+        assert_eq!(App::new(unlocked).settings.effort, crate::Effort::Super);
+    }
+
+    #[test]
     fn effort_accepts_ultimate_and_its_old_name() {
         for name in ["ultimate", "extreme"] {
             let mut app = App::new(Settings::default());
             app.trust_prompt = false;
             app.settings.ultimate_acknowledged = true;
+            app.settings.dynamic_workflows = true;
             app.input = format!("/effort {name}");
             app.submit().expect("submit");
             assert_eq!(app.settings.effort, crate::Effort::Ultimate, "{name}");

@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 mod agent;
+mod effort_support;
 mod endpoints;
 mod policy;
 mod projects;
@@ -147,6 +148,13 @@ struct Settings {
     /// Load the user's own `~/.claude/CLAUDE.md` in every project.
     load_global_claude_md: bool,
     instructions_prompt_answered: bool,
+    /// Unlocks the Super and Ultimate effort tiers (and workflows on lower levels). Off by
+    /// default because workflows can spend many times more tokens.
+    dynamic_workflows: bool,
+    /// Run workflows on the Low, Medium and High levels too (only while workflows are unlocked).
+    workflows: bool,
+    /// Keep the effort name in the status line animated instead of fading it after a change.
+    effort_always_animated: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -264,6 +272,9 @@ impl Default for Settings {
             default_load_agents_md: false,
             load_global_claude_md: false,
             instructions_prompt_answered: false,
+            dynamic_workflows: false,
+            workflows: false,
+            effort_always_animated: false,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }
@@ -426,6 +437,12 @@ fn run() -> Result<()> {
         Command::Effort { level } => {
             let mut settings = read_settings()?;
             if let Some(level) = level {
+                if level.is_workflow_tier() && !settings.dynamic_workflows {
+                    println!(
+                        "{level:?} is locked. Turn on Dynamic workflows in Settings → General first."
+                    );
+                    return Ok(());
+                }
                 if matches!(level, Effort::Ultimate) {
                     eprintln!(
                         "Warning: Ultimate may use substantially more tokens and incur higher cost."
