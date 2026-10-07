@@ -18,6 +18,7 @@ mod effort_support;
 mod endpoints;
 mod guard;
 mod headless;
+mod imagegen;
 mod login_page;
 mod policy;
 mod projects;
@@ -201,6 +202,9 @@ struct Settings {
     outside_files: bool,
     /// Skip that confirmation, except for paths that may hold secrets. Hidden until unlocked.
     outside_files_no_prompt: bool,
+    /// The image API `generate_image` uses (its key is in the credential store). Off when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_generation: Option<imagegen::ImageConfig>,
     effort: Effort,
     permission_mode: String,
 }
@@ -326,6 +330,7 @@ impl Default for Settings {
             guard_model: None,
             outside_files: false,
             outside_files_no_prompt: false,
+            image_generation: None,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

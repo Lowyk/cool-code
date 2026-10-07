@@ -124,7 +124,7 @@ pub(crate) fn definitions() -> [ToolDefinition; 12] {
             parameters: json!({"type":"object", "properties":{
                 "summary":{"type":"string", "description":"One or two sentences on what the plan achieves."},
                 "actions":{"type":"array", "items":{"type":"object", "properties":{
-                    "name":{"type":"string", "enum":["replace_text", "replace_in_file", "write_to_file", "create_file", "run_command"]},
+                    "name":{"type":"string", "enum":["replace_text", "replace_in_file", "write_to_file", "create_file", "run_command", "generate_image"]},
                     "arguments":{"type":"object"}
                 }, "required":["name", "arguments"], "additionalProperties":false}}
             }, "required":["summary", "actions"], "additionalProperties":false}),
@@ -138,7 +138,12 @@ pub(crate) enum ToolSet {
     /// No tools: a plain chat turn.
     None,
     /// The main assistant: every tool, plus `spawn_subagents` while workflows are on.
-    Main { plan_mode: bool, workflows: bool },
+    Main {
+        plan_mode: bool,
+        workflows: bool,
+        /// An image API is set up, so `generate_image` is offered.
+        images: bool,
+    },
     /// A subagent that may only look: no edits, no commands.
     Explore,
     /// A subagent that may also edit files and run commands (with the usual approvals).
@@ -166,10 +171,14 @@ impl ToolSet {
             ToolSet::Main {
                 plan_mode,
                 workflows,
+                images,
             } => {
                 let mut tools = definitions_for_mode(if plan_mode { "plan" } else { "auto" });
                 if workflows {
                     tools.push(spawn_subagents_definition());
+                }
+                if images {
+                    tools.push(generate_image_definition());
                 }
                 tools
             }
@@ -204,6 +213,73 @@ pub(crate) fn spawn_subagents_definition() -> ToolDefinition {
             }, "required":["kind","instructions"], "additionalProperties":false}}
         }, "required":["tasks"], "additionalProperties":false}),
     }
+}
+
+/// The tool that makes a placeholder image (offered only once the user has set up an image API).
+pub(crate) fn generate_image_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "generate_image",
+        description: "Make an image from a text description and save it as a new file in the project. Meant for placeholders while building (a hero picture, an icon, a sample photo): it costs money on the user's image API and never overwrites a file, so use it only when the task needs an image and say what you made. Give a descriptive prompt and a path ending in .png, .jpg, .jpeg or .webp.",
+        parameters: serde_json::json!({"type":"object", "properties":{
+            "prompt":{"type":"string", "description":"What the image should show, in plain words."},
+            "path":{"type":"string", "description":"Where to save it, relative to the project, such as assets/hero.png. Folders are created; an existing file is never replaced."},
+            "size":{"type":"string", "description":"square (the default), landscape or portrait, or an exact WIDTHxHEIGHT such as 1024x1024 if the model supports it."}
+        }, "required":["prompt","path"], "additionalProperties":false}),
+    }
+}
+
+/// Checks that `requested` can become a new file inside the project: a plain relative path that
+/// does not leave it (not even through a link) and does not exist yet. Creates nothing.
+pub(crate) fn check_new_path(root: &Path, requested: &str) -> Result<()> {
+    let root = canonical_root(root)?;
+    let relative = validate_relative_path(requested)?;
+    if let Some(parent) = relative
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        let wanted = root.join(parent);
+        let mut existing = wanted.as_path();
+        while !existing.exists() {
+            existing = existing
+                .parent()
+                .context("the folder has no existing parent")?;
+        }
+        let anchor = existing
+            .canonicalize()
+            .with_context(|| format!("resolving {}", existing.display()))?;
+        if !anchor.starts_with(&root) {
+            bail!("the path resolves outside the workspace");
+        }
+    }
+    if root.join(relative).exists() {
+        bail!("{requested} already exists");
+    }
+    Ok(())
+}
+
+/// Saves `bytes` as a new file at `requested` inside the project, creating its folders. Never
+/// replaces a file and never leaves the project. Returns the path with `/` separators.
+pub(crate) fn write_new_bytes(root: &Path, requested: &str, bytes: &[u8]) -> Result<String> {
+    check_new_path(root, requested)?;
+    let root = canonical_root(root)?;
+    let relative = validate_relative_path(requested)?;
+    if let Some(parent) = relative
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(root.join(parent))
+            .with_context(|| format!("creating folders for {requested}"))?;
+    }
+    let destination = resolve_new_path(&root, requested)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .with_context(|| format!("creating {requested} without overwriting"))?;
+    use std::io::Write as _;
+    file.write_all(bytes)
+        .with_context(|| format!("writing {requested}"))?;
+    Ok(requested.replace('\\', "/"))
 }
 
 pub(crate) fn definitions_for_mode(permission_mode: &str) -> Vec<ToolDefinition> {

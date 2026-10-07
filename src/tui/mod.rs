@@ -5,6 +5,7 @@ pub(crate) mod context;
 mod creators;
 mod effort;
 mod forms;
+mod image_setup;
 mod markdown;
 mod mentions;
 pub(crate) mod models;
@@ -127,6 +128,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         app.handle_chatgpt_login_key(key);
     } else if app.outside_prompt.is_some() {
         app.handle_outside_prompt_key(key)?;
+    } else if app.image_setup.is_some() {
+        app.handle_image_setup_key(key)?;
     } else if app.wizard.is_some() {
         app.handle_setup_key(key)?;
     } else if app.tool_approval.is_some() {

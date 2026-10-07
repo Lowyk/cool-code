@@ -366,7 +366,7 @@ mod tests {
                     path: "/x/a.txt".into(),
                     name: "a.txt".to_owned(),
                     before: None,
-                    after: "x".to_owned(),
+                    after: crate::agent::FileContent::Text("x".to_owned()),
                 },
                 finished("done"),
             ],

@@ -509,6 +509,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if let Some(prompt) = app.outside_prompt.as_ref() {
         crate::tui::mentions::draw_outside_prompt(frame, area, prompt);
     }
+    if let Some(setup) = app.image_setup.as_ref() {
+        crate::tui::image_setup::draw_image_setup(frame, area, setup);
+    }
     if let Some(picker) = app.model_picker.as_ref() {
         draw_model_picker(frame, area, picker, &app.settings);
     }
