@@ -1173,6 +1173,38 @@ mod tests {
     }
 
     #[test]
+    fn the_key_field_says_a_blank_keeps_the_saved_key_when_editing() {
+        let mut terminal = Terminal::new(TestBackend::new(110, 40)).expect("terminal");
+        let text = |terminal: &Terminal<TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let mut editing = App::new(Settings::default());
+        editing.trust_prompt = false;
+        editing.open_settings(Section::Providers);
+        editing.settings.providers = vec![ProviderProfile {
+            id: "p1".to_owned(),
+            name: "MultiAI".to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            model: "m".to_owned(),
+            ..Default::default()
+        }];
+        editing.edit_provider(0);
+        terminal
+            .draw(|frame| draw(frame, &editing, 0))
+            .expect("draw");
+        assert!(text(&terminal).contains("leave blank to keep the saved key"));
+        let fresh = chosen_form("openai");
+        terminal.draw(|frame| draw(frame, &fresh, 0)).expect("draw");
+        assert!(!text(&terminal).contains("leave blank to keep"));
+    }
+
+    #[test]
     fn editing_an_existing_provider_keeps_its_alias() {
         let mut app = App::new(Settings::default());
         app.settings.providers = vec![ProviderProfile {

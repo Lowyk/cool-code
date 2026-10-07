@@ -1,5 +1,6 @@
 use crate::endpoints::{
-    FetchedModel, LimitLine, fetch_json, merge_models, parse_models, summarize_limits,
+    FetchedModel, LimitLine, fetch_json, friendly_fetch_error, merge_models, parse_models,
+    summarize_limits,
 };
 use crate::tui::state::App;
 use crate::write_settings;
@@ -206,7 +207,7 @@ impl App {
                         LimitsState::Failed("the endpoint returned nothing to show".to_owned())
                     }
                     Ok(lines) => LimitsState::Ready(lines),
-                    Err(error) => LimitsState::Failed(error),
+                    Err(error) => LimitsState::Failed(friendly_fetch_error(&error)),
                 };
                 self.limits.insert(
                     provider_id,
@@ -262,7 +263,10 @@ impl App {
                 return;
             }
             Err(error) => {
-                self.notice = format!("{name}: could not load models: {error}");
+                self.notice = format!(
+                    "{name}: could not load models: {}",
+                    friendly_fetch_error(&error)
+                );
                 return;
             }
         };
@@ -472,16 +476,37 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_key_is_explained_in_usage_and_in_the_models_notice() {
+        let mut app = app_with(vec![provider("p1", false)]);
+        let raw = "provider returned 401 Unauthorized: The provided API key is invalid or has been revoked";
+        app.apply_task_result(TaskResult::Limits {
+            provider_id: "p1".to_owned(),
+            url: "https://api.example.com/v1/limits".to_owned(),
+            result: Err(raw.to_owned()),
+        });
+        let LimitsState::Failed(message) = &app.limits["p1"].state else {
+            panic!("expected a failure");
+        };
+        assert!(message.contains("rejected the API key"), "{message}");
+        app.apply_models_result("p1", false, true, Err(raw.to_owned()));
+        assert!(
+            app.notice.contains("rejected the API key"),
+            "{}",
+            app.notice
+        );
+    }
+
+    #[test]
     fn limits_errors_are_kept_for_display() {
         let mut app = app_with(vec![provider("p1", false)]);
         app.apply_task_result(TaskResult::Limits {
             provider_id: "p1".to_owned(),
             url: "https://api.example.com/v1/limits".to_owned(),
-            result: Err("provider returned 401".to_owned()),
+            result: Err("provider returned 500 Internal Server Error: boom".to_owned()),
         });
         assert_eq!(
             app.limits["p1"].state,
-            LimitsState::Failed("provider returned 401".to_owned())
+            LimitsState::Failed("provider returned 500 Internal Server Error: boom".to_owned())
         );
     }
 }

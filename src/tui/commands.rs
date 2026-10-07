@@ -44,6 +44,13 @@ pub(super) fn format_provider_error(error: &str) -> (String, String) {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| error.to_owned());
+    let message = if status.starts_with("401") || status.starts_with("403") {
+        format!(
+            "{message}\n\nThe provider rejected the API key. Open /provider, select this provider, press e, type a new API key, and save."
+        )
+    } else {
+        message
+    };
     (status, message)
 }
 
@@ -722,6 +729,26 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text == "(interrupted)")
         );
+    }
+
+    #[test]
+    fn a_rejected_key_in_chat_says_how_to_replace_it() {
+        let (status, details) = super::format_provider_error(
+            r#"provider returned 401 Unauthorized: {"error":{"code":"invalid_credential","message":"Invalid or missing credential."}}"#,
+        );
+        assert!(status.starts_with("401"), "{status}");
+        assert!(
+            details.contains("Invalid or missing credential."),
+            "{details}"
+        );
+        assert!(
+            details.contains("press e") && details.contains("/provider"),
+            "{details}"
+        );
+        let (_, rate_limited) = super::format_provider_error(
+            r#"provider returned 429 Too Many Requests: {"error":{"message":"slow down"}}"#,
+        );
+        assert_eq!(rate_limited, "slow down");
     }
 
     #[test]

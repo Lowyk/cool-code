@@ -77,6 +77,20 @@ pub(crate) fn resolve_endpoint(base_url: &str, input: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+/// Explains a rejected API key (HTTP 401 or 403) in terms of what the user can do about it;
+/// other errors pass through unchanged.
+pub(crate) fn friendly_fetch_error(raw: &str) -> String {
+    let rejected = ["provider returned 401", "provider returned 403"]
+        .iter()
+        .any(|marker| raw.contains(marker));
+    if rejected {
+        "the provider rejected the API key. Select this provider and press e to enter a new key."
+            .to_owned()
+    } else {
+        raw.to_owned()
+    }
+}
+
 /// Replaces control characters (escape sequences and line breaks) with spaces so
 /// text from a provider cannot move the cursor or inject lines into the terminal.
 pub(crate) fn clean(text: &str) -> String {
@@ -637,6 +651,27 @@ mod tests {
             .expect_err("too large")
             .to_string();
         assert!(error.contains("too large"), "{error}");
+    }
+
+    #[test]
+    fn a_rejected_key_is_explained_and_other_errors_pass_through() {
+        let rejected = super::friendly_fetch_error(
+            "provider returned 401 Unauthorized: The provided API key is invalid or has been revoked",
+        );
+        assert!(rejected.contains("rejected the API key"), "{rejected}");
+        assert!(rejected.contains("press e"), "{rejected}");
+        assert!(
+            super::friendly_fetch_error("provider returned 403 Forbidden: no")
+                .contains("rejected the API key")
+        );
+        assert_eq!(
+            super::friendly_fetch_error("provider returned 500 Internal Server Error: boom"),
+            "provider returned 500 Internal Server Error: boom"
+        );
+        assert_eq!(
+            super::friendly_fetch_error("the provider response is too large"),
+            "the provider response is too large"
+        );
     }
 
     #[test]
