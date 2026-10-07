@@ -31,6 +31,27 @@ pub(crate) trait Completer: Sync {
         tools: ToolSet,
         stream: &Stream<'_>,
     ) -> Result<Completion>;
+
+    /// A different model for the safety check in Auto mode, when this one should not be used
+    /// for it. `None` means the same model. The real providers use the guard model at a low
+    /// effort.
+    fn reviewer(&self) -> Option<Box<dyn Completer + '_>> {
+        None
+    }
+}
+
+/// A provider completer that owns its settings.
+struct OwnedProvider(Settings);
+
+impl Completer for OwnedProvider {
+    fn complete(
+        &self,
+        messages: &[ChatMessage],
+        tools: ToolSet,
+        stream: &Stream<'_>,
+    ) -> Result<Completion> {
+        crate::provider::complete_with_fallback(&self.0, messages, tools, stream)
+    }
 }
 
 /// Talks to the configured provider (with its fallbacks).
@@ -44,6 +65,10 @@ impl Completer for ProviderCompleter<'_> {
         stream: &Stream<'_>,
     ) -> Result<Completion> {
         crate::provider::complete_with_fallback(self.0, messages, tools, stream)
+    }
+
+    fn reviewer(&self) -> Option<Box<dyn Completer + '_>> {
+        Some(Box::new(OwnedProvider(self.0.guard_settings())))
     }
 }
 
@@ -509,6 +534,10 @@ fn run_subagent(
                     &mut Vec::new(),
                     cancel,
                     Some(&label),
+                    &crate::guard::CompleterJudge {
+                        completer,
+                        request: task.instructions.clone(),
+                    },
                 )
                 .unwrap_or_else(|error| format!("Tool error: {error:#}"))
             } else {
