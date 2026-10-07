@@ -268,37 +268,20 @@ fn complete_turn(
         on_event: &forward,
         cancel: stream.cancel,
     };
+    let request = Request {
+        client: &client,
+        base_url: &base_url,
+        api_key: &api_key,
+        model: &model,
+        messages: &safe_messages,
+        allow_tools,
+        plan_mode: settings.permission_mode == "plan",
+        stream: &restoring,
+    };
     let turn = match provider {
-        "anthropic" | "anthropic-compatible" => complete_anthropic(
-            &client,
-            &base_url,
-            &api_key,
-            &model,
-            &safe_messages,
-            allow_tools,
-            settings.permission_mode == "plan",
-            &restoring,
-        ),
-        "google" => complete_google(
-            &client,
-            &base_url,
-            &api_key,
-            &model,
-            &safe_messages,
-            allow_tools,
-            settings.permission_mode == "plan",
-            &restoring,
-        ),
-        _ => complete_openai_compatible(
-            &client,
-            &base_url,
-            &api_key,
-            &model,
-            &safe_messages,
-            allow_tools,
-            settings.permission_mode == "plan",
-            &restoring,
-        ),
+        "anthropic" | "anthropic-compatible" => complete_anthropic(&request),
+        "google" => complete_google(&request),
+        _ => complete_openai_compatible(&request),
     };
     let tail = restorer.borrow_mut().flush();
     if !tail.is_empty() {
@@ -334,16 +317,14 @@ pub(crate) fn complete_with_fallback(
     let current_provider = settings.active_provider_id.clone();
     stream.emit(StreamEvent::Attempt);
     match complete_turn(settings, messages, allow_tools, stream) {
-        Ok(turn) => {
-            return Ok(Completion {
-                text: turn.text,
-                provider_id: current_provider,
-                model_id: current_model,
-                failed_over: false,
-                tool_calls: turn.tool_calls,
-            });
-        }
-        Err(error) if !should_fall_back(&error) => return Err(error),
+        Ok(turn) => Ok(Completion {
+            text: turn.text,
+            provider_id: current_provider,
+            model_id: current_model,
+            failed_over: false,
+            tool_calls: turn.tool_calls,
+        }),
+        Err(error) if !should_fall_back(&error) => Err(error),
         Err(error) => {
             let Some(chain_id) = settings.active_chain_id.as_deref() else {
                 return Err(error);
@@ -589,16 +570,30 @@ fn redaction_patterns() -> &'static [Regex] {
     ].iter().map(|pattern| Regex::new(pattern).expect("static redaction regex is valid")).collect())
 }
 
-fn complete_openai_compatible(
-    client: &Client,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    messages: &[ChatMessage],
+/// Everything a provider adapter needs to run one streamed completion.
+#[derive(Clone, Copy)]
+struct Request<'a> {
+    client: &'a Client,
+    base_url: &'a str,
+    api_key: &'a str,
+    model: &'a str,
+    messages: &'a [ChatMessage],
     allow_tools: bool,
     plan_mode: bool,
-    stream: &Stream,
-) -> Result<AgentTurn> {
+    stream: &'a Stream<'a>,
+}
+
+fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
+    let Request {
+        client,
+        base_url,
+        api_key,
+        model,
+        messages,
+        allow_tools,
+        plan_mode,
+        stream,
+    } = *request;
     let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": true });
     if allow_tools {
@@ -685,16 +680,17 @@ fn openai_call_arguments(call: &Value) -> Result<Value> {
     serde_json::from_str(raw).context("parsing tool call arguments")
 }
 
-fn complete_anthropic(
-    client: &Client,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    messages: &[ChatMessage],
-    allow_tools: bool,
-    plan_mode: bool,
-    stream: &Stream,
-) -> Result<AgentTurn> {
+fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
+    let Request {
+        client,
+        base_url,
+        api_key,
+        model,
+        messages,
+        allow_tools,
+        plan_mode,
+        stream,
+    } = *request;
     let system = messages
         .iter()
         .filter(|message| message.role == "system")
@@ -755,16 +751,17 @@ fn anthropic_message(message: &ChatMessage) -> Result<Value> {
     Ok(serde_json::json!({"role":"user", "content":anthropic_content(&message.content)?}))
 }
 
-fn complete_google(
-    client: &Client,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    messages: &[ChatMessage],
-    allow_tools: bool,
-    plan_mode: bool,
-    stream: &Stream,
-) -> Result<AgentTurn> {
+fn complete_google(request: &Request) -> Result<AgentTurn> {
+    let Request {
+        client,
+        base_url,
+        api_key,
+        model,
+        messages,
+        allow_tools,
+        plan_mode,
+        stream,
+    } = *request;
     // complete_turn enforces acknowledgement and redacts content before reaching this adapter.
     let system = messages
         .iter()

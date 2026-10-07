@@ -316,9 +316,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{Focus, Section, SettingsView};
+    use crate::Settings;
     use crate::tui::render::draw;
     use crate::tui::state::App;
-    use crate::{ModelProfile, ProviderProfile, PulseMode, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

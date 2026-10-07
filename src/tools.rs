@@ -461,10 +461,10 @@ fn collect_files(
         let path = entry.path();
         if file_type.is_dir() {
             collect_files(root, &path, files, visited, depth + 1)?;
-        } else if file_type.is_file() {
-            if let Ok(relative) = path.strip_prefix(root) {
-                files.push(relative.to_string_lossy().replace('\\', "/"));
-            }
+        } else if file_type.is_file()
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            files.push(relative.to_string_lossy().replace('\\', "/"));
         }
     }
     Ok(())

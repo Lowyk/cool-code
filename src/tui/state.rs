@@ -70,6 +70,7 @@ pub(super) struct App {
     pub(super) pending: Option<Receiver<PendingEvent>>,
     pub(super) streaming: Option<StreamingTurn>,
     /// Background provider fetches (model lists, usage limits) report through this channel.
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) tasks: std::sync::mpsc::Sender<crate::tui::settings::sync::TaskResult>,
     pub(super) task_results: std::sync::mpsc::Receiver<crate::tui::settings::sync::TaskResult>,
     pub(super) limits: std::collections::HashMap<String, crate::tui::settings::sync::LimitsEntry>,

@@ -1,3 +1,6 @@
+// Test fixtures start from Default and override a few fields; that reads better than struct updates.
+#![cfg_attr(test, allow(clippy::field_reassign_with_default))]
+
 use std::{
     fs,
     io::{self, Write},

@@ -184,15 +184,13 @@ pub(super) fn selected_model_name(settings: &Settings, model_id: &str) -> String
             .providers
             .iter()
             .find(|profile| profile.id == active)
-    }) {
-        if let Some(model) = profile
-            .models
-            .iter()
-            .find(|model| model.id.eq_ignore_ascii_case(model_id))
-            && !model.name.trim().is_empty()
-        {
-            return model.name.clone();
-        }
+    }) && let Some(model) = profile
+        .models
+        .iter()
+        .find(|model| model.id.eq_ignore_ascii_case(model_id))
+        && !model.name.trim().is_empty()
+    {
+        return model.name.clone();
     }
     model_name(model_id)
 }

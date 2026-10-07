@@ -450,20 +450,14 @@ pub(super) fn centered_rect(width_percent: u16, height_percent: u16, area: Rect)
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        draw, input_prompt_height, input_visual_lines, mode_span, status_line, wrap_input_text,
-    };
+    use super::{draw, input_prompt_height, input_visual_lines, mode_span, wrap_input_text};
     use crate::Settings;
-    use crate::agent::PendingEvent;
-    use crate::tui::backdrop::PARTICLE_GLYPHS;
-    use crate::tui::state::{App, StreamingTurn, TranscriptEntry, TranscriptKind};
+
+    use crate::tui::state::App;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, mpsc};
-    use std::time::{Duration, Instant};
 
     const MODE_COLORS: [(&str, Color); 5] = [
         ("accept-everything", Color::Rgb(235, 80, 80)),
