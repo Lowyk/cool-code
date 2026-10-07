@@ -68,24 +68,25 @@ pub(in crate::tui) enum ResetStage {
 /// `settings` with the preferences back at their defaults. Providers, model choices and the
 /// acknowledgements and answers the user already gave are kept: those have their own entries.
 pub(in crate::tui) fn reset_preferences(settings: &Settings) -> Settings {
-    let mut fresh = Settings::default();
-    fresh.provider = settings.provider.clone();
-    fresh.model = settings.model.clone();
-    fresh.base_url = settings.base_url.clone();
-    fresh.api_key_env = settings.api_key_env.clone();
-    fresh.providers = settings.providers.clone();
-    fresh.active_provider_id = settings.active_provider_id.clone();
-    fresh.default_provider_id = settings.default_provider_id.clone();
-    fresh.model_chains = settings.model_chains.clone();
-    fresh.active_chain_id = settings.active_chain_id.clone();
-    fresh.privacy_acknowledged = settings.privacy_acknowledged.clone();
-    fresh.privacy_image_acknowledged = settings.privacy_image_acknowledged.clone();
-    fresh.motion_prompt_answered = settings.motion_prompt_answered;
-    fresh.stats_prompt_answered = settings.stats_prompt_answered;
-    fresh.sessions_prompt_answered = settings.sessions_prompt_answered;
-    fresh.theme_prompt_answered = settings.theme_prompt_answered;
-    fresh.instructions_prompt_answered = settings.instructions_prompt_answered;
-    fresh
+    Settings {
+        provider: settings.provider.clone(),
+        model: settings.model.clone(),
+        base_url: settings.base_url.clone(),
+        api_key_env: settings.api_key_env.clone(),
+        providers: settings.providers.clone(),
+        active_provider_id: settings.active_provider_id.clone(),
+        default_provider_id: settings.default_provider_id.clone(),
+        model_chains: settings.model_chains.clone(),
+        active_chain_id: settings.active_chain_id.clone(),
+        privacy_acknowledged: settings.privacy_acknowledged.clone(),
+        privacy_image_acknowledged: settings.privacy_image_acknowledged.clone(),
+        motion_prompt_answered: settings.motion_prompt_answered,
+        stats_prompt_answered: settings.stats_prompt_answered,
+        sessions_prompt_answered: settings.sessions_prompt_answered,
+        theme_prompt_answered: settings.theme_prompt_answered,
+        instructions_prompt_answered: settings.instructions_prompt_answered,
+        ..Settings::default()
+    }
 }
 
 impl App {
@@ -375,6 +376,8 @@ mod tests {
     }
 
     fn lived_in() -> App {
+        // A unique id: the in-memory key store is shared by tests running in parallel.
+        let id = format!("multiai-{}", uuid::Uuid::new_v4());
         let mut settings = Settings::default();
         settings.theme = ThemeId::Sakura;
         settings.pulse = PulseMode::Off;
@@ -389,7 +392,7 @@ mod tests {
         settings.sessions_prompt_answered = true;
         settings.instructions_prompt_answered = true;
         settings.providers = vec![ProviderProfile {
-            id: "multiai".to_owned(),
+            id: id.clone(),
             name: "MultiAI".to_owned(),
             adapter: "openai-compatible".to_owned(),
             model: "m".to_owned(),
@@ -399,8 +402,8 @@ mod tests {
             }],
             ..Default::default()
         }];
-        settings.active_provider_id = Some("multiai".to_owned());
-        settings.default_provider_id = Some("multiai".to_owned());
+        settings.active_provider_id = Some(id.clone());
+        settings.default_provider_id = Some(id.clone());
         settings.model = Some("m".to_owned());
         let mut app = App::new(settings);
         app.trust_prompt = false;
@@ -411,7 +414,7 @@ mod tests {
             registry.set_claude_md(&root, true);
         })
         .unwrap();
-        crate::secrets::store("multiai", "secret-key").unwrap();
+        crate::secrets::store(&id, "secret-key").unwrap();
         app.messages
             .push(crate::provider::ChatMessage::assistant("hi".to_owned()));
         app.transcript.push(crate::tui::state::TranscriptEntry {
@@ -509,11 +512,13 @@ mod tests {
     #[test]
     fn resetting_providers_removes_them_and_their_keys() {
         let mut app = lived_in();
+        let id = app.settings.providers[0].id.clone();
+        assert!(crate::secrets::load(&id).unwrap().is_some());
         choose(&mut app, 3);
         press(&mut app, KeyCode::Char('y'));
         assert!(app.settings.providers.is_empty());
         assert_eq!(
-            crate::secrets::load("multiai").unwrap(),
+            crate::secrets::load(&id).unwrap(),
             None,
             "the key is gone too"
         );
@@ -556,11 +561,12 @@ mod tests {
     #[test]
     fn everything_resets_everything_and_starts_over() {
         let mut app = lived_in();
+        let id = app.settings.providers[0].id.clone();
         choose(&mut app, 0);
         press(&mut app, KeyCode::Char('y'));
         assert!(crate::session::list_in(&app.session_dir, None).is_empty());
         assert!(app.settings.providers.is_empty());
-        assert_eq!(crate::secrets::load("multiai").unwrap(), None);
+        assert_eq!(crate::secrets::load(&id).unwrap(), None);
         assert!(!app.workspace_trusted);
         let registry = crate::projects::Registry::load_from(&app.projects_path);
         assert!(!registry.loads_claude_md(&root(), false));
