@@ -412,6 +412,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if app.model_choices.is_some() {
         draw_model_provider_picker(frame, area, app);
     }
+    if let Some(picker) = app.session_picker.as_ref() {
+        crate::tui::sessions::draw_session_picker(frame, area, picker);
+    }
     if let Some(picker) = app.model_picker.as_ref() {
         draw_model_picker(frame, area, picker, &app.settings);
     }

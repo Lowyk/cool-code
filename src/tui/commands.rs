@@ -191,13 +191,24 @@ impl App {
             });
             return Ok(());
         }
+        if value == "/resume" || value == "/resume all" {
+            self.open_session_picker(value == "/resume all");
+            let notice = if self.session_picker.is_some() {
+                "Choose a session to continue.".to_owned()
+            } else {
+                self.notice.clone()
+            };
+            self.finish_command(notice);
+            return Ok(());
+        }
         if value == "/quit" || value == "/exit" {
+            self.save_session();
             self.finish_command("Goodbye.");
             self.running = false;
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }
@@ -264,8 +275,10 @@ impl App {
                 );
                 return Ok(());
             }
+            self.save_session();
             self.messages.clear();
             self.transcript.clear();
+            self.begin_new_session();
             self.history_scroll = 0;
             self.notice = "Conversation cleared.".to_owned();
             return Ok(());
@@ -320,6 +333,7 @@ impl App {
             text: user_message.display.clone(),
         });
         self.messages.push(user_message);
+        self.save_session();
         self.history_scroll = 0;
         let mut system_prompt = format!(
             "[Built-in harness policy · v{}]\n{}",
@@ -457,6 +471,7 @@ impl App {
         if let Some(turn) = self.streaming.as_mut() {
             turn.prune_arrivals(std::time::Instant::now());
         }
+        let was_pending = self.pending.is_some();
         while let Some(receiver) = self.pending.as_ref() {
             let event = receiver.try_recv();
             let keep_going = matches!(
@@ -471,6 +486,9 @@ impl App {
             if !keep_going {
                 break;
             }
+        }
+        if was_pending && self.pending.is_none() {
+            self.save_session();
         }
     }
 
@@ -680,6 +698,64 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| text.to_lowercase().contains("cancelled"))
         );
+    }
+
+    #[test]
+    fn a_finished_turn_is_saved_as_a_session() {
+        let (mut app, sender) = streaming_app();
+        app.messages.push(provider::ChatMessage::user_with_images(
+            "write a parser".to_owned(),
+            "write a parser".to_owned(),
+            Vec::new(),
+        ));
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::User,
+            text: "write a parser".to_owned(),
+        });
+        sender
+            .send(PendingEvent::Finished(Ok(provider::Completion {
+                text: "Done.".to_owned(),
+                provider_id: None,
+                model_id: "m".to_owned(),
+                failed_over: false,
+                tool_calls: Vec::new(),
+            })))
+            .unwrap();
+        assert!(crate::session::list_in(&app.session_dir, None).is_empty());
+        app.poll_response();
+        let saved = crate::session::load_in(&app.session_dir, &app.session_id).expect("saved");
+        assert_eq!(saved.messages.len(), 2);
+        assert_eq!(saved.header.title, "write a parser");
+        assert_eq!(
+            saved.transcript.last().map(|e| e.text.as_str()),
+            Some("Done.")
+        );
+    }
+
+    #[test]
+    fn a_failed_turn_is_saved_too() {
+        let (mut app, sender) = streaming_app();
+        app.messages.push(provider::ChatMessage::user_with_images(
+            "try this".to_owned(),
+            "try this".to_owned(),
+            Vec::new(),
+        ));
+        sender
+            .send(PendingEvent::Finished(Err("boom".to_owned())))
+            .unwrap();
+        app.poll_response();
+        assert_eq!(crate::session::list_in(&app.session_dir, None).len(), 1);
+    }
+
+    #[test]
+    fn sending_a_prompt_saves_it_before_the_answer_arrives() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.input = "hello there".to_owned();
+        app.submit().expect("submit");
+        let listed = crate::session::list_in(&app.session_dir, None);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title, "hello there");
     }
 
     #[test]

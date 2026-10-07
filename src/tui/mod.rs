@@ -8,6 +8,7 @@ mod models;
 mod pickers;
 mod render;
 mod series;
+pub(crate) mod sessions;
 mod settings;
 mod state;
 mod stats_view;
@@ -29,9 +30,9 @@ use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::time::Duration;
 
-pub(crate) fn run() -> Result<()> {
+pub(crate) fn run(resume: Option<sessions::Resume>) -> Result<()> {
     let mut terminal = setup_terminal()?;
-    let result = run_app(&mut terminal);
+    let result = run_app(&mut terminal, resume);
     restore_terminal(&mut terminal)?;
     result
 }
@@ -52,8 +53,14 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
     terminal.show_cursor().context("restoring terminal cursor")
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    resume: Option<sessions::Resume>,
+) -> Result<()> {
     let mut app = App::new(read_settings()?);
+    if let Some(resume) = resume {
+        app.start_from(resume);
+    }
     app.motion_prompt = !app.settings.motion_prompt_answered;
     app.stats_prompt = !app.settings.stats_prompt_answered;
     let animation_start = std::time::Instant::now();
@@ -242,6 +249,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             }
             _ => {}
         }
+    } else if app.session_picker.is_some() {
+        app.handle_session_picker_key(key)?;
     } else if app.model_picker.is_some() {
         app.handle_model_picker_key(key)?;
     } else if app.mode_picker {
