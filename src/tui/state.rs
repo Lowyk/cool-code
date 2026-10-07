@@ -111,6 +111,8 @@ pub(super) struct ProviderDraft {
     pub(super) existing_id: Option<String>,
     pub(super) preset: usize,
     pub(super) alias: String,
+    /// Shown as a placeholder while `alias` is empty, and used when the field is left blank.
+    pub(super) suggested_alias: String,
     pub(super) base_url: String,
     pub(super) api_key: String,
     pub(super) models: Vec<ModelDraft>,

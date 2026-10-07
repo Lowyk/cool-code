@@ -155,6 +155,7 @@ impl App {
             existing_id: None,
             preset: 0,
             alias: String::new(),
+            suggested_alias: String::new(),
             base_url: String::new(),
             api_key: String::new(),
             models: Vec::new(),
