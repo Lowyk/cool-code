@@ -440,7 +440,7 @@ pub(crate) fn session_for(provider_id: &str, token_url: &str) -> Result<Session>
 
 /// The Codex version the backend is told this client is. It hides models from clients it
 /// considers too old, so this must stay recent; `COOLCODE_CODEX_CLIENT_VERSION` overrides it.
-const CLIENT_VERSION: &str = "0.154.0";
+const CLIENT_VERSION: &str = "0.160.1";
 
 /// Where the plan's usage windows are reported.
 pub(crate) const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
