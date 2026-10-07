@@ -15,6 +15,7 @@ mod agent;
 mod chatgpt_auth;
 mod effort_support;
 mod endpoints;
+mod login_page;
 mod policy;
 mod projects;
 mod prompt;

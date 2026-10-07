@@ -11,6 +11,7 @@
 //! system's credential store; the access token is a long JWT that does not fit comfortably in
 //! every credential store, so it lives in memory and is renewed when needed.
 
+use crate::login_page::Outcome;
 use crate::secrets;
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -208,7 +209,14 @@ fn wait_for_code(
             .to_owned();
         let parsed = reqwest::Url::parse(&format!("http://localhost{target}")).ok();
         let Some(url) = parsed.filter(|url| url.path() == "/auth/callback") else {
-            reply(&mut connection, 404, "Not found", "Not found.");
+            reply(
+                &mut connection,
+                404,
+                "Not found",
+                Outcome::Failure,
+                "Nothing here",
+                "This address is only used to finish a sign-in.",
+            );
             continue;
         };
         let param = |name: &str| {
@@ -222,7 +230,9 @@ fn wait_for_code(
                 &mut connection,
                 200,
                 "Sign-in failed",
-                "Sign-in failed. You can close this tab and return to the terminal.",
+                Outcome::Failure,
+                "Sign-in did not finish",
+                "ChatGPT did not complete the sign-in. You can close this tab and try again from your terminal.",
             );
             bail!("the sign-in was refused: {error} {detail}");
         }
@@ -231,28 +241,44 @@ fn wait_for_code(
                 &mut connection,
                 400,
                 "Bad request",
-                "The sign-in state did not match.",
+                Outcome::Failure,
+                "Sign-in was ignored",
+                "This sign-in did not start from Cool Code, so it was not used. Close this tab and try again from your terminal.",
             );
             bail!("the sign-in redirect had the wrong state, so it was ignored");
         }
         let Some(code) = param("code").filter(|code| !code.is_empty()) else {
-            reply(&mut connection, 400, "Bad request", "No code was returned.");
+            reply(
+                &mut connection,
+                400,
+                "Bad request",
+                Outcome::Failure,
+                "Sign-in did not finish",
+                "No sign-in code came back. Close this tab and try again from your terminal.",
+            );
             bail!("the sign-in redirect carried no authorization code");
         };
         reply(
             &mut connection,
             200,
             "Signed in",
-            "Signed in. You can close this tab and return to the terminal.",
+            Outcome::Success,
+            "You are signed in",
+            "Cool Code received your sign-in. You can close this tab and go back to your terminal.",
         );
         return Ok(code);
     }
 }
 
-fn reply(connection: &mut std::net::TcpStream, status: u16, reason: &str, message: &str) {
-    let body = format!(
-        "<!doctype html><meta charset=utf-8><title>Cool Code</title><body style=\"font-family:sans-serif;margin:3em\"><h2>{message}</h2></body>"
-    );
+fn reply(
+    connection: &mut std::net::TcpStream,
+    status: u16,
+    reason: &str,
+    outcome: Outcome,
+    headline: &str,
+    detail: &str,
+) {
+    let body = crate::login_page::page(outcome, headline, detail);
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -717,7 +743,7 @@ mod tests {
         assert_eq!(code, "CODE+1", "the code is percent-decoded");
         let page = browser.join().unwrap();
         assert!(page.starts_with("HTTP/1.1 200"), "{page}");
-        assert!(page.contains("Signed in"), "{page}");
+        assert!(page.contains("You are signed in"), "{page}");
     }
 
     #[test]
