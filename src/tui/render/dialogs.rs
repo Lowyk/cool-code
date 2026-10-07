@@ -294,8 +294,11 @@ pub(super) fn draw_ultimate_confirmation(frame: &mut ratatui::Frame<'_>, area: R
         .border_style(Style::default().fg(Color::Red))
         .style(Style::default().bg(crate::tui::theme::dialog()));
     let body = Paragraph::new(vec![
-        Line::from("Ultimate can consume substantially more tokens and cost more."),
-        Line::from("Dynamic workflows are not implemented in this early build."),
+        Line::from(
+            "Ultimate runs at the model's highest effort and lets the assistant start up to",
+        ),
+        Line::from("6 subagents at a time and have its work reviewed twice. It can use many times"),
+        Line::from("more tokens and cost much more than a normal turn."),
         Line::from(""),
         Line::from(vec![
             Span::styled(

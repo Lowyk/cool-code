@@ -132,6 +132,80 @@ pub(crate) fn definitions() -> [ToolDefinition; 12] {
     ]
 }
 
+/// Which tools a request offers the model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolSet {
+    /// No tools: a plain chat turn.
+    None,
+    /// The main assistant: every tool, plus `spawn_subagents` while workflows are on.
+    Main { plan_mode: bool, workflows: bool },
+    /// A subagent that may only look: no edits, no commands.
+    Explore,
+    /// A subagent that may also edit files and run commands (with the usual approvals).
+    Implement,
+}
+
+/// The names of the tools that only read the repository.
+pub(crate) const READ_ONLY_TOOLS: [&str; 6] = [
+    "list_files",
+    "read_file",
+    "search_text",
+    "git_status",
+    "git_diff",
+    "git_log",
+];
+
+impl ToolSet {
+    pub(crate) fn any(self) -> bool {
+        self != ToolSet::None
+    }
+
+    pub(crate) fn definitions(self) -> Vec<ToolDefinition> {
+        match self {
+            ToolSet::None => Vec::new(),
+            ToolSet::Main {
+                plan_mode,
+                workflows,
+            } => {
+                let mut tools = definitions_for_mode(if plan_mode { "plan" } else { "auto" });
+                if workflows {
+                    tools.push(spawn_subagents_definition());
+                }
+                tools
+            }
+            ToolSet::Explore => definitions()
+                .into_iter()
+                .filter(|tool| READ_ONLY_TOOLS.contains(&tool.name))
+                .collect(),
+            ToolSet::Implement => definitions()
+                .into_iter()
+                .filter(|tool| tool.name != "request_plan_approval")
+                .collect(),
+        }
+    }
+
+    /// Whether the tool may be called by an agent that was offered this set.
+    pub(crate) fn allows(self, name: &str) -> bool {
+        self.definitions().iter().any(|tool| tool.name == name)
+    }
+}
+
+/// The tool the main assistant uses to hand work to subagents (offered only while workflows
+/// are on).
+pub(crate) fn spawn_subagents_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "spawn_subagents",
+        description: "Hand independent pieces of work to subagents and get their reports back. Subagents do not see this conversation, so give each one complete instructions. `explore` subagents only read and search the repository and run in parallel; `implement` subagents can also edit files and run commands (with the usual approvals) and run one after another. Use this for research across several areas or for clearly separate changes; do small tasks yourself.",
+        parameters: serde_json::json!({"type":"object", "properties":{
+            "tasks":{"type":"array", "minItems":1, "items":{"type":"object", "properties":{
+                "name":{"type":"string", "description":"A short label for the report, e.g. `auth flow`."},
+                "kind":{"type":"string", "enum":["explore","implement"]},
+                "instructions":{"type":"string", "description":"Everything the subagent needs: the goal, the files or areas to look at, constraints, and what to report back."}
+            }, "required":["kind","instructions"], "additionalProperties":false}}
+        }, "required":["tasks"], "additionalProperties":false}),
+    }
+}
+
 pub(crate) fn definitions_for_mode(permission_mode: &str) -> Vec<ToolDefinition> {
     definitions()
         .into_iter()

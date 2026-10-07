@@ -8,6 +8,7 @@ use crate::stream::{
     Interrupted, Restorer, Stream, StreamEvent, parse_anthropic_stream, parse_google_stream,
     parse_openai_stream,
 };
+use crate::tools::ToolSet;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -146,13 +147,13 @@ pub(crate) fn complete(settings: &Settings, messages: &[ChatMessage]) -> Result<
         on_event: &ignore,
         cancel: &cancel,
     };
-    Ok(complete_turn(settings, messages, false, &stream)?.text)
+    Ok(complete_turn(settings, messages, ToolSet::None, &stream)?.text)
 }
 
 fn complete_turn(
     settings: &Settings,
     messages: &[ChatMessage],
-    allow_tools: bool,
+    tools: ToolSet,
     stream: &Stream,
 ) -> Result<AgentTurn> {
     let profile = settings
@@ -284,8 +285,7 @@ fn complete_turn(
         api_key: &api_key,
         model: &model,
         messages: &safe_messages,
-        allow_tools,
-        plan_mode: settings.permission_mode == "plan",
+        tools,
         stream: &restoring,
     };
     let turn = match provider {
@@ -317,7 +317,7 @@ fn complete_turn(
 pub(crate) fn complete_with_fallback(
     settings: &Settings,
     messages: &[ChatMessage],
-    allow_tools: bool,
+    tools: ToolSet,
     stream: &Stream,
 ) -> Result<Completion> {
     let current_model = env::var("HARNESS_MODEL")
@@ -326,7 +326,7 @@ pub(crate) fn complete_with_fallback(
         .unwrap_or_default();
     let current_provider = settings.active_provider_id.clone();
     stream.emit(StreamEvent::Attempt);
-    match complete_turn(settings, messages, allow_tools, stream) {
+    match complete_turn(settings, messages, tools, stream) {
         Ok(turn) => Ok(Completion {
             text: turn.text,
             provider_id: current_provider,
@@ -367,7 +367,7 @@ pub(crate) fn complete_with_fallback(
                 fallback.model = Some(member.model_id.clone());
                 fallback.api_key_env = None;
                 stream.emit(StreamEvent::Attempt);
-                match complete_turn(&fallback, messages, allow_tools, stream) {
+                match complete_turn(&fallback, messages, tools, stream) {
                     Ok(turn) => {
                         return Ok(Completion {
                             text: turn.text,
@@ -648,8 +648,7 @@ struct Request<'a> {
     api_key: &'a str,
     model: &'a str,
     messages: &'a [ChatMessage],
-    allow_tools: bool,
-    plan_mode: bool,
+    tools: ToolSet,
     stream: &'a Stream<'a>,
 }
 
@@ -661,14 +660,13 @@ fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
         api_key,
         model,
         messages,
-        allow_tools,
-        plan_mode,
+        tools,
         stream,
     } = *request;
     let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": true });
-    if allow_tools {
-        body["tools"] = openai_tool_specs(plan_mode);
+    if tools.any() {
+        body["tools"] = openai_tool_specs(tools);
         body["tool_choice"] = Value::String("auto".to_owned());
     }
     let sent = add_effort(&mut body, request);
@@ -698,9 +696,9 @@ fn successful(response: reqwest::blocking::Response) -> Result<reqwest::blocking
     )
 }
 
-fn openai_tool_specs(plan_mode: bool) -> Value {
+fn openai_tool_specs(tools: ToolSet) -> Value {
     Value::Array(
-        crate::tools::definitions_for_mode(if plan_mode { "plan" } else { "auto" })
+        tools.definitions()
             .into_iter()
             .map(|tool| serde_json::json!({
                 "type":"function",
@@ -710,9 +708,9 @@ fn openai_tool_specs(plan_mode: bool) -> Value {
     )
 }
 
-fn anthropic_tool_specs(plan_mode: bool) -> Value {
+fn anthropic_tool_specs(tools: ToolSet) -> Value {
     Value::Array(
-        crate::tools::definitions_for_mode(if plan_mode { "plan" } else { "auto" })
+        tools.definitions()
             .into_iter()
             .map(|tool| {
                 serde_json::json!({"name":tool.name, "description":tool.description, "input_schema":tool.parameters})
@@ -721,9 +719,9 @@ fn anthropic_tool_specs(plan_mode: bool) -> Value {
     )
 }
 
-fn google_tool_specs(plan_mode: bool) -> Value {
+fn google_tool_specs(tools: ToolSet) -> Value {
     Value::Array(vec![serde_json::json!({
-        "functionDeclarations": crate::tools::definitions_for_mode(if plan_mode { "plan" } else { "auto" })
+        "functionDeclarations": tools.definitions()
             .into_iter()
             .map(|tool| serde_json::json!({"name":tool.name, "description":tool.description, "parameters":google_schema(&tool.parameters)}))
             .collect::<Vec<_>>()
@@ -764,8 +762,7 @@ fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
         api_key,
         model,
         messages,
-        allow_tools,
-        plan_mode,
+        tools,
         stream,
     } = *request;
     let system = messages
@@ -783,8 +780,8 @@ fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
     if !system.is_empty() {
         body["system"] = Value::String(system);
     }
-    if allow_tools {
-        body["tools"] = anthropic_tool_specs(plan_mode);
+    if tools.any() {
+        body["tools"] = anthropic_tool_specs(tools);
     }
     let endpoint = format!("{}/messages", base_url.trim_end_matches('/'));
     let sent = add_effort(&mut body, request);
@@ -841,8 +838,7 @@ fn complete_google(request: &Request) -> Result<AgentTurn> {
         api_key,
         model,
         messages,
-        allow_tools,
-        plan_mode,
+        tools,
         stream,
     } = *request;
     // complete_turn enforces acknowledgement and redacts content before reaching this adapter.
@@ -861,8 +857,8 @@ fn complete_google(request: &Request) -> Result<AgentTurn> {
     if !system.is_empty() {
         body["systemInstruction"] = serde_json::json!({ "parts": [{ "text": system }] });
     }
-    if allow_tools {
-        body["tools"] = google_tool_specs(plan_mode);
+    if tools.any() {
+        body["tools"] = google_tool_specs(tools);
     }
     let model = model.strip_prefix("models/").unwrap_or(model);
     let endpoint = format!(
@@ -1118,43 +1114,70 @@ mod tests {
             ]
         );
         assert!(!names.iter().any(|name| name.contains("exec")));
-        let openai_outside_plan = openai_tool_specs(false);
+        let openai_outside_plan = openai_tool_specs(crate::tools::ToolSet::Main {
+            plan_mode: false,
+            workflows: false,
+        });
         assert!(openai_outside_plan.as_array().unwrap().iter().all(|tool| {
             tool.pointer("/function/name").and_then(Value::as_str) != Some("request_plan_approval")
         }));
         assert!(
-            openai_tool_specs(true)
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|tool| {
-                    tool.pointer("/function/name").and_then(Value::as_str)
-                        == Some("request_plan_approval")
-                })
+            openai_tool_specs(crate::tools::ToolSet::Main {
+                plan_mode: true,
+                workflows: false
+            })
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| {
+                tool.pointer("/function/name").and_then(Value::as_str)
+                    == Some("request_plan_approval")
+            })
         );
         assert_eq!(
-            anthropic_tool_specs(true).as_array().unwrap().len(),
+            anthropic_tool_specs(crate::tools::ToolSet::Main {
+                plan_mode: true,
+                workflows: false
+            })
+            .as_array()
+            .unwrap()
+            .len(),
             names.len()
         );
         assert_eq!(
-            anthropic_tool_specs(false).as_array().unwrap().len(),
+            anthropic_tool_specs(crate::tools::ToolSet::Main {
+                plan_mode: false,
+                workflows: false
+            })
+            .as_array()
+            .unwrap()
+            .len(),
             names.len() - 1
         );
         assert_eq!(
-            google_tool_specs(true)[0]["functionDeclarations"]
+            google_tool_specs(crate::tools::ToolSet::Main {
+                plan_mode: true,
+                workflows: false
+            })[0]["functionDeclarations"]
                 .as_array()
                 .unwrap()
                 .len(),
             names.len()
         );
         assert_eq!(
-            google_tool_specs(false)[0]["functionDeclarations"]
+            google_tool_specs(crate::tools::ToolSet::Main {
+                plan_mode: false,
+                workflows: false
+            })[0]["functionDeclarations"]
                 .as_array()
                 .unwrap()
                 .len(),
             names.len() - 1
         );
-        let google_specs = google_tool_specs(true);
+        let google_specs = google_tool_specs(crate::tools::ToolSet::Main {
+            plan_mode: true,
+            workflows: false,
+        });
         let google_json = google_specs.to_string();
         assert!(google_json.contains("\"type\":\"object\""));
         assert!(google_json.contains("\"type\":\"string\""));
@@ -1461,8 +1484,7 @@ mod tests {
             api_key: "test-key",
             model,
             messages: &messages,
-            allow_tools: false,
-            plan_mode: false,
+            tools: crate::tools::ToolSet::None,
             stream: &stream,
         };
         super::complete_openai_compatible(&request).map(|_| ())
