@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const PROFILE_NAME: &str = "ChatGPT Plus/Pro (unofficial)";
 
 /// Models offered after signing in; the list can be changed in Settings → Models.
-const MODELS: [&str; 2] = ["gpt-5-codex", "gpt-5"];
+const MODELS: [&str; 4] = ["gpt-6.1", "gpt-6", "gpt-5.6", "gpt-5.5"];
 
 /// The ways to use OpenAI, in the order they are listed.
 const METHODS: [(&str, &str); 2] = [
@@ -179,6 +179,14 @@ impl App {
             .clone()
             .unwrap_or_else(|| "your ChatGPT account".to_owned());
         if existing.is_some() {
+            if let Some(index) = self
+                .settings
+                .providers
+                .iter()
+                .position(|profile| profile.id == id)
+            {
+                self.start_models_fetch(index, false);
+            }
             self.notice = format!("Signed in to ChatGPT again as {who}.");
             return;
         }
@@ -195,6 +203,7 @@ impl App {
                 })
                 .collect(),
             base_url: Some(chatgpt_auth::API_BASE.to_owned()),
+            models_url: Some(format!("{}/models", chatgpt_auth::API_BASE)),
             ..Default::default()
         };
         let previous = self.settings.clone();
@@ -217,6 +226,7 @@ impl App {
         }
         self.provider_form = None;
         self.provider_index = self.settings.providers.len() - 1;
+        self.start_models_fetch(self.provider_index, false);
         self.notice =
             format!("Signed in to ChatGPT as {who}. It is unofficial and may stop working.");
     }
@@ -539,6 +549,68 @@ mod tests {
             "refresh-2"
         );
         assert!(app.notice.contains("again"), "{}", app.notice);
+    }
+
+    #[test]
+    fn a_new_sign_in_loads_the_accounts_current_models() {
+        let mut app = waiting_app();
+        let before = app.spawned_tasks;
+        app.apply_task_result(TaskResult::Login {
+            result: Ok((account("me@example.com"), session())),
+        });
+        assert_eq!(app.spawned_tasks, before + 1);
+        let profile = &app.settings.providers[0];
+        let ids: Vec<_> = profile
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect();
+        assert_eq!(ids, ["gpt-6.1", "gpt-6", "gpt-5.6", "gpt-5.5"]);
+        assert_eq!(
+            profile.models_url.as_deref(),
+            Some("https://chatgpt.com/backend-api/codex/models")
+        );
+        assert!(app.models_loading.contains(&profile.id));
+        assert!(app.notice.contains("me@example.com"), "{}", app.notice);
+    }
+
+    #[test]
+    fn the_accounts_own_list_replaces_retired_models() {
+        use crate::endpoints::FetchedModel;
+        let mut app = waiting_app();
+        app.apply_task_result(TaskResult::Login {
+            result: Ok((account("me@example.com"), session())),
+        });
+        let id = app.settings.providers[0].id.clone();
+        app.settings.providers[0].models.push(ModelProfile {
+            id: "gpt-5-codex".to_owned(),
+            name: String::new(),
+        });
+        app.settings.providers[0].model = "gpt-5-codex".to_owned();
+        let fetched = |id: &str| FetchedModel {
+            id: id.to_owned(),
+            name: String::new(),
+            free: None,
+            tools: None,
+            context: None,
+        };
+        app.apply_task_result(TaskResult::Models {
+            provider_id: id,
+            url: "https://chatgpt.com/backend-api/codex/models".to_owned(),
+            promote: false,
+            result: Ok(vec![fetched("gpt-6.1"), fetched("gpt-6")]),
+        });
+        let profile = &app.settings.providers[0];
+        let ids: Vec<_> = profile
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect();
+        assert_eq!(ids, ["gpt-6.1", "gpt-6"]);
+        assert_eq!(
+            profile.model, "gpt-6.1",
+            "a retired default moves to the first listed model"
+        );
     }
 
     #[test]

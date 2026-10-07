@@ -438,6 +438,41 @@ pub(crate) fn session_for(provider_id: &str, token_url: &str) -> Result<Session>
     Ok(session)
 }
 
+/// The models the signed-in account can use, as the backend's raw JSON.
+pub(crate) fn fetch_models(
+    provider_id: &str,
+    models_url: &str,
+    token_url: &str,
+) -> Result<serde_json::Value> {
+    let session = session_for(provider_id, token_url)?;
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("creating HTTP client")?;
+    let mut request = client
+        .get(models_url)
+        .query(&[("client_version", env!("CARGO_PKG_VERSION"))])
+        .bearer_auth(&session.access_token)
+        .header("originator", "codex_cli_rs")
+        .header("Accept", "application/json");
+    if let Some(account) = &session.account_id {
+        request = request.header("chatgpt-account-id", account);
+    }
+    let response = request
+        .send()
+        .map_err(reqwest::Error::without_url)
+        .context("asking ChatGPT for its models")?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("ChatGPT returned {status} when listing models");
+    }
+    response
+        .json()
+        .context("ChatGPT did not return a model list")
+}
+
 /// Forgets a sign-in everywhere.
 pub(crate) fn sign_out(provider_id: &str) -> Result<()> {
     SESSIONS
@@ -834,5 +869,41 @@ mod tests {
         let error = session_for(&id, &format!("{url}/token")).unwrap_err();
         assert!(format!("{error:#}").contains("sign in again"), "{error:#}");
         sign_out(&id).unwrap();
+    }
+
+    #[test]
+    fn listing_models_sends_the_account_headers_and_the_client_version() {
+        let (base, seen) = crate::testutil::serve_full(vec![(
+            200,
+            "application/json",
+            "{\"models\":[{\"slug\":\"gpt-6.1\"}]}",
+        )]);
+        remember_login(
+            "models-listing",
+            &Account {
+                refresh_token: "r".to_owned(),
+                account_id: Some("acct-9".to_owned()),
+                email: None,
+            },
+            Session {
+                access_token: "tok-9".to_owned(),
+                expires_at: now() + 3600,
+                account_id: Some("acct-9".to_owned()),
+            },
+        )
+        .unwrap();
+        let value = fetch_models(
+            "models-listing",
+            &format!("{base}/models"),
+            "http://unused.invalid/token",
+        )
+        .unwrap();
+        assert_eq!(value["models"][0]["slug"], "gpt-6.1");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let head = seen[0].0.to_ascii_lowercase();
+        assert!(head.starts_with("get /models?client_version="), "{head}");
+        assert!(head.contains("authorization: bearer tok-9"), "{head}");
+        assert!(head.contains("chatgpt-account-id: acct-9"), "{head}");
     }
 }

@@ -154,6 +154,7 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
             Value::Object(object) => {
                 let Some(id) = object
                     .get("id")
+                    .or_else(|| object.get("slug"))
                     .or_else(|| object.get("name"))
                     .and_then(Value::as_str)
                 else {
@@ -175,9 +176,17 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
         {
             continue;
         }
+        // The ChatGPT backend marks models it does not want listed as hidden.
+        if field("visibility")
+            .and_then(Value::as_str)
+            .is_some_and(|visibility| visibility == "hide")
+        {
+            continue;
+        }
         models.push(FetchedModel {
             id: id.to_owned(),
             name: field("name")
+                .or_else(|| field("display_name"))
                 .and_then(Value::as_str)
                 .map(clean)
                 .filter(|name| !name.is_empty() && name != id)
@@ -485,6 +494,19 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chatgpt_style_model_lists_use_slugs_and_skip_hidden_models() {
+        let value = serde_json::json!({"models": [
+            {"slug": "gpt-6.1", "display_name": "GPT-6.1", "visibility": "list"},
+            {"slug": "gpt-6", "display_name": "GPT-6"},
+            {"slug": "internal-test", "display_name": "Internal", "visibility": "hide"}
+        ]});
+        let models = super::parse_models(&value);
+        let ids: Vec<_> = models.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, ["gpt-6.1", "gpt-6"]);
+        assert_eq!(models[0].name, "GPT-6.1");
+    }
+
     use super::{
         FetchedModel, group_digits, merge_models, parse_models, resolve_endpoint, summarize_limits,
     };
