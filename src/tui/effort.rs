@@ -1,17 +1,14 @@
 use crate::Effort;
-use crate::tui::state::{App, LEVELS};
+use crate::tui::state::App;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 const GLYPHS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-const NAMES: [&str; 7] = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate"];
-const MAPPINGS: [&str; 7] = [
-    "low", "medium", "high", "xhigh", "max", "xhigh+wf", "max+wf",
-];
-// Rows used by everything except the bar: padding, labels, mappings, gaps, description, footer.
-const CHROME_ROWS: u16 = 9;
+// Rows used by everything except the bar: padding, labels, mappings, gaps, the workflows
+// checkbox, description, footer.
+const CHROME_ROWS: u16 = 10;
 
 pub(super) fn bar_rows(inner_height: u16) -> u16 {
     inner_height.saturating_sub(CHROME_ROWS).clamp(1, 4)
@@ -321,15 +318,17 @@ fn draw_rising_stars(frame: &mut ratatui::Frame<'_>, origin: Rect, t: f32) {
 fn idle_bar(
     index: usize,
     selected_index: usize,
+    effort: Effort,
+    selected_effort: Effort,
     width: usize,
     rows: u16,
     t: f32,
 ) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(""); rows as usize - 1];
-    let base = effort_rgb(index, 0, 1.0);
+    let base = effort_color(effort, 1.0);
     let star = ((t * 0.8 + index as f32 * 3.0) as usize) % width.max(1);
     let twinkle = 0.18 + 0.2 * wave(t * 2.2 + index as f32 * 1.7);
-    let glow = lit_color(LEVELS[selected_index], 0.5, 0.6, t);
+    let glow = lit_color(selected_effort, 0.5, 0.6, t);
     let spill_at = |column: usize| -> f32 {
         let distance = if index + 1 == selected_index {
             width - 1 - column
@@ -361,12 +360,159 @@ fn idle_bar(
     lines
 }
 
+/// The label under a column: what that choice actually does for the active model.
+fn mapping_label(
+    effort: Effort,
+    model_levels: &[Effort],
+    unlocked: bool,
+    workflows_ticked: bool,
+) -> String {
+    let base = match crate::effort_support::nearest_level(effort.model_level(), model_levels) {
+        Some(level) => effort_name(level),
+        None => "default".to_owned(),
+    };
+    if effort.is_workflow_tier() {
+        if unlocked {
+            format!("{base}+wf")
+        } else {
+            "locked".to_owned()
+        }
+    } else if workflows_ticked && matches!(effort, Effort::Low | Effort::Medium | Effort::High) {
+        format!("{base}+wf")
+    } else {
+        base
+    }
+}
+
+const WORKFLOWS_NOTE: &str = "Workflows let the model split work across subagents and have the result reviewed. They can use many times more tokens.";
+
+impl App {
+    /// The effort levels of the active model, lowest first; every level when no model is chosen
+    /// yet (nothing to hide), none when the model has no adjustable effort.
+    pub(super) fn active_model_levels(&self) -> Vec<Effort> {
+        match self.settings.model.as_deref() {
+            Some(model) => crate::effort_support::supported_levels(model, &[]),
+            None => crate::effort_support::MODEL_LEVELS.to_vec(),
+        }
+    }
+
+    /// The columns of the effort picker: the model's own levels, then the two workflow tiers
+    /// (shown even while locked, so they can be discovered).
+    pub(super) fn picker_levels(&self) -> Vec<Effort> {
+        let mut levels = self.active_model_levels();
+        levels.push(Effort::Super);
+        levels.push(Effort::Ultimate);
+        levels
+    }
+
+    /// Opens the picker on the current effort (or the nearest column the model has).
+    pub(super) fn open_effort_picker(&mut self) {
+        let levels = self.picker_levels();
+        let wanted_rank = rank_of(self.settings.effort);
+        self.picker_index = levels
+            .iter()
+            .position(|level| *level == self.settings.effort)
+            .or_else(|| {
+                levels
+                    .iter()
+                    .rposition(|level| !level.is_workflow_tier() && rank_of(*level) <= wanted_rank)
+            })
+            .unwrap_or(0);
+        self.picker_workflows = self.settings.workflows;
+        self.picker_focus_workflows = false;
+        self.picker = true;
+    }
+
+    pub(super) fn handle_effort_picker_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> anyhow::Result<()> {
+        use crossterm::event::KeyCode;
+        let levels = self.picker_levels();
+        let last = levels.len() - 1;
+        self.picker_index = self.picker_index.min(last);
+        let current = levels[self.picker_index];
+        let plain = matches!(current, Effort::Low | Effort::Medium | Effort::High);
+        match key.code {
+            KeyCode::Left => {
+                self.picker_index = self.picker_index.saturating_sub(1);
+                self.picker_focus_workflows = false;
+            }
+            KeyCode::Right => {
+                self.picker_index = (self.picker_index + 1).min(last);
+                self.picker_focus_workflows = false;
+            }
+            KeyCode::Down if plain && !self.picker_focus_workflows => {
+                if self.settings.dynamic_workflows {
+                    self.picker_focus_workflows = true;
+                } else {
+                    self.notice =
+                        "Workflows are locked. Turn on Dynamic workflows in Settings → General."
+                            .to_owned();
+                }
+            }
+            KeyCode::Down if matches!(current, Effort::XHigh | Effort::Max) => {
+                let tier = if current == Effort::XHigh {
+                    Effort::Super
+                } else {
+                    Effort::Ultimate
+                };
+                if let Some(index) = levels.iter().position(|level| *level == tier) {
+                    if self.settings.dynamic_workflows {
+                        self.picker_index = index;
+                    } else {
+                        self.notice = format!(
+                            "{} is locked. Turn on Dynamic workflows in Settings → General.",
+                            effort_name(tier)
+                        );
+                    }
+                }
+            }
+            KeyCode::Up if self.picker_focus_workflows => self.picker_focus_workflows = false,
+            KeyCode::Up if current.is_workflow_tier() => {
+                let base = current.model_level();
+                if let Some(index) = levels.iter().position(|level| *level == base) {
+                    self.picker_index = index;
+                }
+            }
+            KeyCode::Char(' ') if self.picker_focus_workflows => {
+                self.picker_workflows = !self.picker_workflows;
+            }
+            KeyCode::Enter if self.picker_focus_workflows => {
+                self.picker_workflows = !self.picker_workflows;
+            }
+            KeyCode::Enter => self.choose_effort()?,
+            KeyCode::Esc => {
+                self.picker = false;
+                self.picker_focus_workflows = false;
+                self.notice = "Effort unchanged.".to_owned();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Where a level sits among the five model levels (workflow tiers count as their base).
+fn rank_of(effort: Effort) -> usize {
+    crate::effort_support::MODEL_LEVELS
+        .iter()
+        .position(|level| *level == effort.model_level())
+        .unwrap_or(0)
+}
+
 pub(super) fn draw_effort_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     app: &App,
     animation_tick: usize,
 ) {
+    let levels = app.picker_levels();
+    let selected_index = app.picker_index.min(levels.len() - 1);
+    let selected_effort = levels[selected_index];
+    let model_levels = app.active_model_levels();
+    let unlocked = app.settings.dynamic_workflows;
+    let on_plain_level = matches!(selected_effort, Effort::Low | Effort::Medium | Effort::High);
     let t = app.launched_at.elapsed().as_secs_f32();
     let rows = bar_rows(area.height.saturating_sub(2));
     let height = (rows + CHROME_ROWS + 2).min(area.height);
@@ -385,28 +531,38 @@ pub(super) fn draw_effort_picker(
         .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    if inner.width < LEVELS.len() as u16 || inner.height == 0 {
+    if inner.width < levels.len() as u16 || inner.height == 0 {
         return;
     }
     let row = |offset: u16, rows: u16| -> Option<Rect> {
         let y = inner.y + offset;
         (y + rows <= inner.bottom()).then(|| Rect::new(inner.x, y, inner.width, rows))
     };
-
+    let count = levels.len() as u16;
     let column = |index: usize, area: Rect| {
-        let left = area.x + area.width * index as u16 / LEVELS.len() as u16;
-        let right = area.x + area.width * (index as u16 + 1) / LEVELS.len() as u16;
+        let left = area.x + area.width * index as u16 / count;
+        let right = area.x + area.width * (index as u16 + 1) / count;
         Rect::new(left, area.y, right - left, area.height)
     };
-    for index in 0..LEVELS.len() {
-        let selected = index == app.picker_index;
+    for (index, effort) in levels.iter().copied().enumerate() {
+        let selected = index == selected_index;
+        let locked = effort.is_workflow_tier() && !unlocked;
+        let ticked = selected && app.picker_workflows && on_plain_level;
         if let Some(line_area) = row(1, 1) {
-            let label = if selected {
+            let label = if selected && !locked {
                 let mut spans = vec![Span::styled("›", Style::default().fg(Color::White))];
-                spans.extend(gradient_name(LEVELS[index], true, animation_tick));
+                spans.extend(gradient_name(effort, true, animation_tick));
                 Line::from(spans)
+            } else if selected {
+                Line::from(vec![
+                    Span::styled("›", Style::default().fg(Color::White)),
+                    Span::styled(effort_label(effort), Style::default().fg(Color::Gray)),
+                ])
             } else {
-                Line::from(Span::styled(NAMES[index], Style::default().fg(Color::Gray)))
+                Line::from(Span::styled(
+                    effort_label(effort),
+                    Style::default().fg(if locked { Color::DarkGray } else { Color::Gray }),
+                ))
             };
             frame.render_widget(
                 Paragraph::new(label).alignment(Alignment::Center),
@@ -414,14 +570,19 @@ pub(super) fn draw_effort_picker(
             );
         }
         if let Some(line_area) = row(2, 1) {
-            let color = if selected {
-                lit_color(LEVELS[index], 0.5, 0.8, t)
+            let color = if ticked {
+                Color::Rgb(255, 197, 92)
+            } else if selected && !locked {
+                lit_color(effort, 0.5, 0.8, t)
             } else {
                 Color::DarkGray
             };
             frame.render_widget(
-                Paragraph::new(Span::styled(MAPPINGS[index], Style::default().fg(color)))
-                    .alignment(Alignment::Center),
+                Paragraph::new(Span::styled(
+                    mapping_label(effort, &model_levels, unlocked, ticked),
+                    Style::default().fg(color),
+                ))
+                .alignment(Alignment::Center),
                 column(index, line_area),
             );
         }
@@ -429,33 +590,84 @@ pub(super) fn draw_effort_picker(
             let cell = column(index, bar_area);
             let inner_width = cell.width.saturating_sub(2).max(1) as usize;
             let lines = if selected {
-                selected_bar(LEVELS[index], inner_width, rows, t)
+                selected_bar(effort, inner_width, rows, t)
             } else {
-                idle_bar(index, app.picker_index, inner_width, rows, t)
+                idle_bar(
+                    index,
+                    selected_index,
+                    effort,
+                    selected_effort,
+                    inner_width,
+                    rows,
+                    t,
+                )
             };
             frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), cell);
         }
     }
 
     // Ultimate is the one tier that escapes its box: stars lift off the void and leave the popup.
-    if LEVELS[app.picker_index] == Effort::Ultimate
+    if selected_effort == Effort::Ultimate
+        && unlocked
         && let Some(bar_area) = row(4, rows)
     {
-        draw_rising_stars(frame, column(app.picker_index, bar_area), t);
+        draw_rising_stars(frame, column(selected_index, bar_area), t);
     }
 
-    if let Some(description) = row(5 + rows, 2) {
+    // The workflows checkbox sits under the Low, Medium and High columns.
+    if on_plain_level && let Some(line_area) = row(5 + rows, 1) {
+        let focused = app.picker_focus_workflows;
+        let (mark, color) = if !unlocked {
+            ("[ ] Workflows (locked)", Color::DarkGray)
+        } else if app.picker_workflows {
+            ("[x] Workflows ON: more tokens", Color::Rgb(255, 197, 92))
+        } else {
+            ("[ ] Workflows", Color::Gray)
+        };
+        let style = if focused {
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            Style::default().fg(color)
+        };
         frame.render_widget(
-            Paragraph::new(LEVELS[app.picker_index].description())
+            Paragraph::new(Span::styled(format!(" {mark} "), style)).alignment(Alignment::Center),
+            line_area,
+        );
+    }
+
+    if let Some(description) = row(6 + rows, 2) {
+        let mut text = if app.picker_focus_workflows {
+            WORKFLOWS_NOTE.to_owned()
+        } else if selected_effort.is_workflow_tier() && !unlocked {
+            "Locked: turn on Dynamic workflows in Settings → General to use it.".to_owned()
+        } else {
+            selected_effort.description().to_owned()
+        };
+        if model_levels.is_empty() {
+            text.push_str(" This model has no adjustable effort levels.");
+        }
+        frame.render_widget(
+            Paragraph::new(text)
                 .style(Style::default().fg(Color::Gray))
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true }),
             description,
         );
     }
-    if let Some(footer) = row(7 + rows, 1) {
+    if let Some(footer) = row(8 + rows, 1) {
+        let hint = if app.picker_focus_workflows {
+            "Space tick   ↑ back   Enter select   Esc cancel"
+        } else if on_plain_level {
+            "←/→ move   ↓ workflows   Enter select   Esc cancel"
+        } else if matches!(selected_effort, Effort::XHigh | Effort::Max) {
+            "←/→ move   ↓ workflow tier   Enter select   Esc cancel"
+        } else {
+            "←/→ move   Enter select   Esc cancel"
+        };
         frame.render_widget(
-            Paragraph::new("←/→ move   Enter select   Esc cancel")
+            Paragraph::new(hint)
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center),
             footer,
@@ -483,8 +695,8 @@ pub(super) fn effort_style(effort: Effort, selected: bool) -> Style {
     }
 }
 
-pub(super) fn effort_rgb(index: usize, _animation_tick: usize, brightness: f32) -> Color {
-    let color = match LEVELS[index] {
+pub(super) fn effort_color(effort: Effort, brightness: f32) -> Color {
+    let color = match effort {
         Effort::Low => (137, 148, 164),
         Effort::Medium => (94, 148, 235),
         Effort::High => (65, 197, 214),
@@ -494,6 +706,11 @@ pub(super) fn effort_rgb(index: usize, _animation_tick: usize, brightness: f32) 
         Effort::Ultimate => (170, 140, 255),
     };
     scale_rgb(color, brightness)
+}
+
+/// The color of the effort at `index` in the full seven-level order.
+pub(super) fn effort_rgb(index: usize, _animation_tick: usize, brightness: f32) -> Color {
+    effort_color(crate::tui::state::LEVELS[index], brightness)
 }
 
 pub(super) fn scale_rgb(color: (u8, u8, u8), amount: f32) -> Color {
@@ -521,29 +738,17 @@ pub(super) fn blend_color(from: Color, to: Color, amount: f32) -> Color {
     Color::Rgb(blend(fr, tr), blend(fg, tg), blend(fb, tb))
 }
 
-pub(super) fn gradient_name(
-    effort: Effort,
-    selected: bool,
-    animation_tick: usize,
-) -> Vec<Span<'static>> {
-    let name = effort_label(effort).to_owned();
-    if !selected
-        || !matches!(
-            effort,
-            Effort::Max | Effort::XHigh | Effort::Super | Effort::Ultimate
-        )
-    {
-        return vec![Span::styled(name, effort_style(effort, selected))];
-    }
-    let colors: &[Color] = match effort {
+/// The colors an advanced tier's name cycles through.
+fn gradient_colors(effort: Effort) -> &'static [Color] {
+    match effort {
         Effort::Max => &[
-            Color::Red,
+            Color::Rgb(255, 85, 85),
             Color::Rgb(255, 128, 0),
-            Color::Yellow,
-            Color::Green,
-            Color::Cyan,
-            Color::Blue,
-            Color::Magenta,
+            Color::Rgb(255, 235, 90),
+            Color::Rgb(90, 220, 110),
+            Color::Rgb(80, 220, 230),
+            Color::Rgb(90, 130, 255),
+            Color::Rgb(225, 100, 225),
         ],
         Effort::XHigh => &[
             Color::Rgb(174, 203, 255),
@@ -554,7 +759,7 @@ pub(super) fn gradient_name(
         ],
         Effort::Super => &[
             Color::Rgb(255, 255, 150),
-            Color::Yellow,
+            Color::Rgb(255, 235, 90),
             Color::Rgb(255, 190, 0),
             Color::Rgb(230, 145, 0),
             Color::Rgb(255, 225, 100),
@@ -567,10 +772,24 @@ pub(super) fn gradient_name(
             Color::Rgb(150, 120, 235),
             Color::Rgb(205, 190, 255),
         ],
-        _ => unreachable!(),
-    };
+        _ => &[],
+    }
+}
 
-    name.chars()
+pub(super) fn gradient_name(
+    effort: Effort,
+    selected: bool,
+    animation_tick: usize,
+) -> Vec<Span<'static>> {
+    let colors = gradient_colors(effort);
+    if !selected || colors.is_empty() {
+        return vec![Span::styled(
+            effort_label(effort).to_owned(),
+            effort_style(effort, selected),
+        )];
+    }
+    effort_label(effort)
+        .chars()
         .enumerate()
         .map(|(index, character)| {
             Span::styled(
@@ -580,7 +799,84 @@ pub(super) fn gradient_name(
                     .add_modifier(Modifier::BOLD),
             )
         })
-        .collect::<Vec<_>>()
+        .collect()
+}
+
+/// How long the effort name in the status line shines after a change.
+pub(super) const FLASH_SECONDS: f32 = 2.0;
+/// The last part of that time is a gradual fade back to the plain color.
+const FADE_SECONDS: f32 = 1.2;
+
+/// How strongly the gradient still shows with `remaining` of the flash left: full until the
+/// fade begins, then easing smoothly down to nothing.
+pub(super) fn flash_strength(remaining: std::time::Duration) -> f32 {
+    let x = (remaining.as_secs_f32() / FADE_SECONDS).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// The tier's name with its gradient blended toward the plain color by `1 - strength`.
+pub(super) fn faded_gradient_name(
+    effort: Effort,
+    animation_tick: usize,
+    strength: f32,
+) -> Vec<Span<'static>> {
+    let colors = gradient_colors(effort);
+    let plain = effort_color(effort, 1.0);
+    // Lower-case, like the settled name, so only the colors change as it fades.
+    effort_name(effort)
+        .chars()
+        .enumerate()
+        .map(|(index, character)| {
+            let color = match colors.get((index + animation_tick) % colors.len().max(1)) {
+                Some(shining) => blend_color(plain, *shining, strength),
+                None => plain,
+            };
+            Span::styled(
+                character.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )
+        })
+        .collect()
+}
+
+/// The effort as the status line shows it: the name (shining, fading or always animated), a
+/// `+wf` tag when workflows are on, or a note when the model has no effort control.
+pub(super) fn status_effort_spans(
+    app: &App,
+    animation_tick: usize,
+    now: std::time::Instant,
+) -> Vec<Span<'static>> {
+    let effort = app.settings.effort;
+    let strength = if app.settings.effort_always_animated {
+        1.0
+    } else {
+        app.effort_flash_until.map_or(0.0, |until| {
+            flash_strength(until.saturating_duration_since(now))
+        })
+    };
+    let mut spans = if app.active_model_levels().is_empty() && !effort.is_workflow_tier() {
+        vec![Span::styled(
+            "no effort",
+            Style::default().fg(Color::DarkGray),
+        )]
+    } else if strength > 0.0 && !gradient_colors(effort).is_empty() {
+        faded_gradient_name(effort, animation_tick, strength)
+    } else {
+        let mut style = Style::default().fg(effort_color(effort, 1.0));
+        if strength > 0.0 {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        vec![Span::styled(effort_name(effort), style)]
+    };
+    if app.settings.workflows_active() && !effort.is_workflow_tier() {
+        spans.push(Span::styled(
+            " +wf",
+            Style::default()
+                .fg(Color::Rgb(255, 197, 92))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
 }
 
 pub(super) fn effort_label(effort: Effort) -> &'static str {
@@ -623,14 +919,31 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        for expected in [
-            "Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate", "xhigh+wf",
-        ] {
+        for expected in ["Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate"] {
             assert!(
                 rendered.contains(expected),
                 "missing {expected} in picker:\n{rendered}"
             );
         }
+        assert!(
+            rendered.contains("locked") && !rendered.contains("xhigh+wf"),
+            "the workflow tiers say they are locked by default:\n{rendered}"
+        );
+        app.settings.dynamic_workflows = true;
+        terminal
+            .draw(|frame| draw(frame, &app, 0))
+            .expect("draw unlocked");
+        let unlocked = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            unlocked.contains("xhigh+wf") && unlocked.contains("max+wf"),
+            "{unlocked}"
+        );
         let ordered = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate"]
             .map(|label| rendered.find(label).expect("effort label"));
         assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]));
@@ -924,6 +1237,7 @@ mod tests {
     fn star_cells_in_view(effort_index: usize) -> usize {
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
+        app.settings.dynamic_workflows = true;
         app.settings.background_animation = false;
         app.transcript.push(crate::tui::state::TranscriptEntry {
             kind: crate::tui::state::TranscriptKind::Assistant,
@@ -959,10 +1273,379 @@ mod tests {
         assert!(ultimate >= high + 3, "ultimate {ultimate}, high {high}");
     }
 
+    fn picker_app(model: Option<&str>, dynamic: bool, effort: Effort) -> App {
+        let mut settings = Settings::default();
+        settings.model = model.map(str::to_owned);
+        settings.dynamic_workflows = dynamic;
+        settings.effort = effort;
+        let mut app = App::new(settings);
+        app.trust_prompt = false;
+        app.open_effort_picker();
+        app
+    }
+
+    fn key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+    }
+
+    fn current(app: &App) -> Effort {
+        app.picker_levels()[app.picker_index]
+    }
+
+    fn screen_of(app: &App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(110, 34)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn a_model_only_offers_the_levels_it_has() {
+        let deepseek = picker_app(Some("deepseek-v4-flash"), false, Effort::High);
+        assert_eq!(deepseek.picker_levels(), [Effort::Super, Effort::Ultimate]);
+        let shown = screen_of(&deepseek);
+        for hidden in ["XHigh", "Medium", "Low "] {
+            assert!(
+                !shown.contains(hidden),
+                "{hidden} should not be offered:\n{shown}"
+            );
+        }
+        assert!(shown.contains("no adjustable effort"), "{shown}");
+        let gemini = picker_app(Some("gemini-3-pro"), false, Effort::High);
+        assert_eq!(
+            gemini.picker_levels(),
+            [Effort::Low, Effort::High, Effort::Super, Effort::Ultimate]
+        );
+        let claude = picker_app(Some("claude-opus-5-5"), false, Effort::Max);
+        assert_eq!(claude.picker_levels().len(), 7);
+        let nothing_chosen = picker_app(None, false, Effort::High);
+        assert_eq!(
+            nothing_chosen.picker_levels().len(),
+            7,
+            "nothing to hide yet"
+        );
+    }
+
+    #[test]
+    fn the_picker_opens_on_the_current_effort_or_the_nearest_column() {
+        assert_eq!(
+            current(&picker_app(Some("claude-opus-5-5"), false, Effort::XHigh)),
+            Effort::XHigh
+        );
+        // Max is not available on this model, so the picker opens on its best level.
+        let capped = picker_app(Some("gpt-6-astra"), false, Effort::Max);
+        assert_eq!(current(&capped), Effort::XHigh);
+        let low_only = picker_app(Some("gemini-3-pro"), false, Effort::Medium);
+        assert_eq!(
+            current(&low_only),
+            Effort::Low,
+            "rounds down to a level that exists"
+        );
+    }
+
+    #[test]
+    fn down_on_a_plain_level_reaches_the_workflows_checkbox_and_space_ticks_it() {
+        use crossterm::event::KeyCode;
+        let mut app = picker_app(Some("claude-opus-5-5"), true, Effort::High);
+        assert!(!app.picker_focus_workflows);
+        app.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        assert!(app.picker_focus_workflows, "the checkbox has the cursor");
+        assert!(screen_of(&app).contains("[ ] Workflows"));
+        app.handle_effort_picker_key(key(KeyCode::Char(' ')))
+            .unwrap();
+        assert!(app.picker_workflows);
+        let shown = screen_of(&app);
+        assert!(
+            shown.contains("Workflows ON") && shown.contains("high+wf"),
+            "{shown}"
+        );
+        app.handle_effort_picker_key(key(KeyCode::Up)).unwrap();
+        assert!(!app.picker_focus_workflows);
+        assert!(app.picker_workflows, "the tick is kept");
+        app.handle_effort_picker_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(app.settings.effort, Effort::High);
+        assert!(app.settings.workflows, "High now runs with workflows");
+        assert!(app.settings.workflows_active());
+    }
+
+    #[test]
+    fn moving_off_the_checkbox_with_arrows_and_confirming_applies_the_tick() {
+        use crossterm::event::KeyCode;
+        let mut app = picker_app(Some("claude-opus-5-5"), true, Effort::Medium);
+        app.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        app.handle_effort_picker_key(key(KeyCode::Enter)).unwrap(); // Enter ticks while focused
+        assert!(app.picker_workflows);
+        app.handle_effort_picker_key(key(KeyCode::Right)).unwrap();
+        assert_eq!(current(&app), Effort::High);
+        assert!(!app.picker_focus_workflows);
+        app.handle_effort_picker_key(key(KeyCode::Enter)).unwrap();
+        assert!(app.settings.workflows && app.settings.effort == Effort::High);
+    }
+
+    #[test]
+    fn a_tick_never_leaks_onto_the_higher_levels() {
+        use crossterm::event::KeyCode;
+        let mut app = picker_app(Some("claude-opus-5-5"), true, Effort::High);
+        app.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        app.handle_effort_picker_key(key(KeyCode::Char(' ')))
+            .unwrap();
+        app.handle_effort_picker_key(key(KeyCode::Up)).unwrap();
+        app.handle_effort_picker_key(key(KeyCode::Right)).unwrap(); // XHigh
+        app.handle_effort_picker_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(app.settings.effort, Effort::XHigh);
+        assert!(
+            !app.settings.workflows,
+            "XHigh has its own workflow tier: Super"
+        );
+        assert!(!app.settings.workflows_active());
+    }
+
+    #[test]
+    fn down_on_xhigh_and_max_goes_to_super_and_ultimate() {
+        use crossterm::event::KeyCode;
+        let mut app = picker_app(Some("claude-opus-5-5"), true, Effort::XHigh);
+        app.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        assert_eq!(current(&app), Effort::Super);
+        app.handle_effort_picker_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(
+            current(&app),
+            Effort::XHigh,
+            "up returns to the plain level"
+        );
+        app.handle_effort_picker_key(key(KeyCode::Right)).unwrap();
+        assert_eq!(current(&app), Effort::Max);
+        app.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        assert_eq!(current(&app), Effort::Ultimate);
+        app.handle_effort_picker_key(key(KeyCode::Up)).unwrap();
+        assert_eq!(current(&app), Effort::Max);
+    }
+
+    #[test]
+    fn while_locked_down_explains_instead_of_moving() {
+        use crossterm::event::KeyCode;
+        let mut app = picker_app(Some("claude-opus-5-5"), false, Effort::XHigh);
+        app.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        assert_eq!(current(&app), Effort::XHigh);
+        assert!(app.notice.contains("locked"), "{}", app.notice);
+        let mut plain = picker_app(Some("claude-opus-5-5"), false, Effort::High);
+        plain.handle_effort_picker_key(key(KeyCode::Down)).unwrap();
+        assert!(!plain.picker_focus_workflows, "no checkbox while locked");
+        assert!(
+            plain.notice.contains("Workflows are locked"),
+            "{}",
+            plain.notice
+        );
+        let shown = screen_of(&plain);
+        assert!(shown.contains("(locked)"), "{shown}");
+        // Entering a locked tier is refused.
+        let mut locked = picker_app(Some("claude-opus-5-5"), false, Effort::High);
+        locked.picker_index = locked.picker_levels().len() - 2; // Super
+        locked
+            .handle_effort_picker_key(key(KeyCode::Enter))
+            .unwrap();
+        assert_eq!(locked.settings.effort, Effort::High);
+        assert!(locked.notice.contains("locked"), "{}", locked.notice);
+    }
+
+    #[test]
+    fn a_model_without_levels_can_still_use_the_workflow_tiers() {
+        use crossterm::event::KeyCode;
+        let mut app = picker_app(Some("deepseek-v4-flash"), true, Effort::High);
+        app.handle_effort_picker_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(app.settings.effort, Effort::Super);
+        let shown = screen_of(&picker_app(Some("deepseek-v4-flash"), true, Effort::High));
+        assert!(shown.contains("default+wf"), "{shown}");
+    }
+
+    #[test]
+    fn a_levels_label_shows_what_it_really_runs_at() {
+        use super::mapping_label;
+        let gemini = [Effort::Low, Effort::High];
+        assert_eq!(mapping_label(Effort::Low, &gemini, true, false), "low");
+        assert_eq!(
+            mapping_label(Effort::Super, &gemini, true, false),
+            "high+wf",
+            "capped"
+        );
+        assert_eq!(
+            mapping_label(Effort::Super, &gemini, false, false),
+            "locked"
+        );
+        assert_eq!(mapping_label(Effort::High, &gemini, true, true), "high+wf");
+        assert_eq!(
+            mapping_label(Effort::XHigh, &gemini, true, true),
+            "high",
+            "no tick above High"
+        );
+        assert_eq!(mapping_label(Effort::Max, &[], true, false), "default");
+    }
+
+    #[test]
+    fn the_flash_fades_smoothly_instead_of_cutting_off() {
+        use super::{FLASH_SECONDS, flash_strength};
+        use std::time::Duration;
+        assert_eq!(flash_strength(Duration::from_secs_f32(FLASH_SECONDS)), 1.0);
+        assert_eq!(
+            flash_strength(Duration::from_secs_f32(1.2)),
+            1.0,
+            "full until the fade starts"
+        );
+        assert_eq!(flash_strength(Duration::ZERO), 0.0);
+        // Strictly decreasing through the fade, with no step bigger than a few percent.
+        let mut previous = 1.0f32;
+        for millisecond in (0..=1200).rev().step_by(10) {
+            let strength = flash_strength(Duration::from_millis(millisecond));
+            assert!(strength <= previous + 1e-6, "{millisecond}ms");
+            assert!(
+                previous - strength < 0.05,
+                "a jump of {} at {millisecond}ms",
+                previous - strength
+            );
+            previous = strength;
+        }
+    }
+
+    #[test]
+    fn the_faded_name_meets_the_plain_name_at_both_ends_without_a_snap() {
+        use super::{effort_color, faded_gradient_name, gradient_name};
+        for effort in [Effort::XHigh, Effort::Max, Effort::Super, Effort::Ultimate] {
+            let plain = Some(effort_color(effort, 1.0));
+            let faded_out = faded_gradient_name(effort, 3, 0.0);
+            assert!(
+                faded_out.iter().all(|span| span.style.fg == plain),
+                "{effort:?}: at strength 0 every letter is the plain color"
+            );
+            let full = faded_gradient_name(effort, 3, 1.0);
+            let shining = gradient_name(effort, true, 3);
+            let colors = |spans: &[ratatui::text::Span<'_>]| {
+                spans.iter().map(|span| span.style.fg).collect::<Vec<_>>()
+            };
+            assert_eq!(
+                colors(&full),
+                colors(&shining),
+                "{effort:?}: at strength 1 it is the gradient"
+            );
+            let half = faded_gradient_name(effort, 3, 0.5);
+            assert_ne!(colors(&half), colors(&full));
+            assert_ne!(colors(&half), colors(&faded_out));
+        }
+    }
+
+    fn status_text(
+        app: &App,
+        now: std::time::Instant,
+    ) -> (String, Vec<Option<ratatui::style::Color>>) {
+        let spans = super::status_effort_spans(app, 0, now);
+        (
+            spans.iter().map(|span| span.content.as_ref()).collect(),
+            spans.iter().map(|span| span.style.fg).collect(),
+        )
+    }
+
+    #[test]
+    fn the_status_line_name_shines_after_a_change_then_settles_without_a_snap() {
+        let mut app = picker_app(Some("claude-opus-5-5"), false, Effort::Max);
+        app.apply_effort(Effort::Max).unwrap();
+        let start = std::time::Instant::now();
+        let settled = status_text(&app, start + std::time::Duration::from_secs(10));
+        assert_eq!(settled.0, "max");
+        assert!(
+            settled
+                .1
+                .iter()
+                .all(|c| *c == Some(super::effort_color(Effort::Max, 1.0)))
+        );
+        let shining = status_text(&app, start);
+        assert_eq!(shining.0, "max");
+        let distinct = shining
+            .1
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert!(
+            distinct > 1,
+            "the letters shine in different colors at the start"
+        );
+        // Partway through the fade the letters are closer to the plain color than at the start.
+        let distance = |colors: &[Option<ratatui::style::Color>]| -> u32 {
+            let plain = super::effort_color(Effort::Max, 1.0);
+            colors
+                .iter()
+                .map(|c| match (c, plain) {
+                    (
+                        Some(ratatui::style::Color::Rgb(r, g, b)),
+                        ratatui::style::Color::Rgb(pr, pg, pb),
+                    ) => {
+                        u32::from(r.abs_diff(pr))
+                            + u32::from(g.abs_diff(pg))
+                            + u32::from(b.abs_diff(pb))
+                    }
+                    _ => 0,
+                })
+                .sum()
+        };
+        let midway = status_text(
+            &app,
+            app.effort_flash_until.unwrap() - std::time::Duration::from_millis(500),
+        );
+        assert!(distance(&midway.1) < distance(&shining.1));
+        assert!(distance(&midway.1) > 0, "not settled yet");
+    }
+
+    #[test]
+    fn always_animated_keeps_the_gradient_running() {
+        let mut app = picker_app(Some("claude-opus-5-5"), false, Effort::Max);
+        app.settings.effort_always_animated = true;
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let (text, colors) = status_text(&app, later);
+        assert_eq!(text, "max");
+        assert!(
+            colors
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 1
+        );
+        let plain_effort = picker_app(Some("claude-opus-5-5"), false, Effort::Low);
+        let mut animated = picker_app(Some("claude-opus-5-5"), false, Effort::Low);
+        animated.settings.effort_always_animated = true;
+        assert_eq!(
+            status_text(&plain_effort, later).1,
+            status_text(&animated, later).1,
+            "levels without a gradient stay plain"
+        );
+    }
+
+    #[test]
+    fn the_status_line_marks_workflows_and_models_without_effort() {
+        let mut app = picker_app(Some("claude-opus-5-5"), true, Effort::High);
+        app.settings.workflows = true;
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        assert_eq!(status_text(&app, later).0, "high +wf");
+        app.settings.workflows = false;
+        assert_eq!(status_text(&app, later).0, "high");
+        app.settings.dynamic_workflows = false;
+        app.settings.workflows = true;
+        assert_eq!(
+            status_text(&app, later).0,
+            "high",
+            "locked workflows are not shown as on"
+        );
+        let none = picker_app(Some("deepseek-v4-flash"), false, Effort::High);
+        assert_eq!(status_text(&none, later).0, "no effort");
+        let tier = picker_app(Some("deepseek-v4-flash"), true, Effort::Super);
+        assert_eq!(status_text(&tier, later).0, "super");
+    }
+
     #[test]
     fn bar_uses_more_rows_when_space_allows() {
         assert_eq!(bar_rows(30), 4);
-        assert_eq!(bar_rows(11), 2);
+        assert_eq!(bar_rows(12), 2);
         assert_eq!(bar_rows(4), 1);
         assert_eq!(bar_rows(0), 1);
     }

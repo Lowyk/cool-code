@@ -34,6 +34,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
 | `src/endpoints.rs` | Provider models and limits endpoints: same-host URL validation, tolerant model-list parsing and merging, usage summaries, and the redirect-refusing fetch |
 | `src/stats.rs` | Opt-in usage recording to `~/.coolcode/stats.jsonl` (metadata only), the pure summary engine (totals, favorite model, streaks, peak hour, heatmap grid), and the fun size comparison |
+| `src/effort_support.rs` | Which effort levels each model has, how a level becomes a request parameter per API (with a remembered fallback when a provider rejects it), and the lock on the workflow tiers |
 | `src/projects.rs` | Per-project choices in `~/.coolcode/projects.toml`: trusted folders and the CLAUDE.md / AGENTS.md switches; nothing is stored inside a project, so a cloned repository cannot trust itself |
 | `src/session.rs` | Saved conversations (opt-in): one file per session under `~/.coolcode/sessions/` (header line plus body, written atomically) |
 | `src/tools.rs` | Workspace tools, edit and create proposals |
