@@ -192,7 +192,7 @@ pub(super) fn model_author_matches(author: &str, model_id: &str) -> bool {
     }
 }
 
-pub(super) fn selected_model_name(settings: &Settings, model_id: &str) -> String {
+pub(crate) fn selected_model_name(settings: &Settings, model_id: &str) -> String {
     if let Some(profile) = settings.active_provider_id.as_deref().and_then(|active| {
         settings
             .providers
