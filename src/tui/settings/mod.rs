@@ -7,7 +7,7 @@ pub(super) mod sync;
 
 use crate::tui::settings::auto_switch::draw_auto_switch;
 use crate::tui::settings::general::draw_general;
-use crate::tui::settings::models::{ModelEdit, draw_models, model_rows};
+use crate::tui::settings::models::{ModelEdit, draw_models};
 use crate::tui::settings::privacy::{
     draw_privacy, draw_privacy_sub, privacy_confirm_question, privacy_sub_hint,
 };
@@ -73,6 +73,7 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) row: usize,
     pub(in crate::tui) confirm_delete: bool,
     pub(in crate::tui) model_edit: Option<ModelEdit>,
+    pub(in crate::tui) tree: crate::tui::widgets::tree::TreeState,
     pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
 }
 
@@ -84,6 +85,7 @@ impl SettingsView {
             row: 0,
             confirm_delete: false,
             model_edit: None,
+            tree: crate::tui::widgets::tree::TreeState::default(),
             privacy_sub: None,
         }
     }
@@ -256,12 +258,12 @@ fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView)
 fn confirm_question(app: &App, view: &SettingsView) -> String {
     match view.section {
         Section::Models => {
-            let rows = model_rows(&app.settings);
-            let id = rows
-                .get(view.row.min(rows.len().saturating_sub(1)))
-                .map(|(_, (provider, model))| {
-                    app.settings.providers[*provider].models[*model].id.clone()
-                })
+            let rows = view.tree.rows(&app.settings, false);
+            let id = view
+                .tree
+                .current(&rows)
+                .and_then(|row| row.target.as_ref())
+                .map(|target| target.id.clone())
                 .unwrap_or_default();
             format!("Remove {id}? y/n")
         }

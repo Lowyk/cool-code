@@ -45,37 +45,11 @@ impl ListState {
             .collect()
     }
 
-    pub(in crate::tui) fn move_by(&mut self, items: &[ListItem], delta: isize) {
-        let count = self.choices(items).len();
-        if count == 0 {
-            self.selected = 0;
-            return;
-        }
-        let current = self.selected.min(count - 1) as isize;
-        self.selected = (current + delta).clamp(0, count as isize - 1) as usize;
-    }
-
-    pub(in crate::tui) fn push_filter(&mut self, _items: &[ListItem], c: char) {
-        self.filter.push(c);
-        self.selected = 0;
-    }
-
-    pub(in crate::tui) fn pop_filter(&mut self, _items: &[ListItem]) {
-        self.filter.pop();
-        self.selected = 0;
-    }
-
     pub(in crate::tui) fn current(&self, items: &[ListItem]) -> Option<usize> {
         let choices = self.choices(items);
         choices
             .get(self.selected.min(choices.len().saturating_sub(1)))
             .copied()
-    }
-
-    pub(in crate::tui) fn select_item(&mut self, items: &[ListItem], index: usize) {
-        if let Some(position) = self.choices(items).iter().position(|i| *i == index) {
-            self.selected = position;
-        }
     }
 }
 
@@ -204,46 +178,12 @@ mod tests {
     }
 
     #[test]
-    fn selection_skips_unselectable_and_clamps_after_filter() {
-        let mut items = vec![
-            item("alpha", "", None),
-            item("beta", "", None),
-            item("gamma", "", None),
-        ];
-        items[1].selectable = false;
-        let mut state = ListState::default();
-        state.move_by(&items, 1);
-        assert_eq!(state.current(&items), Some(2));
-        state.move_by(&items, 5);
-        assert_eq!(state.current(&items), Some(2));
-        state.move_by(&items, -1);
-        assert_eq!(state.current(&items), Some(0));
-        state.move_by(&items, 1);
-        state.push_filter(&items, 'a');
-        state.push_filter(&items, 'l');
-        assert_eq!(state.current(&items), Some(0));
-        state.pop_filter(&items);
-        state.pop_filter(&items);
-        assert_eq!(state.filter, "");
-    }
-
-    #[test]
-    fn filter_with_no_matches_has_no_current_item() {
-        let items = vec![item("alpha", "", None)];
-        let mut state = ListState::default();
-        state.push_filter(&items, 'z');
-        assert_eq!(state.current(&items), None);
-        state.move_by(&items, 1);
-        assert_eq!(state.current(&items), None);
-    }
-
-    #[test]
     fn draw_list_keeps_selection_visible_when_scrolled() {
         let items = (0..20)
             .map(|index| item(&format!("item-{index:02}"), "", None))
             .collect::<Vec<_>>();
         let mut state = ListState::default();
-        state.move_by(&items, 15);
+        state.selected = 15;
         let screen = rendered(&items, &state, 30, 5);
         assert!(screen.contains("item-15"), "{screen}");
         assert!(!screen.contains("item-00"), "{screen}");
@@ -264,7 +204,7 @@ mod tests {
         assert!(screen.contains('▸'), "{screen}");
 
         let mut filtered = ListState::default();
-        filtered.push_filter(&items, 'z');
+        filtered.filter = "z".to_owned();
         let empty = rendered(&items, &filtered, 40, 8);
         assert!(empty.contains("No matches"), "{empty}");
     }
