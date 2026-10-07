@@ -75,6 +75,11 @@ fn endpoint_is_trusted(profile: &crate::ProviderProfile, url: &str) -> bool {
     crate::endpoints::resolve_endpoint(base, url).is_ok_and(|resolved| resolved == url)
 }
 
+/// Whether the provider's preset says it works without an API key (a local server).
+fn key_is_optional(profile: &crate::ProviderProfile) -> bool {
+    crate::tui::state::PROVIDER_PRESETS[crate::tui::forms::preset_for_profile(profile)].key_optional
+}
+
 impl App {
     pub(in crate::tui) fn spawn_task(&mut self, job: impl FnOnce() -> TaskResult + Send + 'static) {
         #[cfg(test)]
@@ -147,7 +152,9 @@ impl App {
             return;
         }
         // A save-triggered fetch (promote) is automatic; only a manual refresh may use the env key.
-        let Some(key) = load_key(&id, !promote) else {
+        let Some(key) =
+            load_key(&id, !promote).or_else(|| key_is_optional(profile).then(String::new))
+        else {
             self.notice = format!("Add an API key for {name} to load its models.");
             return;
         };
@@ -228,7 +235,8 @@ impl App {
         }
         // Loading usage when a provider is selected is automatic; only a forced refresh (u) may
         // use the env key.
-        let Some(key) = load_key(&id, force) else {
+        let Some(key) = load_key(&id, force).or_else(|| key_is_optional(profile).then(String::new))
+        else {
             self.limits.insert(
                 id,
                 LimitsEntry {
@@ -317,7 +325,13 @@ impl App {
                     return;
                 }
                 // Only a stored key counts: the env key must never enable a provider.
-                let has_key = load_key(&provider_id, false).is_some();
+                let has_key = load_key(&provider_id, false).is_some()
+                    || self
+                        .settings
+                        .providers
+                        .iter()
+                        .find(|profile| profile.id == provider_id)
+                        .is_some_and(key_is_optional);
                 self.apply_models_result(&provider_id, promote, has_key, result);
             }
         }

@@ -221,6 +221,44 @@ pub(crate) fn parse_listed_models(value: &Value) -> Vec<FetchedModel> {
     models
 }
 
+/// DeepSeek's `/user/balance` reply: one entry per currency, with the amounts as strings.
+fn deepseek_balance(value: &Value) -> Option<Vec<LimitLine>> {
+    let entries = value.get("balance_infos")?.as_array()?;
+    let available = value
+        .get("is_available")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let mut lines: Vec<LimitLine> = entries
+        .iter()
+        .filter_map(|entry| {
+            let total = entry.get("total_balance")?.as_str()?;
+            let currency = entry.get("currency")?.as_str()?;
+            let granted = entry
+                .get("granted_balance")
+                .and_then(Value::as_str)
+                .filter(|granted| granted.parse::<f64>().is_ok_and(|amount| amount > 0.0));
+            Some(LimitLine {
+                label: "Balance".to_owned(),
+                value: match granted {
+                    Some(granted) => format!("{total} {currency} ({granted} granted)"),
+                    None => format!("{total} {currency}"),
+                },
+                remaining: None,
+                balance_tokens: None,
+            })
+        })
+        .collect();
+    if !available {
+        lines.push(LimitLine {
+            label: "Status".to_owned(),
+            value: "balance too low for API calls".to_owned(),
+            remaining: None,
+            balance_tokens: None,
+        });
+    }
+    Some(lines)
+}
+
 /// OpenRouter's `/credits` reply: `{"data": {"total_credits": 10.0, "total_usage": 3.2}}`.
 fn openrouter_credits(value: &Value) -> Option<LimitLine> {
     let total = value.pointer("/data/total_credits")?.as_f64()?;
@@ -418,6 +456,9 @@ pub(crate) fn summarize_limits(value: &Value) -> Vec<LimitLine> {
     if let Some(credits) = openrouter_credits(value) {
         return vec![credits];
     }
+    if let Some(balance) = deepseek_balance(value) {
+        return balance;
+    }
     let line = |label: &str, value: String, remaining: Option<f32>| LimitLine {
         label: label.to_owned(),
         value,
@@ -575,10 +616,11 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("creating HTTP client")?;
-    let response = client
-        .get(url)
-        .bearer_auth(api_key)
-        .header("Accept", "application/json")
+    let mut request = client.get(url).header("Accept", "application/json");
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
         .send()
         // reqwest errors print the request URL, which could carry a secret in its query.
         .map_err(reqwest::Error::without_url)
@@ -609,6 +651,23 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deepseek_balances_list_each_currency_and_flag_an_empty_account() {
+        let value = serde_json::json!({"is_available": true, "balance_infos": [
+            {"currency": "CNY", "total_balance": "110.00", "granted_balance": "10.00", "topped_up_balance": "100.00"},
+            {"currency": "USD", "total_balance": "2.50", "granted_balance": "0.00", "topped_up_balance": "2.50"}
+        ]});
+        let lines = super::summarize_limits(&value);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].value, "110.00 CNY (10.00 granted)");
+        assert_eq!(lines[1].value, "2.50 USD");
+        let empty = serde_json::json!({"is_available": false, "balance_infos": [
+            {"currency": "CNY", "total_balance": "0.00", "granted_balance": "0.00", "topped_up_balance": "0.00"}
+        ]});
+        let lines = super::summarize_limits(&empty);
+        assert_eq!(lines.last().unwrap().value, "balance too low for API calls");
+    }
+
     #[test]
     fn a_chatgpt_account_does_not_list_models_the_backend_marks_hidden() {
         let value = serde_json::json!({"models": [

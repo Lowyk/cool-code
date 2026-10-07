@@ -184,9 +184,11 @@ pub(super) struct ProviderPreset {
     pub(super) limits_path: Option<&'static str>,
     /// Keys for this provider always start with this; used to catch pasted keys that are mangled.
     pub(super) key_prefix: Option<&'static str>,
+    /// Local servers need no key.
+    pub(super) key_optional: bool,
 }
 
-pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
+pub(super) const PROVIDER_PRESETS: [ProviderPreset; 14] = [
     ProviderPreset {
         id: "openai",
         label: "OpenAI (ChatGPT)",
@@ -197,6 +199,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: None,
         limits_path: None,
         key_prefix: None,
+        key_optional: false,
     },
     ProviderPreset {
         id: "anthropic",
@@ -208,6 +211,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: None,
         limits_path: None,
         key_prefix: None,
+        key_optional: false,
     },
     ProviderPreset {
         id: "google",
@@ -223,6 +227,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: None,
         limits_path: None,
         key_prefix: None,
+        key_optional: false,
     },
     ProviderPreset {
         id: "openrouter",
@@ -234,6 +239,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: None,
         limits_path: Some("credits"),
         key_prefix: None,
+        key_optional: false,
     },
     ProviderPreset {
         id: "multiai",
@@ -245,6 +251,91 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: Some("models"),
         limits_path: Some("subscription/limits"),
         key_prefix: Some("ma-live-"),
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "kimi-code",
+        label: "Kimi Code (membership)",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.kimi.com/coding/v1"),
+        custom: false,
+        models: &[("kimi-for-coding", "")],
+        models_path: Some("models"),
+        limits_path: None,
+        key_prefix: None,
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "moonshot",
+        label: "Moonshot (Kimi API)",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.moonshot.ai/v1"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: None,
+        key_prefix: None,
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "zai-coding",
+        label: "Z.ai GLM Coding Plan",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.z.ai/api/coding/paas/v4"),
+        custom: false,
+        models: &[("glm-5.2", "")],
+        models_path: None,
+        limits_path: None,
+        key_prefix: None,
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "deepseek",
+        label: "DeepSeek",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.deepseek.com"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: Some("user/balance"),
+        key_prefix: None,
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "mistral",
+        label: "Mistral",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.mistral.ai/v1"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: None,
+        key_prefix: None,
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "xai",
+        label: "xAI (Grok)",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.x.ai/v1"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: None,
+        key_prefix: None,
+        key_optional: false,
+    },
+    ProviderPreset {
+        id: "ollama",
+        label: "Ollama (local)",
+        adapter: "openai-compatible",
+        base_url: Some("http://localhost:11434/v1"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: None,
+        key_prefix: None,
+        key_optional: true,
     },
     ProviderPreset {
         id: "anthropic-custom",
@@ -256,6 +347,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: None,
         limits_path: None,
         key_prefix: None,
+        key_optional: false,
     },
     ProviderPreset {
         id: "openai-custom",
@@ -267,6 +359,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models_path: None,
         limits_path: None,
         key_prefix: None,
+        key_optional: false,
     },
 ];
 

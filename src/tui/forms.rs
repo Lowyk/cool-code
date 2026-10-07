@@ -368,7 +368,7 @@ impl App {
             .map(secrets::load)
             .transpose()?
             .flatten();
-        if !as_draft && api_key.is_empty() && existing_key.is_none() {
+        if !as_draft && api_key.is_empty() && existing_key.is_none() && !preset.key_optional {
             self.notice = "Add an API key, or save this provider as a draft.".to_owned();
             return Ok(());
         }
@@ -1360,5 +1360,87 @@ mod tests {
         assert!(rendered.contains("API Key"));
         assert!(rendered.contains("••••••••••••••••••"));
         assert!(!rendered.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn the_new_presets_point_at_their_documented_endpoints() {
+        let preset = |id: &str| &PROVIDER_PRESETS[preset_index(id)];
+        let resolve = |preset: &crate::tui::state::ProviderPreset, path: &str| {
+            crate::endpoints::resolve_endpoint(preset.base_url.unwrap(), path).unwrap()
+        };
+        assert_eq!(
+            preset("kimi-code").base_url,
+            Some("https://api.kimi.com/coding/v1")
+        );
+        assert_eq!(
+            preset("moonshot").base_url,
+            Some("https://api.moonshot.ai/v1")
+        );
+        assert_eq!(
+            preset("zai-coding").base_url,
+            Some("https://api.z.ai/api/coding/paas/v4")
+        );
+        let deepseek = preset("deepseek");
+        assert_eq!(
+            resolve(deepseek, deepseek.models_path.unwrap()),
+            "https://api.deepseek.com/models"
+        );
+        assert_eq!(
+            resolve(deepseek, deepseek.limits_path.unwrap()),
+            "https://api.deepseek.com/user/balance"
+        );
+        assert_eq!(preset("xai").base_url, Some("https://api.x.ai/v1"));
+        assert_eq!(
+            preset("mistral").base_url,
+            Some("https://api.mistral.ai/v1")
+        );
+        for id in [
+            "kimi-code",
+            "moonshot",
+            "zai-coding",
+            "deepseek",
+            "mistral",
+            "xai",
+            "ollama",
+        ] {
+            let preset = preset(id);
+            assert!(
+                !preset.custom && preset.adapter == "openai-compatible",
+                "{id}"
+            );
+            assert_eq!(preset.key_optional, id == "ollama", "{id}");
+        }
+        // Providers whose model listing is not documented start with a documented model.
+        assert_eq!(preset("kimi-code").models.len(), 1);
+        assert!(
+            preset("zai-coding").models_path.is_none() && !preset("zai-coding").models.is_empty()
+        );
+    }
+
+    #[test]
+    fn a_local_ollama_provider_saves_without_a_key_and_loads_its_models() {
+        let mut app = chosen_form("ollama");
+        app.save_provider(false).expect("save");
+        let profile = &app.settings.providers[0];
+        assert_eq!(profile.name, "Ollama (local)");
+        assert_eq!(
+            profile.base_url.as_deref(),
+            Some("http://localhost:11434/v1")
+        );
+        assert!(profile.draft, "enabled once its models arrive");
+        assert_eq!(
+            app.spawned_tasks, 1,
+            "it asks the local server for its models without a key"
+        );
+        let mut hosted = chosen_form("deepseek");
+        hosted.save_provider(false).expect("save");
+        assert!(hosted.settings.providers[0].draft);
+        let mut needs_key = chosen_form("kimi-code");
+        needs_key.save_provider(false).expect("save");
+        assert!(
+            needs_key.settings.providers.is_empty(),
+            "a hosted provider still needs its key"
+        );
+        assert!(needs_key.notice.contains("API key"), "{}", needs_key.notice);
     }
 }
