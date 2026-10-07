@@ -89,12 +89,17 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
         if preset.custom {
             render_field("Base URL", &form.base_url, "", form.focus == 1, false);
         }
-        let key_label = if form.existing_id.is_some() {
-            "API Key · leave blank to keep the saved key"
-        } else {
-            "API Key · kept in OS credential store"
+        let key_label = match (form.existing_id.is_some(), preset.key_prefix) {
+            (true, Some(prefix)) => {
+                format!("API Key · starts with {prefix} · leave blank to keep the saved key")
+            }
+            (true, None) => "API Key · leave blank to keep the saved key".to_owned(),
+            (false, Some(prefix)) => {
+                format!("API Key · starts with {prefix} · kept in OS credential store")
+            }
+            (false, None) => "API Key · kept in OS credential store".to_owned(),
         };
-        render_field(key_label, &form.api_key, "", form.focus == key_focus, true);
+        render_field(&key_label, &form.api_key, "", form.focus == key_focus, true);
         if has_endpoint_fields(form) {
             render_field(
                 "Models endpoint · optional",
