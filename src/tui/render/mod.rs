@@ -397,6 +397,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
     ];
     status_spans.extend(effort_spans);
+    if let Some((text, urgency)) = app.context_status() {
+        let color = match urgency {
+            0 => Color::DarkGray,
+            1 => Color::Rgb(255, 197, 92),
+            _ => Color::Rgb(235, 80, 80),
+        };
+        status_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+        status_spans.push(Span::styled(text, Style::default().fg(color)));
+    }
     if let Some(warning) = app.usage_warning.as_ref() {
         let color = match warning.severity {
             crate::tui::usage_warnings::Severity::Low => Color::Rgb(255, 197, 92),

@@ -13,6 +13,15 @@ pub(crate) enum PendingEvent {
     ToolStarted(String),
     ToolAction(String),
     ConversationMessage(provider::ChatMessage),
+    /// The older part of the conversation was replaced by a summary: the first `replaced`
+    /// messages (not counting the system prompt) become `with`.
+    Compacted {
+        replaced: usize,
+        with: Vec<provider::ChatMessage>,
+        summary: String,
+    },
+    /// A `/compact` finished (or failed); there is no answer to show.
+    CompactFinished(std::result::Result<(), String>),
     ApprovalRequest(ToolApproval),
     Finished(std::result::Result<provider::Completion, String>),
 }
@@ -205,9 +214,24 @@ pub(crate) fn run_loop(
         on_event: &forward,
         cancel,
     };
+    // Condensing again is pointless once it stopped helping, and a provider's "too large" is
+    // answered at most twice in one turn.
+    let mut compaction_helps = true;
+    let mut overflow_retries = 0usize;
     for _ in 0..=max_rounds {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             bail!("cancelled");
+        }
+        if compaction_helps && crate::context::should_compact(settings, &messages) {
+            match crate::context::compact(completer, &messages, &stream) {
+                Ok(compaction) => {
+                    compaction_helps = compaction.tokens_after * 10 < compaction.tokens_before * 9;
+                    announce_compaction(events, &compaction);
+                    messages = compaction.messages;
+                }
+                // A failed summary must not stop the turn; the request is simply sent as is.
+                Err(_) => compaction_helps = false,
+            }
         }
         *tally.borrow_mut() = Tally::default();
         let started_ts = std::time::SystemTime::now()
@@ -225,6 +249,16 @@ pub(crate) fn run_loop(
             message_chars(&messages),
             cancel,
         );
+        if let Err(error) = &result
+            && overflow_retries < 2
+            && crate::context::is_context_overflow(&format!("{error:#}"))
+            && let Ok(compaction) = crate::context::compact(completer, &messages, &stream)
+        {
+            overflow_retries += 1;
+            announce_compaction(events, &compaction);
+            messages = compaction.messages;
+            continue;
+        }
         let mut completion = result?;
         if completion.tool_calls.is_empty() {
             if let Some(report) = flow.review_after_final(
@@ -335,6 +369,18 @@ pub(crate) fn run_loop(
         }
     }
     bail!(round_limit_message(max_rounds))
+}
+
+/// Tells the interface that older messages were replaced, so it keeps the same conversation.
+pub(crate) fn announce_compaction(
+    events: &mpsc::Sender<PendingEvent>,
+    compaction: &crate::context::Compaction,
+) {
+    let _ = events.send(PendingEvent::Compacted {
+        replaced: compaction.replaced,
+        with: compaction.with.clone(),
+        summary: crate::context::describe(compaction),
+    });
 }
 
 /// Prefixes an approval title with the subagent that asked, so the user can tell who is acting.
@@ -893,5 +939,231 @@ mod tests {
         assert!(message.contains("40"), "{message}");
         assert!(message.contains("continue"), "{message}");
         assert!(message.contains("max_tool_rounds"), "{message}");
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+    use crate::provider::{ChatMessage, Completion};
+    use crate::workflow::Completer;
+    use crate::{ModelInfo, ProviderProfile};
+    use std::sync::Mutex;
+
+    type Script = Box<dyn Fn(&[ChatMessage]) -> Result<Completion> + Send + Sync>;
+
+    /// A model whose replies the test writes, remembering every request it got.
+    struct Model {
+        script: Script,
+        requests: Mutex<Vec<Vec<ChatMessage>>>,
+    }
+
+    impl Model {
+        fn new(
+            script: impl Fn(&[ChatMessage]) -> Result<Completion> + Send + Sync + 'static,
+        ) -> Model {
+            Model {
+                script: Box::new(script),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn asked(&self) -> Vec<Vec<ChatMessage>> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Completer for Model {
+        fn complete(
+            &self,
+            messages: &[ChatMessage],
+            _tools: ToolSet,
+            _stream: &Stream<'_>,
+        ) -> Result<Completion> {
+            self.requests.lock().unwrap().push(messages.to_vec());
+            (self.script)(messages)
+        }
+    }
+
+    fn say(text: &str) -> Result<Completion> {
+        Ok(Completion {
+            text: text.to_owned(),
+            provider_id: None,
+            model_id: "m".to_owned(),
+            failed_over: false,
+            tool_calls: Vec::new(),
+        })
+    }
+
+    fn is_summary_request(messages: &[ChatMessage]) -> bool {
+        messages
+            .first()
+            .is_some_and(|message| message.display.starts_with("You are condensing"))
+    }
+
+    fn history() -> Vec<ChatMessage> {
+        let big = "z".repeat(10_000);
+        let mut messages = vec![ChatMessage::system("sys".to_owned())];
+        for turn in 0..4 {
+            let question = format!("q{turn} {big}");
+            messages.push(ChatMessage::user_with_images(
+                question.clone(),
+                question,
+                Vec::new(),
+            ));
+            messages.push(ChatMessage::assistant(format!("a{turn} {big}")));
+        }
+        messages.push(ChatMessage::user_with_images(
+            "latest question".to_owned(),
+            "latest question".to_owned(),
+            Vec::new(),
+        ));
+        messages
+    }
+
+    fn settings_with_window(window: Option<u64>) -> Settings {
+        let mut settings = Settings::default();
+        let mut profile = ProviderProfile {
+            id: "p".to_owned(),
+            ..Default::default()
+        };
+        if let Some(window) = window {
+            profile.model_info.insert(
+                "m".to_owned(),
+                ModelInfo {
+                    context: Some(window),
+                    ..Default::default()
+                },
+            );
+        }
+        settings.providers = vec![profile];
+        settings.active_provider_id = Some("p".to_owned());
+        settings.model = Some("m".to_owned());
+        settings
+    }
+
+    /// Runs one turn and returns the answer, and the compactions announced along the way.
+    fn run(model: &Model, settings: &Settings) -> (Result<Completion>, Vec<(usize, String)>) {
+        let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let result = run_loop(
+            model,
+            settings,
+            history(),
+            std::path::Path::new("."),
+            false,
+            &sender,
+            &cancel,
+        );
+        drop(sender);
+        let compactions = receiver
+            .try_iter()
+            .filter_map(|event| match event {
+                PendingEvent::Compacted {
+                    replaced, summary, ..
+                } => Some((replaced, summary)),
+                _ => None,
+            })
+            .collect();
+        (result, compactions)
+    }
+
+    #[test]
+    fn a_conversation_near_the_window_is_condensed_before_the_request_is_sent() {
+        let model = Model::new(|messages| {
+            if is_summary_request(messages) {
+                say("BRIEFING of the earlier work")
+            } else {
+                say("done")
+            }
+        });
+        let (result, compactions) = run(&model, &settings_with_window(Some(10_000)));
+        assert_eq!(result.unwrap().text, "done");
+        assert_eq!(compactions.len(), 1, "{compactions:?}");
+        assert!(compactions[0].0 > 0);
+        let asked = model.asked();
+        assert_eq!(asked.len(), 2, "one request to summarize, one real one");
+        let real = &asked[1];
+        assert!(
+            real.iter()
+                .any(|message| message.display.contains("BRIEFING")),
+            "the model sees the summary"
+        );
+        assert!(
+            real.last().unwrap().display == "latest question",
+            "the newest message is untouched"
+        );
+        assert!(real.len() < history().len(), "the request got shorter");
+    }
+
+    #[test]
+    fn nothing_is_condensed_while_there_is_plenty_of_room_or_the_window_is_unknown() {
+        for window in [Some(1_000_000), None] {
+            let model = Model::new(|_| say("done"));
+            let (result, compactions) = run(&model, &settings_with_window(window));
+            assert_eq!(result.unwrap().text, "done");
+            assert!(compactions.is_empty(), "{window:?}");
+            assert_eq!(model.asked().len(), 1);
+        }
+        let mut off = settings_with_window(Some(10_000));
+        off.auto_compact = false;
+        let model = Model::new(|_| say("done"));
+        let (_, compactions) = run(&model, &off);
+        assert!(compactions.is_empty(), "switched off");
+    }
+
+    #[test]
+    fn a_provider_saying_the_request_is_too_large_gets_a_condensed_one() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let model = Model::new(move |messages| {
+            if is_summary_request(messages) {
+                return say("SHORT BRIEFING");
+            }
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                anyhow::bail!("This model's maximum context length is 128000 tokens");
+            }
+            say("answered after condensing")
+        });
+        // The window is unknown, so nothing was condensed in advance.
+        let (result, compactions) = run(&model, &settings_with_window(None));
+        assert_eq!(result.unwrap().text, "answered after condensing");
+        assert_eq!(compactions.len(), 1);
+        let asked = model.asked();
+        assert!(
+            asked
+                .last()
+                .unwrap()
+                .iter()
+                .any(|m| m.display.contains("SHORT BRIEFING"))
+        );
+    }
+
+    #[test]
+    fn other_errors_are_not_treated_as_too_large() {
+        let model = Model::new(|_| anyhow::bail!("invalid API key"));
+        let (result, compactions) = run(&model, &settings_with_window(None));
+        assert!(format!("{:#}", result.unwrap_err()).contains("invalid API key"));
+        assert!(compactions.is_empty());
+        assert_eq!(model.asked().len(), 1, "no summary was attempted");
+    }
+
+    #[test]
+    fn a_failed_summary_never_stops_the_turn() {
+        let model = Model::new(|messages| {
+            if is_summary_request(messages) {
+                anyhow::bail!("summarizer is down")
+            }
+            say("answered anyway")
+        });
+        let (result, compactions) = run(&model, &settings_with_window(Some(10_000)));
+        assert_eq!(result.unwrap().text, "answered anyway");
+        assert!(compactions.is_empty());
+        let asked = model.asked();
+        assert_eq!(
+            asked.len(),
+            2,
+            "tried once, then sent the request as it was"
+        );
+        assert_eq!(asked[1].len(), history().len());
     }
 }

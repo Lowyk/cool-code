@@ -87,6 +87,9 @@ pub(super) struct App {
     pub(super) announced_warnings: std::collections::HashSet<String>,
     /// The largest balance seen per provider, to judge a shrinking balance against.
     pub(super) peak_balances: std::collections::HashMap<String, u64>,
+    /// (messages, length of the last one, estimated tokens): the conversation's size, recomputed
+    /// only when the conversation changes.
+    pub(super) context_cache: std::cell::Cell<(usize, usize, u64)>,
     pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
     pub(super) usage_view: Option<crate::tui::usage_view::UsageView>,
     #[cfg(test)]
@@ -455,6 +458,7 @@ impl App {
             limits: std::collections::HashMap::new(),
             models_loading: std::collections::HashSet::new(),
             key_shapes: std::collections::HashMap::new(),
+            context_cache: std::cell::Cell::new((usize::MAX, 0, 0)),
             stats_view: None,
             usage_view: None,
             #[cfg(test)]
@@ -511,6 +515,48 @@ impl App {
         }
         self.settings.motion_prompt_answered = true;
         write_settings(&self.settings)
+    }
+
+    /// How full the model's context is: the status-line text and how urgent it is (0 calm, 1
+    /// getting full, 2 nearly full). `None` while the conversation is empty.
+    pub(super) fn context_status(&self) -> Option<(String, u8)> {
+        if self.messages.is_empty() {
+            return None;
+        }
+        let last = self
+            .messages
+            .last()
+            .map_or(0, |message| message.content.to_string().len());
+        let (count, cached_last, cached) = self.context_cache.get();
+        let used = if count == self.messages.len() && cached_last == last {
+            cached
+        } else {
+            let tokens = crate::context::estimate_tokens(&self.messages)
+                + crate::context::SYSTEM_PROMPT_TOKENS;
+            self.context_cache.set((self.messages.len(), last, tokens));
+            tokens
+        };
+        let text = match crate::context::window_tokens(&self.settings) {
+            Some(window) => {
+                let urgency = if used * 100 >= window * 95 {
+                    2
+                } else if used * 100 >= window * crate::context::COMPACT_AT_PERCENT {
+                    1
+                } else {
+                    0
+                };
+                return Some((
+                    format!(
+                        "ctx {}/{}",
+                        crate::context::thousands(used),
+                        crate::context::thousands(window)
+                    ),
+                    urgency,
+                ));
+            }
+            None => format!("ctx {}", crate::context::thousands(used)),
+        };
+        Some((text, 0))
     }
 
     pub(super) fn finish_command(&mut self, output: impl Into<String>) {

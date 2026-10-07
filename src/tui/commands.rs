@@ -250,7 +250,7 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /compact, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }
@@ -310,6 +310,11 @@ impl App {
             self.finish_command(self.notice.clone());
             return Ok(());
         }
+        if value == "/compact" {
+            let message = self.start_compaction()?;
+            self.finish_command(message);
+            return Ok(());
+        }
         if value == "/clear" {
             if self.pending.is_some() {
                 self.finish_command(
@@ -364,6 +369,45 @@ impl App {
             }
         }
         self.dispatch_user_message(user_message)
+    }
+
+    /// Condenses the older conversation in the background; returns what to tell the user.
+    pub(super) fn start_compaction(&mut self) -> Result<String> {
+        if self.pending.is_some() {
+            return Ok(
+                "Wait for the current turn to finish before condensing the conversation."
+                    .to_owned(),
+            );
+        }
+        let system_prompt = self.build_system_prompt()?;
+        let mut request_messages = vec![provider::ChatMessage::system(system_prompt)];
+        request_messages.extend(self.messages.iter().cloned());
+        if crate::context::split_point(&request_messages).is_none() {
+            return Ok("There is not enough conversation to condense yet.".to_owned());
+        }
+        let settings = self.settings.clone();
+        let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.streaming = Some(StreamingTurn::new(cancel.clone()));
+        thread::spawn(move || {
+            let ignore = |_event| {};
+            let stream = crate::stream::Stream {
+                on_event: &ignore,
+                cancel: &cancel,
+            };
+            let completer = crate::workflow::ProviderCompleter(&settings);
+            let finished = match crate::context::compact(&completer, &request_messages, &stream) {
+                Ok(compaction) => {
+                    crate::agent::announce_compaction(&sender, &compaction);
+                    Ok(())
+                }
+                Err(error) => Err(format!("{error:#}")),
+            };
+            let _ = sender.send(PendingEvent::CompactFinished(finished));
+        });
+        self.pending = Some(receiver);
+        self.notice = "Condensing the conversation…".to_owned();
+        Ok("Condensing the earlier conversation into a summary…".to_owned())
     }
 
     pub(super) fn dispatch_user_message(
@@ -598,6 +642,7 @@ impl App {
                     | PendingEvent::Usage(_)
                     | PendingEvent::ToolStarted(_)
                     | PendingEvent::ToolAction(_)
+                    | PendingEvent::Compacted { .. }
                     | PendingEvent::ConversationMessage(_))
             );
             self.apply_pending_event(event);
@@ -655,6 +700,29 @@ impl App {
                     turn.arrivals.clear();
                 }
                 self.messages.push(message);
+            }
+            Ok(PendingEvent::Compacted {
+                replaced,
+                with,
+                summary,
+            }) => {
+                // The conversation the worker sees and this one stay the same list.
+                if replaced <= self.messages.len() {
+                    self.messages.splice(0..replaced, with);
+                }
+                self.transcript.push(TranscriptEntry {
+                    kind: TranscriptKind::CommandOutput,
+                    text: summary,
+                });
+                self.history_scroll = 0;
+            }
+            Ok(PendingEvent::CompactFinished(result)) => {
+                self.pending = None;
+                self.streaming = None;
+                self.notice = match result {
+                    Ok(()) => "Conversation condensed.".to_owned(),
+                    Err(error) => format!("Could not condense the conversation: {error}"),
+                };
             }
             Ok(PendingEvent::ApprovalRequest(request)) => {
                 self.approval_scroll = 0;
@@ -816,6 +884,136 @@ mod tests {
                 .content
                 .as_str()
                 .is_some_and(|text| text.to_lowercase().contains("cancelled"))
+        );
+    }
+
+    fn said(text: &str) -> provider::ChatMessage {
+        provider::ChatMessage::assistant(text.to_owned())
+    }
+
+    fn asked(text: &str) -> provider::ChatMessage {
+        provider::ChatMessage::user_with_images(text.to_owned(), text.to_owned(), Vec::new())
+    }
+
+    #[test]
+    fn a_compaction_swaps_the_older_messages_for_the_summary_in_the_same_conversation() {
+        let (mut app, sender) = streaming_app();
+        app.messages = vec![
+            asked("one"),
+            said("two"),
+            asked("three"),
+            said("four"),
+            asked("five"),
+        ];
+        sender
+            .send(PendingEvent::Compacted {
+                replaced: 3,
+                with: vec![asked("SUMMARY"), said("Understood.")],
+                summary: "Condensed 3 earlier messages.".to_owned(),
+            })
+            .unwrap();
+        // A message that arrives afterwards lands after the summary and what was kept.
+        sender
+            .send(PendingEvent::ConversationMessage(said("six")))
+            .unwrap();
+        app.poll_response();
+        let texts: Vec<_> = app.messages.iter().map(|m| m.display.as_str()).collect();
+        assert_eq!(texts, ["SUMMARY", "Understood.", "four", "five", "six"]);
+        assert!(
+            app.transcript
+                .iter()
+                .any(|entry| entry.text == "Condensed 3 earlier messages."),
+            "the user is told"
+        );
+    }
+
+    #[test]
+    fn compact_waits_for_a_running_turn_and_needs_enough_conversation() {
+        let (mut busy, _sender) = streaming_app();
+        busy.input = "/compact".to_owned();
+        busy.submit().expect("compact");
+        assert!(
+            busy.transcript
+                .last()
+                .unwrap()
+                .text
+                .contains("Wait for the current turn"),
+            "{:?}",
+            busy.transcript.last()
+        );
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.input = "/compact".to_owned();
+        app.submit().expect("compact");
+        assert!(app.pending.is_none());
+        assert!(
+            app.transcript
+                .last()
+                .unwrap()
+                .text
+                .contains("not enough conversation"),
+            "{:?}",
+            app.transcript.last()
+        );
+    }
+
+    #[test]
+    fn compact_starts_a_background_summary_when_there_is_enough_to_condense() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        let big = "z".repeat(12_000);
+        for turn in 0..4 {
+            app.messages.push(asked(&format!("q{turn} {big}")));
+            app.messages.push(said(&format!("a{turn} {big}")));
+        }
+        app.messages.push(asked("latest"));
+        app.input = "/compact".to_owned();
+        app.submit().expect("compact");
+        assert!(app.pending.is_some(), "the summary is being written");
+        assert!(app.streaming.is_some(), "so Esc can cancel it");
+        assert!(app.notice.contains("Condensing"), "{}", app.notice);
+        // Finishing it frees the prompt again.
+        let (sender, receiver) = mpsc::channel();
+        sender.send(PendingEvent::CompactFinished(Ok(()))).unwrap();
+        app.pending = Some(receiver);
+        app.poll_response();
+        assert!(app.pending.is_none() && app.streaming.is_none());
+        assert_eq!(app.notice, "Conversation condensed.");
+    }
+
+    #[test]
+    fn the_status_line_shows_how_full_the_context_is() {
+        let mut app = App::new(Settings::default());
+        assert_eq!(app.context_status(), None, "nothing to show yet");
+        app.messages.push(asked(&"a".repeat(40_000)));
+        let (text, urgency) = app.context_status().expect("status");
+        assert!(
+            text.starts_with("ctx 1") && !text.contains('/'),
+            "unknown window: {text}"
+        );
+        assert_eq!(urgency, 0);
+        let mut profile = crate::ProviderProfile {
+            id: "p".to_owned(),
+            ..Default::default()
+        };
+        profile.model_info.insert(
+            "m".to_owned(),
+            crate::ModelInfo {
+                context: Some(16_000),
+                ..Default::default()
+            },
+        );
+        app.settings.providers = vec![profile];
+        app.settings.active_provider_id = Some("p".to_owned());
+        app.settings.model = Some("m".to_owned());
+        let (text, urgency) = app.context_status().expect("status");
+        assert!(text.ends_with("/16k"), "{text}");
+        assert_eq!(urgency, 1, "above 80%");
+        app.messages.push(asked(&"a".repeat(9_000)));
+        assert_eq!(
+            app.context_status().unwrap().1,
+            2,
+            "above 95%, and the count follows the conversation"
         );
     }
 

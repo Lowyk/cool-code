@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 mod agent;
 mod chatgpt_auth;
+mod context;
 mod effort_support;
 mod endpoints;
 mod login_page;
@@ -164,6 +165,8 @@ struct Settings {
     effort_always_animated: bool,
     /// Warn when the active provider reports that its balance or usage limits are running low.
     usage_warnings: bool,
+    /// Condense the older conversation into a summary before it fills the model's context window.
+    auto_compact: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -285,6 +288,7 @@ impl Default for Settings {
             workflows: false,
             effort_always_animated: false,
             usage_warnings: true,
+            auto_compact: true,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

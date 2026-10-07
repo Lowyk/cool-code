@@ -428,7 +428,7 @@ mod tests {
 
     fn open_reset(app: &mut App) {
         press(app, KeyCode::Right);
-        for _ in 0..12 {
+        for _ in 0..crate::tui::settings::general::ROWS - 1 {
             press(app, KeyCode::Down);
         }
         press(app, KeyCode::Enter);

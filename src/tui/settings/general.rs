@@ -14,7 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 13;
+pub(super) const ROWS: usize = 14;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -89,6 +89,7 @@ pub(super) fn draw_general(
         vec![switch(app.settings.load_global_claude_md)],
         vec![switch(app.settings.dynamic_workflows)],
         vec![switch(app.settings.usage_warnings)],
+        vec![switch(app.settings.auto_compact)],
         vec![Span::styled("…", Style::default().fg(Color::DarkGray))],
     ];
     let labels = [
@@ -104,6 +105,7 @@ pub(super) fn draw_general(
         "Global CLAUDE.md",
         "Dynamic workflows",
         "Usage warnings",
+        "Auto-compact",
         "Reset",
     ];
     let focused = view.focus == Focus::Content;
@@ -199,7 +201,17 @@ impl App {
                     }
                     write_settings(&self.settings)?;
                 }
-                12 => view.reset = Some(ResetStage::Menu { row: 0 }),
+                12 => {
+                    self.settings.auto_compact = !self.settings.auto_compact;
+                    self.notice = if self.settings.auto_compact {
+                        "Long conversations are condensed automatically before they fill the context window."
+                    } else {
+                        "Auto-compact is off; use /compact to condense the conversation yourself."
+                    }
+                    .to_owned();
+                    write_settings(&self.settings)?;
+                }
+                13 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;
