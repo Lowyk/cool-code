@@ -485,7 +485,20 @@ fn get_json(
         .with_context(|| format!("asking ChatGPT for {what}"))?;
     let status = response.status();
     if !status.is_success() {
-        bail!("ChatGPT returned {status} when asked for {what}");
+        // The reason a request was refused is in the body, which never holds a credential.
+        let reason: String = response
+            .text()
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(300)
+            .collect();
+        if reason.is_empty() {
+            bail!("ChatGPT returned {status} when asked for {what}");
+        }
+        bail!("ChatGPT returned {status} when asked for {what}: {reason}");
     }
     response
         .json()
@@ -943,5 +956,40 @@ mod tests {
         assert!(head.starts_with("get /models?client_version="), "{head}");
         assert!(head.contains("authorization: bearer tok-9"), "{head}");
         assert!(head.contains("chatgpt-account-id: acct-9"), "{head}");
+    }
+
+    #[test]
+    fn a_refused_listing_reports_the_reason_the_server_gave() {
+        let (base, _) = crate::testutil::serve_full(vec![(
+            400,
+            "application/json",
+            "{\"detail\": \"client_version is not valid\"}",
+        )]);
+        remember_login(
+            "models-refused",
+            &Account {
+                refresh_token: "r".to_owned(),
+                account_id: None,
+                email: None,
+            },
+            Session {
+                access_token: "tok-refused".to_owned(),
+                expires_at: now() + 3600,
+                account_id: None,
+            },
+        )
+        .unwrap();
+        let error = fetch_models(
+            "models-refused",
+            &format!("{base}/models"),
+            "http://unused.invalid/token",
+        )
+        .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("400") && text.contains("client_version is not valid"),
+            "{text}"
+        );
+        assert!(!text.contains("tok-refused"), "{text}");
     }
 }
