@@ -354,15 +354,32 @@ impl App {
             }
         };
         let profile = &mut self.settings.providers[index];
-        if profile.adapter == "chatgpt" {
+        let from_account = profile.adapter == "chatgpt";
+        let kept_model = std::mem::take(&mut profile.model);
+        if from_account {
             // The account's own list is authoritative, so retired models drop out.
             profile.models.clear();
             profile.model_info.clear();
-            if !fetched.iter().any(|model| model.id == profile.model) {
-                profile.model.clear();
-            }
+        } else {
+            profile.model = kept_model.clone();
         }
         let added = merge_models(profile, &fetched);
+        if from_account && fetched.iter().any(|model| model.id == kept_model) {
+            profile.model = kept_model;
+        }
+        let default_model = profile.model.clone();
+        // A sign-in starts with no model; the active one is chosen once the list arrives.
+        if from_account
+            && self.settings.active_provider_id.as_deref() == Some(provider_id)
+            && self
+                .settings
+                .model
+                .as_deref()
+                .is_none_or(|current| !fetched.iter().any(|model| model.id == current))
+        {
+            self.settings.model = Some(default_model);
+        }
+        let profile = &mut self.settings.providers[index];
         let total = profile.models.len();
         let enabled = promote && profile.draft && has_key && total > 0;
         if enabled {
@@ -371,6 +388,10 @@ impl App {
         if let Err(error) = write_settings(&self.settings) {
             self.notice =
                 format!("{name}: models loaded but settings could not be saved: {error:#}");
+            return;
+        }
+        if from_account {
+            self.notice = format!("{name}: {total} models loaded from your account.");
             return;
         }
         self.notice = match (enabled, added) {
