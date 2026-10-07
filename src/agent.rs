@@ -80,8 +80,14 @@ pub(crate) fn run_agent_turns(
                 })
             })
             .collect();
+        let signatures = completion
+            .tool_calls
+            .iter()
+            .filter_map(|call| Some((call.id.clone(), call.thought_signature.clone()?)))
+            .collect();
         let assistant_tool_message =
-            provider::ChatMessage::assistant_tool_calls(completion.text, wire_calls);
+            provider::ChatMessage::assistant_tool_calls(completion.text, wire_calls)
+                .with_thought_signatures(signatures);
         messages.push(assistant_tool_message.clone());
         let _ = events.send(PendingEvent::ConversationMessage(assistant_tool_message));
         for call in completion.tool_calls {

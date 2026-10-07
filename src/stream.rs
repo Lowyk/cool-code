@@ -198,6 +198,7 @@ pub(crate) fn parse_openai_stream(reader: impl BufRead, stream: &Stream) -> Resu
                 id: call.id,
                 name: call.name,
                 arguments: parse_arguments(&call.arguments)?,
+                thought_signature: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -289,6 +290,7 @@ pub(crate) fn parse_anthropic_stream(reader: impl BufRead, stream: &Stream) -> R
                 id: call.id,
                 name: call.name,
                 arguments: parse_arguments(&call.arguments)?,
+                thought_signature: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -344,6 +346,10 @@ pub(crate) fn parse_google_stream(reader: impl BufRead, stream: &Stream) -> Resu
                         .get("args")
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!({})),
+                    thought_signature: part
+                        .get("thoughtSignature")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                 });
             }
         }
@@ -441,6 +447,21 @@ data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"},{\"functionCal
         assert_eq!(turn.tool_calls[0].arguments["path"], "a.rs");
         assert!(turn.tool_calls[0].id.starts_with("google-call-"));
         assert!(events.contains(&StreamEvent::Usage(7)));
+    }
+
+    #[test]
+    fn google_stream_keeps_the_thought_signature_of_a_function_call() {
+        let fixture = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"list_files\",\"args\":{}},\"thoughtSignature\":\"sig-abc\"},{\"functionCall\":{\"name\":\"git_status\",\"args\":{}}}]}}]}
+
+";
+        let (result, _) = run_with(super::parse_google_stream, fixture);
+        let turn = result.expect("turn");
+        assert_eq!(turn.tool_calls.len(), 2);
+        assert_eq!(
+            turn.tool_calls[0].thought_signature.as_deref(),
+            Some("sig-abc")
+        );
+        assert_eq!(turn.tool_calls[1].thought_signature, None);
     }
 
     #[test]
