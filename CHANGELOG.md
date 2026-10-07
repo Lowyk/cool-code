@@ -20,6 +20,8 @@ All notable changes are listed here, newest first. The format follows
   line.
 - `/undo` takes back the file changes of the model's last turn without overwriting later work.
 - `harness run` runs one turn without the interface, for scripts and CI (`--json` available).
+- Assistant answers are drawn as Markdown (headings, emphasis, code blocks, lists, quotes, links
+  and tables) instead of raw text, including while they stream.
 - `/forcemodel <id>` sets a model on the default provider exactly as typed.
 - Eight themes with animated backdrops; the browser page after a sign-in matches the theme.
 - Opt-in saved sessions (`--resume`, `--latest`, `/resume`), a first-run setup, `CLAUDE.md` and
