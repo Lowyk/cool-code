@@ -69,6 +69,13 @@ pub(super) struct App {
     pub(super) transcript: Vec<TranscriptEntry>,
     pub(super) pending: Option<Receiver<PendingEvent>>,
     pub(super) streaming: Option<StreamingTurn>,
+    /// Background provider fetches (model lists, usage limits) report through this channel.
+    pub(super) tasks: std::sync::mpsc::Sender<crate::tui::settings::sync::TaskResult>,
+    pub(super) task_results: std::sync::mpsc::Receiver<crate::tui::settings::sync::TaskResult>,
+    pub(super) limits: std::collections::HashMap<String, crate::tui::settings::sync::LimitsEntry>,
+    pub(super) models_loading: std::collections::HashSet<String>,
+    #[cfg(test)]
+    pub(super) spawned_tasks: usize,
     pub(super) history_scroll: u16,
     pub(super) settings_view: Option<crate::tui::settings::SettingsView>,
     pub(super) provider_index: usize,
@@ -116,6 +123,11 @@ pub(super) struct ProviderDraft {
     pub(super) base_url: String,
     pub(super) api_key: String,
     pub(super) models: Vec<ModelDraft>,
+    /// Optional endpoints for custom OpenAI-compatible providers (path or full URL).
+    pub(super) models_endpoint: String,
+    pub(super) limits_endpoint: String,
+    /// The provider's models come from its models endpoint; the form leaves them alone.
+    pub(super) managed_models: bool,
     pub(super) focus: usize,
 }
 
@@ -137,29 +149,41 @@ pub(super) struct ChainDraft {
 }
 
 pub(super) struct ProviderPreset {
+    /// Stable identifier; code must match presets by this, never by list position.
+    pub(super) id: &'static str,
     pub(super) label: &'static str,
     pub(super) adapter: &'static str,
     pub(super) base_url: Option<&'static str>,
     pub(super) custom: bool,
     pub(super) models: &'static [(&'static str, &'static str)],
+    /// Built-in endpoint paths, relative to `base_url`, for listing models and reading limits.
+    pub(super) models_path: Option<&'static str>,
+    pub(super) limits_path: Option<&'static str>,
 }
 
-pub(super) const PROVIDER_PRESETS: [ProviderPreset; 6] = [
+pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
     ProviderPreset {
+        id: "openai",
         label: "OpenAI (ChatGPT)",
         adapter: "openai",
         base_url: None,
         custom: false,
         models: &[],
+        models_path: None,
+        limits_path: None,
     },
     ProviderPreset {
+        id: "anthropic",
         label: "Anthropic (Claude)",
         adapter: "anthropic",
         base_url: None,
         custom: false,
         models: &[],
+        models_path: None,
+        limits_path: None,
     },
     ProviderPreset {
+        id: "google",
         label: "Google (Gemini)",
         adapter: "google",
         base_url: None,
@@ -169,27 +193,48 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 6] = [
             ("gemini-flash-lite-latest", ""),
             ("gemini-pro-latest", ""),
         ],
+        models_path: None,
+        limits_path: None,
     },
     ProviderPreset {
+        id: "openrouter",
         label: "OpenRouter",
         adapter: "openai-compatible",
         base_url: Some("https://openrouter.ai/api/v1"),
         custom: false,
         models: &[],
+        models_path: None,
+        limits_path: None,
     },
     ProviderPreset {
+        id: "multiai",
+        label: "MultiAI",
+        adapter: "openai-compatible",
+        base_url: Some("https://multiai.store/v1"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: Some("subscription/limits"),
+    },
+    ProviderPreset {
+        id: "anthropic-custom",
         label: "Custom Anthropic-compatible API",
         adapter: "anthropic-compatible",
         base_url: None,
         custom: true,
         models: &[],
+        models_path: None,
+        limits_path: None,
     },
     ProviderPreset {
+        id: "openai-custom",
         label: "Custom OpenAI-compatible API",
         adapter: "openai-compatible",
         base_url: None,
         custom: true,
         models: &[],
+        models_path: None,
+        limits_path: None,
     },
 ];
 
@@ -232,6 +277,7 @@ impl App {
     }
 
     fn from_settings(mut settings: Settings) -> Self {
+        let (tasks, task_results) = std::sync::mpsc::channel();
         if settings.default_provider_id.is_none() {
             settings.default_provider_id = settings.active_provider_id.clone();
         }
@@ -275,6 +321,12 @@ impl App {
             transcript: Vec::new(),
             pending: None,
             streaming: None,
+            tasks,
+            task_results,
+            limits: std::collections::HashMap::new(),
+            models_loading: std::collections::HashSet::new(),
+            #[cfg(test)]
+            spawned_tasks: 0,
             history_scroll: 0,
             settings_view: None,
             provider_index,

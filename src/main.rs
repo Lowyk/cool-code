@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 mod agent;
+mod endpoints;
 mod policy;
 mod provider;
 mod secrets;
@@ -122,7 +123,7 @@ enum PulseMode {
     Characters,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ProviderProfile {
     id: String,
     name: String,
@@ -137,6 +138,25 @@ struct ProviderProfile {
     auto_switch: bool,
     #[serde(default)]
     base_url: Option<String>,
+    /// Optional endpoint listing the provider's models (same host as the base URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    models_url: Option<String>,
+    /// Optional endpoint reporting usage limits or balance (same host as the base URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limits_url: Option<String>,
+    /// Metadata the models endpoint reported, keyed by model ID.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    model_info: std::collections::BTreeMap<String, ModelInfo>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+struct ModelInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    free: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

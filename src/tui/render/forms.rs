@@ -1,5 +1,5 @@
 use crate::Settings;
-use crate::tui::forms::provider_focus_layout;
+use crate::tui::forms::{has_endpoint_fields, provider_focus_layout};
 use crate::tui::models::{available_chain_models, model_display_for_profile};
 use crate::tui::state::{App, ChainDraft, PROVIDER_PRESETS};
 use ratatui::layout::{Alignment, Rect};
@@ -96,15 +96,54 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
             form.focus == key_focus,
             true,
         );
-        frame.render_widget(
-            Paragraph::new("Model IDs").style(
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Rect::new(inner.x + 2, y, inner.width.saturating_sub(2), 1),
-        );
-        y = y.saturating_add(1);
+        if has_endpoint_fields(form) {
+            render_field(
+                "Models endpoint · optional",
+                &form.models_endpoint,
+                "path or URL on the same host, e.g. models",
+                form.focus == key_focus + 1,
+                false,
+            );
+            render_field(
+                "Limits endpoint · optional",
+                &form.limits_endpoint,
+                "path or URL on the same host, e.g. subscription/limits",
+                form.focus == key_focus + 2,
+                false,
+            );
+        }
+        let managed_count = form
+            .existing_id
+            .as_deref()
+            .and_then(|id| {
+                app.settings
+                    .providers
+                    .iter()
+                    .find(|profile| profile.id == id)
+            })
+            .map_or(0, |profile| profile.models.len());
+        if form.managed_models {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{managed_count} models come from the models endpoint. Manage them in Settings → Models; press f in Providers to refresh."
+                ))
+                .style(Style::default().fg(Color::Gray))
+                .wrap(Wrap { trim: true }),
+                Rect::new(inner.x + 2, y, inner.width.saturating_sub(2), 3),
+            );
+            y = y.saturating_add(3);
+        }
+        if !form.managed_models {
+            frame.render_widget(
+                Paragraph::new("Model IDs").style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Rect::new(inner.x + 2, y, inner.width.saturating_sub(2), 1),
+            );
+            y = y.saturating_add(1);
+        }
         for (index, model) in form.models.iter().enumerate() {
             let row_focus = model_start + index * 3;
             let row = Line::from(vec![

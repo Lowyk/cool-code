@@ -513,6 +513,7 @@ mod tests {
             draft: false,
             auto_switch,
             base_url: None,
+            ..Default::default()
         }
     }
 
@@ -576,6 +577,7 @@ mod tests {
                 draft: false,
                 auto_switch: true,
                 base_url: None,
+                ..Default::default()
             },
             ProviderProfile {
                 id: "direct".to_owned(),
@@ -589,6 +591,7 @@ mod tests {
                 draft: false,
                 auto_switch: true,
                 base_url: None,
+                ..Default::default()
             },
         ];
         let (resolved, matches) = resolve_model_reference(&settings, "anthropic/claude-opus-5");
@@ -613,6 +616,7 @@ mod tests {
                 draft: false,
                 auto_switch: false,
                 base_url: None,
+                ..Default::default()
             },
             ProviderProfile {
                 id: "groq".to_owned(),
@@ -626,6 +630,7 @@ mod tests {
                 draft: false,
                 auto_switch: true,
                 base_url: None,
+                ..Default::default()
             },
         ];
         let (_, matches) = resolve_model_reference(&settings, "gpt-oss-120b");
@@ -650,6 +655,7 @@ mod tests {
             draft: false,
             auto_switch: false,
             base_url: None,
+            ..Default::default()
         });
         assert_eq!(
             selected_model_name(&settings, "claude-opus-5"),

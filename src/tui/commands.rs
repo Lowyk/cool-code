@@ -436,6 +436,7 @@ impl App {
 
     /// Applies every event the worker has sent since the last frame.
     pub(super) fn poll_response(&mut self) {
+        self.poll_tasks();
         if let Some(turn) = self.streaming.as_mut() {
             turn.prune_arrivals(std::time::Instant::now());
         }

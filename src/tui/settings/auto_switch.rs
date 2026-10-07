@@ -146,6 +146,7 @@ mod tests {
             draft: false,
             auto_switch: true,
             base_url: None,
+            ..Default::default()
         }];
         settings.model_chains = vec![ModelChain {
             id: "fast".to_owned(),
