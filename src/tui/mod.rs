@@ -6,6 +6,7 @@ mod effort;
 mod forms;
 mod models;
 mod pickers;
+mod present;
 mod render;
 mod series;
 pub(crate) mod sessions;
@@ -65,10 +66,15 @@ fn run_app(
     app.motion_prompt = !app.settings.motion_prompt_answered;
     app.stats_prompt = !app.settings.stats_prompt_answered;
     let animation_start = std::time::Instant::now();
+    let mut presenter = present::Presenter::new();
     while app.running {
         app.poll_response();
         let animation_tick = (animation_start.elapsed().as_millis() / 280) as usize;
-        terminal.draw(|frame| draw(frame, &app, animation_tick))?;
+        presenter.present(
+            terminal,
+            |frame| draw(frame, &app, animation_tick),
+            || app.cursor.get(),
+        )?;
         // Redraw faster while the effort picker animates or a response is streaming.
         let frame_interval = Duration::from_millis(if app.picker || app.pending.is_some() {
             40
