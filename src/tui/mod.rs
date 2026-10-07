@@ -147,15 +147,15 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             }
             _ => {}
         }
-    } else if app.confirm_extreme {
+    } else if app.confirm_ultimate {
         match key.code {
             KeyCode::Char('y' | 'Y') => {
-                app.settings.extreme_acknowledged = true;
-                app.apply_effort(Effort::Extreme)?;
+                app.settings.ultimate_acknowledged = true;
+                app.apply_effort(Effort::Ultimate)?;
             }
             KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                app.confirm_extreme = false;
-                app.notice = "Extreme was not selected.".to_owned();
+                app.confirm_ultimate = false;
+                app.notice = "Ultimate was not selected.".to_owned();
             }
             _ => {}
         }

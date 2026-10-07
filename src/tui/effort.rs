@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 const GLYPHS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-const NAMES: [&str; 7] = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Extreme"];
+const NAMES: [&str; 7] = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate"];
 const MAPPINGS: [&str; 7] = [
     "low", "medium", "high", "xhigh", "max", "xhigh+wf", "max+wf",
 ];
@@ -49,7 +49,7 @@ pub(super) fn effort_level(effort: Effort, x: f32, t: f32) -> f32 {
         // Equalizer: every column bounces on its own smoothed noise.
         Effort::Max => 0.25 + 0.75 * smooth_noise(x * 14.0, t * 2.2),
         Effort::Super => 0.5 + 0.35 * (std::f32::consts::TAU * (x * 2.0 - t * 0.6)).sin(),
-        Effort::Extreme => 0.5 + 0.84 * (smooth_noise(x * 7.0, t * 2.0) - 0.5),
+        Effort::Ultimate => 0.5 + 0.84 * (smooth_noise(x * 7.0, t * 2.0) - 0.5),
     };
     level.clamp(0.0, 1.0)
 }
@@ -110,7 +110,7 @@ fn lit_color(effort: Effort, x: f32, height: f32, t: f32) -> Color {
             Color::Rgb(255, 235, 140),
             wave(std::f32::consts::TAU * (x * 2.0 - t * 0.6)),
         ),
-        Effort::Extreme => fire_color(1.0 - height),
+        Effort::Ultimate => fire_color(1.0 - height),
         Effort::Low => scale_color(effort_rgb(0, 0, 1.0), 0.9 + 0.12 * wave(t * 1.3)),
         Effort::Medium => glint(effort_rgb(1, 0, 1.0), x, t, 0.35),
         Effort::High => glint(
@@ -154,7 +154,7 @@ fn fire_color(heat: f32) -> Color {
 
 /// Rising flame surface: the column's flame height plus tongues of noise scrolling upward.
 fn flame_surface(x: f32, y: f32, t: f32) -> f32 {
-    effort_level(Effort::Extreme, x, t) + 0.35 * (fbm(x * 5.0, y * 3.0 - t * 2.4) - 0.5)
+    effort_level(Effort::Ultimate, x, t) + 0.35 * (fbm(x * 5.0, y * 3.0 - t * 2.4) - 0.5)
 }
 
 fn ember_at(column: usize, row_from_bottom: usize, rows: usize, t: f32) -> Option<&'static str> {
@@ -183,7 +183,7 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
             let from_bottom = rows - 1 - row;
             let cell_bottom = from_bottom as f32 / rows as f32;
             let cell_mid = (from_bottom as f32 + 0.5) / rows as f32;
-            let fill = if effort == Effort::Extreme {
+            let fill = if effort == Effort::Ultimate {
                 let surface = flame_surface(x, cell_mid, t);
                 (((surface - cell_bottom) * rows as f32 * 8.0)
                     .round()
@@ -198,7 +198,7 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
             };
             let span = if fill > 0 {
                 let height = (from_bottom as f32 + fill as f32 / 8.0) / rows as f32;
-                let color = if effort == Effort::Extreme {
+                let color = if effort == Effort::Ultimate {
                     let surface = flame_surface(x, cell_mid, t).max(0.05);
                     let heat = (1.0 - cell_bottom / surface) * surface.min(1.0) * 1.15;
                     fire_color(heat)
@@ -214,7 +214,7 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
                     "▔",
                     Style::default().fg(hsv(x * 0.85 + t * 0.12, 0.25, 1.0)),
                 )
-            } else if effort == Effort::Extreme
+            } else if effort == Effort::Ultimate
                 && let Some(spark) = ember_at(column, from_bottom, rows, t)
             {
                 Span::styled(spark, Style::default().fg(fire_color(0.7)))
@@ -374,7 +374,7 @@ pub(super) fn effort_style(effort: Effort, selected: bool) -> Style {
         Effort::Max => Color::Magenta,
         Effort::XHigh => Color::LightBlue,
         Effort::Super => Color::Yellow,
-        Effort::Extreme => Color::Red,
+        Effort::Ultimate => Color::Red,
         _ => Color::White,
     };
     let style = Style::default().fg(color);
@@ -393,7 +393,7 @@ pub(super) fn effort_rgb(index: usize, _animation_tick: usize, brightness: f32) 
         Effort::Max => (190, 105, 210),
         Effort::XHigh => (155, 125, 240),
         Effort::Super => (241, 184, 63),
-        Effort::Extreme => (229, 66, 74),
+        Effort::Ultimate => (229, 66, 74),
     };
     scale_rgb(color, brightness)
 }
@@ -432,7 +432,7 @@ pub(super) fn gradient_name(
     if !selected
         || !matches!(
             effort,
-            Effort::Max | Effort::XHigh | Effort::Super | Effort::Extreme
+            Effort::Max | Effort::XHigh | Effort::Super | Effort::Ultimate
         )
     {
         return vec![Span::styled(name, effort_style(effort, selected))];
@@ -461,7 +461,7 @@ pub(super) fn gradient_name(
             Color::Rgb(230, 145, 0),
             Color::Rgb(255, 225, 100),
         ],
-        Effort::Extreme => &[
+        Effort::Ultimate => &[
             Color::Rgb(255, 180, 180),
             Color::LightRed,
             Color::Red,
@@ -494,7 +494,7 @@ pub(super) fn effort_label(effort: Effort) -> &'static str {
         Effort::Max => "Max",
         Effort::XHigh => "XHigh",
         Effort::Super => "Super",
-        Effort::Extreme => "Extreme",
+        Effort::Ultimate => "Ultimate",
     }
 }
 
@@ -527,14 +527,14 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         for expected in [
-            "Low", "Medium", "High", "XHigh", "Max", "Super", "Extreme", "xhigh+wf",
+            "Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate", "xhigh+wf",
         ] {
             assert!(
                 rendered.contains(expected),
                 "missing {expected} in picker:\n{rendered}"
             );
         }
-        let ordered = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Extreme"]
+        let ordered = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate"]
             .map(|label| rendered.find(label).expect("effort label"));
         assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]));
     }
@@ -585,7 +585,7 @@ mod tests {
         Effort::XHigh,
         Effort::Max,
         Effort::Super,
-        Effort::Extreme,
+        Effort::Ultimate,
     ];
 
     #[test]
@@ -619,7 +619,7 @@ mod tests {
     fn extreme_flickers_while_low_tiers_hold_still() {
         let samples =
             |effort| (0..20).map(move |step| effort_level(effort, 0.4, step as f32 * 0.25));
-        let extreme = samples(Effort::Extreme).collect::<Vec<_>>();
+        let extreme = samples(Effort::Ultimate).collect::<Vec<_>>();
         assert!(
             extreme
                 .windows(2)
@@ -667,7 +667,7 @@ mod tests {
 
     fn extreme_frames() -> Vec<Vec<ratatui::text::Line<'static>>> {
         (0..60)
-            .map(|step| selected_bar(Effort::Extreme, 30, 4, step as f32 * 0.11))
+            .map(|step| selected_bar(Effort::Ultimate, 30, 4, step as f32 * 0.11))
             .collect()
     }
 

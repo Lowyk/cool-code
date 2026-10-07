@@ -8,8 +8,8 @@ use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::draw_model_picker;
 use crate::tui::render::dialogs::{
-    draw_extreme_confirmation, draw_mode_picker, draw_model_provider_picker,
-    draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
+    draw_mode_picker, draw_model_provider_picker, draw_privacy_confirmation, draw_tool_approval,
+    draw_ultimate_confirmation, draw_workspace_trust_prompt,
 };
 use crate::tui::render::motion::{draw_motion_prompt, draw_stats_prompt, pulse_spans};
 use crate::tui::settings::draw_settings_view;
@@ -311,7 +311,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         prompt_area,
     );
     if !app.picker
-        && !app.confirm_extreme
+        && !app.confirm_ultimate
         && !app.trust_prompt
         && app.tool_approval.is_none()
         && app.privacy_confirmation.is_none()
@@ -362,7 +362,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     let effort_spans = if effort_is_flashing
         && matches!(
             app.settings.effort,
-            Effort::Max | Effort::XHigh | Effort::Super | Effort::Extreme
+            Effort::Max | Effort::XHigh | Effort::Super | Effort::Ultimate
         ) {
         gradient_name(app.settings.effort, true, animation_tick)
     } else {
@@ -405,8 +405,8 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if app.picker {
         draw_effort_picker(frame, area, app, animation_tick);
     }
-    if app.confirm_extreme {
-        draw_extreme_confirmation(frame, area);
+    if app.confirm_ultimate {
+        draw_ultimate_confirmation(frame, area);
     }
     if let Some(prompt) = app.privacy_confirmation.as_ref() {
         let has_image = app
