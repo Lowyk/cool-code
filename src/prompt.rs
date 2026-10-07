@@ -5,9 +5,11 @@
 //! mention a tool that is not offered or leave out one that is.
 
 /// Bumped whenever the wording changes in a way worth noticing in a transcript.
-pub(crate) const PROMPT_VERSION: u32 = 2;
+pub(crate) const PROMPT_VERSION: u32 = 3;
 
 pub(crate) struct PromptInputs<'a> {
+    /// The model that is answering, as the user sees its name.
+    pub(crate) model: Option<&'a str>,
     /// The permission mode's key (`plan`, `auto`, `accept-edits`, ...).
     pub(crate) mode: &'a str,
     /// The permission mode as shown to the user.
@@ -24,7 +26,22 @@ pub(crate) struct PromptInputs<'a> {
     pub(crate) workflows: Option<crate::workflow::Budget>,
 }
 
-const IDENTITY: &str = "You are Cool Code, an AI coding assistant running in the user's terminal. You help them understand, change, build and test the software project in their current folder. Be direct, practical and honest about what you did and did not do.";
+/// Who the assistant is: the model itself, working inside the Cool Code harness. Cool Code is
+/// the program around the model, not the model's name, so the model keeps its own identity.
+fn identity(model: Option<&str>) -> String {
+    let who = match model.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("You are {name}, running in Cool Code"),
+        None => "You are an AI assistant running in Cool Code".to_owned(),
+    };
+    format!(
+        "{who}, a coding harness in the user's terminal. You help them understand, change, build and test the software project in their current folder. Be direct, practical and honest about what you did and did not do."
+    )
+}
+
+const PROJECT_NOTES: &str = "\
+Project notes:
+- A `COOL.md` file in the project's root holds guidance for you: it is loaded at the start of every session in a trusted folder. When you learn something lasting and useful about the project (how to build and test it, conventions, gotchas), or the user asks you to remember something, you may create or update `COOL.md` with the file tools.
+- Keep it short and factual. Never put secrets in it, and do not rewrite parts you were not asked to change. Tell the user when you change it.";
 
 const HOW_TO_WORK: &str = "\
 How to work:
@@ -99,7 +116,12 @@ pub(crate) fn assemble(
     .into_iter()
     .map(|tool| tool.name)
     .collect::<Vec<_>>();
+    let model_name = settings
+        .model
+        .as_deref()
+        .map(|id| crate::tui::models::selected_model_name(settings, id));
     let mut system_prompt = build(&PromptInputs {
+        model: model_name.as_deref(),
         mode: &settings.permission_mode,
         mode_label: crate::policy::mode_label(&settings.permission_mode),
         workspace_trusted,
@@ -137,7 +159,10 @@ pub(crate) fn assemble(
 
 pub(crate) fn build(inputs: &PromptInputs<'_>) -> String {
     let mut sections = vec![
-        format!("[Built-in harness policy · v{PROMPT_VERSION}]\n{IDENTITY}"),
+        format!(
+            "[Built-in harness policy · v{PROMPT_VERSION}]\n{}",
+            identity(inputs.model)
+        ),
         HOW_TO_WORK.to_owned(),
     ];
     if inputs.workspace_trusted {
@@ -145,6 +170,7 @@ pub(crate) fn build(inputs: &PromptInputs<'_>) -> String {
             "Tools available this turn: {}.\n{TOOL_RULES}",
             inputs.tools.join(", ")
         ));
+        sections.push(PROJECT_NOTES.to_owned());
     }
     if inputs.workspace_trusted
         && let Some(budget) = inputs.workflows.as_ref()
@@ -192,6 +218,7 @@ mod tests {
             names.push("spawn_subagents");
         }
         build(&PromptInputs {
+            model: Some("Test Model One"),
             mode,
             mode_label: "Test Mode",
             workspace_trusted: trusted,
@@ -338,6 +365,50 @@ mod tests {
         assert!(
             !untrusted.contains("Workflows are on"),
             "no workflows without tools"
+        );
+    }
+
+    #[test]
+    fn the_assistant_is_told_which_model_it_is_and_that_cool_code_is_the_harness() {
+        let text = prompt("auto", true);
+        assert!(
+            text.contains("You are Test Model One, running in Cool Code, a coding harness"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("You are Cool Code"),
+            "Cool Code is not the model's name"
+        );
+        let nameless = build(&PromptInputs {
+            model: None,
+            mode: "auto",
+            mode_label: "Auto",
+            workspace_trusted: true,
+            root: "/w",
+            os: "linux",
+            shell: "sh",
+            today: "2026-10-07",
+            tools: &tools("auto"),
+            workflows: None,
+        });
+        assert!(
+            nameless.contains("You are an AI assistant running in Cool Code"),
+            "{nameless}"
+        );
+        let blank = identity(Some("   "));
+        assert!(blank.starts_with("You are an AI assistant"), "{blank}");
+    }
+
+    #[test]
+    fn the_assistant_knows_it_may_keep_notes_in_cool_md_but_only_where_it_has_tools() {
+        let trusted = prompt("auto", true);
+        assert!(trusted.contains("Project notes:"), "{trusted}");
+        assert!(trusted.contains("create or update `COOL.md`"), "{trusted}");
+        assert!(trusted.contains("Never put secrets in it"), "{trusted}");
+        let untrusted = prompt("auto", false);
+        assert!(
+            !untrusted.contains("Project notes:"),
+            "no tools, so no notes to write"
         );
     }
 
