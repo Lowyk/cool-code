@@ -14,7 +14,7 @@ Cool Code is a terminal UI where an AI model reads your repository, proposes edi
 - **Permissions enforced by the harness.** Five modes from read-only *Plan* to *Accept Everything*, with every command shown before it runs unless the mode says otherwise.
 - **Know what you are spending.** `/usage` shows every provider's remaining usage, and running-low warnings appear before a balance or limit runs out.
 - **Private by default.** Sessions and usage stats are opt-in, project data lives outside your repositories, and outbound text can be redacted for providers that need it.
-- **Looks good.** Eight themes, each with an animated backdrop, and a synchronized renderer with no flicker.
+- **Looks good.** Answers are drawn as Markdown (headings, code blocks, lists, tables), there are eight themes with animated backdrops, and a synchronized renderer with no flicker.
 
 ## Install
 

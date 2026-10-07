@@ -69,31 +69,55 @@ pub(super) fn status_line(turn: &StreamingTurn, now: std::time::Instant) -> Stri
     )
 }
 
-fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> {
-    let marker = Style::default()
-        .fg(crate::tui::theme::accent_soft())
-        .add_modifier(Modifier::BOLD);
-    let mut lines = vec![Line::from(Span::styled("• ", marker))];
-    let spans = pulse_spans(&turn.text, &turn.arrivals, mode, std::time::Instant::now());
-    for span in spans {
-        let mut pieces = span.content.split('\n').peekable();
-        while let Some(piece) = pieces.next() {
-            if !piece.is_empty() {
-                let line = lines.last_mut().expect("at least one line");
-                line.spans.push(Span::styled(piece.to_owned(), span.style));
-            }
-            if pieces.peek().is_some() {
-                lines.push(Line::from(Span::styled("  ", marker)));
-            }
-        }
+/// Puts `marker` before the first line of an entry and an indent before the rest.
+fn marked(marker: Span<'static>, body: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if body.is_empty() {
+        return vec![Line::from(marker)];
     }
-    let cursor = Span::styled("▍", Style::default().fg(crate::tui::theme::accent()));
-    lines
-        .last_mut()
-        .expect("at least one line")
-        .spans
-        .push(cursor);
-    lines
+    body.into_iter()
+        .enumerate()
+        .map(|(index, mut line)| {
+            let lead = if index == 0 {
+                marker.clone()
+            } else {
+                Span::raw("  ")
+            };
+            line.spans.insert(0, lead);
+            line
+        })
+        .collect()
+}
+
+/// The answer being written. Lines that are complete are drawn as Markdown; the line in
+/// progress is plain text with the pulse, and becomes Markdown when its line ends.
+fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> {
+    let marker = Span::styled(
+        "• ",
+        Style::default()
+            .fg(crate::tui::theme::accent_soft())
+            .add_modifier(Modifier::BOLD),
+    );
+    let (done, current) = match turn.text.rfind('\n') {
+        Some(index) => turn.text.split_at(index + 1),
+        None => ("", turn.text.as_str()),
+    };
+    let mut lines = if done.trim().is_empty() {
+        Vec::new()
+    } else {
+        crate::tui::markdown::render(done)
+    };
+    let arrivals: Vec<(usize, std::time::Instant)> = turn
+        .arrivals
+        .iter()
+        .map(|(offset, at)| (offset.saturating_sub(done.len()), *at))
+        .collect();
+    let mut tail = pulse_spans(current, &arrivals, mode, std::time::Instant::now());
+    tail.push(Span::styled(
+        "▍",
+        Style::default().fg(crate::tui::theme::accent()),
+    ));
+    lines.push(Line::from(tail));
+    marked(marker, lines)
 }
 
 pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, usize)) {
@@ -247,6 +271,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                     ("| ", Color::Rgb(255, 100, 110), Color::Rgb(255, 145, 150))
                 }
             };
+            if entry.kind == TranscriptKind::Assistant {
+                let marker = Span::styled(
+                    marker,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                );
+                lines.extend(marked(marker, crate::tui::markdown::render(&entry.text)));
+                lines.push(Line::from(""));
+                continue;
+            }
             let mut content_lines = entry.text.lines();
             lines.push(Line::from(vec![
                 Span::styled(
