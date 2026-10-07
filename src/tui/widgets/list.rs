@@ -72,7 +72,7 @@ pub(in crate::tui) fn draw_list(
         return;
     }
     let current = state.current(items);
-    let accent = Color::Rgb(120, 220, 245);
+    let accent = crate::tui::theme::accent_bright();
     let mut rows = Vec::new();
     let mut current_row = 0;
     let mut last_group: Option<&str> = None;

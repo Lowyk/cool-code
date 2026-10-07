@@ -17,7 +17,7 @@ pub(super) fn draw_privacy(
     app: &App,
     view: &SettingsView,
 ) {
-    let accent = Color::Rgb(98, 213, 244);
+    let accent = crate::tui::theme::accent();
     let trust = if app.workspace_trusted {
         Span::styled("trusted", Style::default().fg(Color::Rgb(110, 220, 130)))
     } else {
@@ -290,7 +290,7 @@ pub(super) fn draw_privacy_sub(
     app: &App,
     sub: &PrivacySub,
 ) {
-    let accent = Color::Rgb(98, 213, 244);
+    let accent = crate::tui::theme::accent();
     let pointer = |selected: bool| {
         Span::styled(
             if selected { "▸ " } else { "  " },

@@ -19,7 +19,7 @@ pub(super) fn draw_tool_approval(
         .title(format!(" Approve action · {} ", approval.title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(Color::Rgb(35, 31, 26)))
+        .style(Style::default().bg(crate::tui::theme::dialog()))
         .padding(ratatui::widgets::Padding::horizontal(2));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -58,7 +58,7 @@ pub(super) fn draw_privacy_confirmation(
         .title(" Privacy check ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(Color::Rgb(35, 31, 26)))
+        .style(Style::default().bg(crate::tui::theme::dialog()))
         .padding(ratatui::widgets::Padding::horizontal(2));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -123,7 +123,7 @@ pub(super) fn draw_workspace_trust_prompt(frame: &mut ratatui::Frame<'_>, area: 
         .title(" Trust this workspace? ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(Color::Rgb(35, 31, 26)))
+        .style(Style::default().bg(crate::tui::theme::dialog()))
         .padding(ratatui::widgets::Padding::horizontal(2));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -203,8 +203,8 @@ pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: R
     let block = Block::default()
         .title(" Choose provider ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(98, 213, 244)))
-        .style(Style::default().bg(Color::Rgb(29, 30, 32)));
+        .border_style(Style::default().fg(crate::tui::theme::accent()))
+        .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let model = app.pending_model.as_deref().unwrap_or("model");
@@ -221,7 +221,7 @@ pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: R
                 } else {
                     "  "
                 },
-                Style::default().fg(Color::Rgb(98, 213, 244)),
+                Style::default().fg(crate::tui::theme::accent()),
             ),
             Span::styled(name, Style::default().fg(Color::White)),
             Span::styled(
@@ -244,8 +244,8 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
     let block = Block::default()
         .title(" Permission mode ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(120, 220, 245)))
-        .style(Style::default().bg(Color::Rgb(25, 32, 38)));
+        .border_style(Style::default().fg(crate::tui::theme::accent_bright()))
+        .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let options = MODES.iter().enumerate().map(|(index, (_, mode))| {
@@ -292,7 +292,7 @@ pub(super) fn draw_ultimate_confirmation(frame: &mut ratatui::Frame<'_>, area: R
         .title(" Confirm Ultimate effort ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red))
-        .style(Style::default().bg(Color::Rgb(34, 28, 29)));
+        .style(Style::default().bg(crate::tui::theme::dialog()));
     let body = Paragraph::new(vec![
         Line::from("Ultimate can consume substantially more tokens and cost more."),
         Line::from("Dynamic workflows are not implemented in this early build."),

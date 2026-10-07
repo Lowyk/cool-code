@@ -71,7 +71,7 @@ pub(super) fn status_line(turn: &StreamingTurn, now: std::time::Instant) -> Stri
 
 fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> {
     let marker = Style::default()
-        .fg(Color::Rgb(165, 236, 250))
+        .fg(crate::tui::theme::accent_soft())
         .add_modifier(Modifier::BOLD);
     let mut lines = vec![Line::from(Span::styled("• ", marker))];
     let spans = pulse_spans(&turn.text, &turn.arrivals, mode, std::time::Instant::now());
@@ -87,7 +87,7 @@ fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> 
             }
         }
     }
-    let cursor = Span::styled("▍", Style::default().fg(Color::Rgb(98, 213, 244)));
+    let cursor = Span::styled("▍", Style::default().fg(crate::tui::theme::accent()));
     lines
         .last_mut()
         .expect("at least one line")
@@ -135,8 +135,18 @@ pub(super) fn input_prompt_height(input: &str, area: Rect) -> u16 {
     needed.clamp(4, available) as u16
 }
 
+/// How strongly the backdrop shows behind a conversation when dimming is on.
+const CHAT_BACKDROP_DIM: f32 = 0.4;
+
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
+    crate::tui::theme::set_current(app.settings.theme);
+    if let Some(background) = crate::tui::theme::current().screen_bg {
+        frame.render_widget(
+            ratatui::widgets::Block::default().style(Style::default().bg(background)),
+            area,
+        );
+    }
     let prompt_height = input_prompt_height(&app.input, area);
     let (logo_area, subtitle_area, history_area, prompt_area, help_area, notice_area, status_area) =
         if app.transcript.is_empty() {
@@ -188,8 +198,26 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         };
 
     let no_color = std::env::var_os("NO_COLOR").is_some();
-    if app.transcript.is_empty() && backdrop_enabled(app.settings.background_animation, no_color) {
-        draw_backdrop(frame, area, app.launched_at.elapsed().as_secs_f32());
+    // The backdrop fills the welcome screen; behind a conversation it is opt-in and dimmed.
+    let chatting = !app.transcript.is_empty();
+    let wanted = if chatting {
+        app.settings.backdrop_in_chat
+    } else {
+        app.settings.background_animation
+    };
+    if backdrop_enabled(wanted, no_color) {
+        let dim = if chatting && app.settings.dim_backdrop_in_chat {
+            CHAT_BACKDROP_DIM
+        } else {
+            1.0
+        };
+        draw_backdrop(
+            frame,
+            area,
+            app.launched_at.elapsed().as_secs_f32(),
+            crate::tui::theme::current(),
+            dim,
+        );
     }
 
     let launched = app.launched_at.elapsed().as_secs_f32();
@@ -209,8 +237,8 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         let mut lines = Vec::new();
         for entry in &app.transcript {
             let (marker, color, content_color) = match entry.kind {
-                TranscriptKind::User => ("> ", Color::Rgb(120, 220, 245), Color::White),
-                TranscriptKind::Assistant => ("• ", Color::Rgb(165, 236, 250), Color::White),
+                TranscriptKind::User => ("> ", crate::tui::theme::accent_bright(), Color::White),
+                TranscriptKind::Assistant => ("• ", crate::tui::theme::accent_soft(), Color::White),
                 TranscriptKind::CommandOutput => {
                     ("  ", Color::Rgb(185, 195, 205), Color::Rgb(200, 205, 212))
                 }
@@ -267,15 +295,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     let prompt_area = centered_rect(78, 100, prompt_area);
     let prompt_block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::Rgb(98, 213, 244)))
-        .style(Style::default().bg(Color::Rgb(37, 38, 40)))
+        .border_style(Style::default().fg(crate::tui::theme::accent()))
+        .style(Style::default().bg(crate::tui::theme::input()))
         .padding(ratatui::widgets::Padding::new(2, 0, 1, 0));
     let prompt_inner = prompt_block.inner(prompt_area);
     let (input_lines, (cursor_line, cursor_column)) =
         wrap_input_text(&app.input, prompt_inner.width);
     let prompt = if app.input.is_empty() {
         vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Rgb(98, 213, 244))),
+            Span::styled("› ", Style::default().fg(crate::tui::theme::accent())),
             Span::styled(
                 "Describe what you want to change…",
                 Style::default().fg(Color::DarkGray),
@@ -288,7 +316,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
             .map(|(index, line)| {
                 if index == 0 {
                     Line::from(vec![
-                        Span::styled("› ", Style::default().fg(Color::Rgb(98, 213, 244))),
+                        Span::styled("› ", Style::default().fg(crate::tui::theme::accent())),
                         Span::styled(line.clone(), Style::default().fg(Color::White)),
                     ])
                 } else {
@@ -331,9 +359,12 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" submit   ", Style::default().fg(Color::DarkGray)),
-        Span::styled("/settings", Style::default().fg(Color::Rgb(98, 213, 244))),
+        Span::styled(
+            "/settings",
+            Style::default().fg(crate::tui::theme::accent()),
+        ),
         Span::styled("  ", Style::default()),
-        Span::styled("/effort", Style::default().fg(Color::Rgb(98, 213, 244))),
+        Span::styled("/effort", Style::default().fg(crate::tui::theme::accent())),
         Span::styled(
             "   /mode   /init   @path   Ctrl+↑/↓ scroll   Esc quit",
             Style::default().fg(Color::DarkGray),
@@ -583,6 +614,99 @@ mod backdrop_tests {
             text: "hello".to_owned(),
         });
         assert_eq!(particle_count(&app), 0);
+    }
+
+    fn chatting(settings: impl FnOnce(&mut Settings)) -> App {
+        let mut app = app(true);
+        settings(&mut app.settings);
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::Assistant,
+            text: "hello".to_owned(),
+        });
+        app
+    }
+
+    #[test]
+    fn the_chat_backdrop_is_off_until_asked_for() {
+        assert_eq!(particle_count(&chatting(|_| {})), 0);
+        assert!(particle_count(&chatting(|s| s.backdrop_in_chat = true)) > 5);
+    }
+
+    #[test]
+    fn the_chat_backdrop_ignores_the_welcome_switch() {
+        let on_in_chat_only = chatting(|s| {
+            s.background_animation = false;
+            s.backdrop_in_chat = true;
+        });
+        assert!(particle_count(&on_in_chat_only) > 5);
+        let welcome_only = chatting(|s| {
+            s.background_animation = true;
+            s.backdrop_in_chat = false;
+        });
+        assert_eq!(particle_count(&welcome_only), 0);
+    }
+
+    fn glyph_strength(app: &App) -> u32 {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| PARTICLE_GLYPHS.contains(&cell.symbol()))
+            .map(|cell| match cell.fg {
+                ratatui::style::Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn dimming_only_affects_the_conversation_not_the_welcome_screen() {
+        let bright = chatting(|s| {
+            s.backdrop_in_chat = true;
+            s.dim_backdrop_in_chat = false;
+        });
+        let dimmed = chatting(|s| {
+            s.backdrop_in_chat = true;
+            s.dim_backdrop_in_chat = true;
+        });
+        assert!(glyph_strength(&dimmed) * 10 < glyph_strength(&bright) * 7);
+        // The welcome screen is never dimmed, whatever the setting says.
+        let mut welcome_dim = app(true);
+        welcome_dim.settings.dim_backdrop_in_chat = true;
+        let mut welcome_bright = app(true);
+        welcome_bright.settings.dim_backdrop_in_chat = false;
+        // The animation clock moves between the two draws, so allow a little drift.
+        let (a, b) = (
+            glyph_strength(&welcome_dim),
+            glyph_strength(&welcome_bright),
+        );
+        assert!(a.abs_diff(b) * 50 < a, "{a} vs {b}");
+    }
+
+    #[test]
+    fn no_color_turns_off_the_chat_backdrop_too() {
+        // NO_COLOR is read from the environment; the guard itself is what is under test.
+        assert!(!crate::tui::backdrop::backdrop_enabled(true, true));
+    }
+
+    #[test]
+    fn the_theme_backdrop_replaces_the_original_one() {
+        let mut app = app(true);
+        app.settings.theme = crate::ThemeId::Sakura;
+        assert_eq!(particle_count(&app), 0, "snow glyphs are gone");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        let petals = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| ["✿", "❀"].contains(&cell.symbol()))
+            .count();
+        assert!(petals > 0, "petals fall on the Sakura welcome screen");
     }
 
     #[test]

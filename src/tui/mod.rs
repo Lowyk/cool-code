@@ -12,6 +12,7 @@ pub(crate) mod sessions;
 mod settings;
 mod state;
 mod stats_view;
+mod theme;
 mod widgets;
 mod wordmark;
 

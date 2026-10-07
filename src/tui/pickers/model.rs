@@ -72,12 +72,12 @@ pub(in crate::tui) fn draw_model_picker(
 ) {
     let popup = centered_rect(72, 76, area);
     frame.render_widget(Clear, popup);
-    let accent = Color::Rgb(120, 220, 245);
+    let accent = crate::tui::theme::accent_bright();
     let block = Block::default()
         .title(" Model ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(Color::Rgb(25, 32, 38)));
+        .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.height < 4 {
