@@ -176,13 +176,6 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
         {
             continue;
         }
-        // The ChatGPT backend marks models it does not want listed as hidden.
-        if field("visibility")
-            .and_then(Value::as_str)
-            .is_some_and(|visibility| visibility == "hide")
-        {
-            continue;
-        }
         models.push(FetchedModel {
             id: id.to_owned(),
             name: field("name")
@@ -193,7 +186,8 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
                 .unwrap_or_default(),
             free: field("billing_free").and_then(Value::as_bool),
             tools: field("supports_tools").and_then(Value::as_bool),
-            context: field("context_window")
+            context: field("max_context_window")
+                .or_else(|| field("context_window"))
                 .or_else(|| field("context_length"))
                 .and_then(Value::as_u64),
         });
@@ -630,16 +624,23 @@ mod tests {
     }
 
     #[test]
-    fn chatgpt_style_model_lists_use_slugs_and_skip_hidden_models() {
+    fn chatgpt_style_model_lists_use_slugs_and_keep_models_hidden_from_codex_s_picker() {
         let value = serde_json::json!({"models": [
-            {"slug": "gpt-6.1", "display_name": "GPT-6.1", "visibility": "list"},
-            {"slug": "gpt-6", "display_name": "GPT-6"},
-            {"slug": "internal-test", "display_name": "Internal", "visibility": "hide"}
+            {"slug": "model-a", "display_name": "Model A Sol", "visibility": "list",
+             "context_window": 272000, "max_context_window": 1000000},
+            {"slug": "model-b", "display_name": "Model B", "context_window": 128000},
+            {"slug": "model-c", "display_name": "Model C", "visibility": "hide"}
         ]});
         let models = super::parse_models(&value);
         let ids: Vec<_> = models.iter().map(|model| model.id.as_str()).collect();
-        assert_eq!(ids, ["gpt-6.1", "gpt-6"]);
-        assert_eq!(models[0].name, "GPT-6.1");
+        assert_eq!(ids, ["model-a", "model-b", "model-c"]);
+        assert_eq!(models[0].name, "Model A Sol");
+        assert_eq!(
+            models[0].context,
+            Some(1_000_000),
+            "the largest window, not the default"
+        );
+        assert_eq!(models[1].context, Some(128_000));
     }
 
     use super::{

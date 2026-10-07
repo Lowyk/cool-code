@@ -6,11 +6,10 @@
 
 use crate::chatgpt_auth::{self, Account, LoginFlow, Session};
 use crate::tui::forms::unique_provider_alias;
-use crate::tui::models::model_name;
 use crate::tui::render::centered_rect;
 use crate::tui::settings::sync::TaskResult;
 use crate::tui::state::App;
-use crate::{ModelProfile, ProviderProfile, write_settings};
+use crate::{ProviderProfile, write_settings};
 use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -21,9 +20,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The name a ChatGPT sign-in is saved under.
 const PROFILE_NAME: &str = "ChatGPT Plus/Pro (unofficial)";
-
-/// Models offered after signing in; the list can be changed in Settings → Models.
-const MODELS: [&str; 4] = ["gpt-6.1", "gpt-6", "gpt-5.6", "gpt-5.5"];
 
 /// The ways to use OpenAI, in the order they are listed.
 const METHODS: [(&str, &str); 2] = [
@@ -194,14 +190,7 @@ impl App {
             id: id.clone(),
             name: unique_provider_alias(&self.settings.providers, PROFILE_NAME),
             adapter: "chatgpt".to_owned(),
-            model: MODELS[0].to_owned(),
-            models: MODELS
-                .iter()
-                .map(|model| ModelProfile {
-                    id: (*model).to_owned(),
-                    name: model_name(model),
-                })
-                .collect(),
+            // Models come from the account itself, right after signing in.
             base_url: Some(chatgpt_auth::API_BASE.to_owned()),
             models_url: Some(chatgpt_auth::MODELS_URL.to_owned()),
             limits_url: Some(chatgpt_auth::USAGE_URL.to_owned()),
@@ -215,7 +204,7 @@ impl App {
         if self.settings.active_provider_id.is_none() {
             self.settings.active_provider_id = Some(id.clone());
             self.settings.provider = Some(profile.adapter.clone());
-            self.settings.model = Some(profile.model.clone());
+            self.settings.model = None;
             self.settings.base_url = profile.base_url.clone();
             self.settings.api_key_env = None;
         }
@@ -488,7 +477,10 @@ mod tests {
         assert_eq!(profile.name, "ChatGPT Plus/Pro (unofficial)");
         assert_eq!(profile.adapter, "chatgpt");
         assert_eq!(profile.base_url.as_deref(), Some(chatgpt_auth::API_BASE));
-        assert!(!profile.draft && !profile.models.is_empty());
+        assert!(
+            !profile.draft && profile.models.is_empty(),
+            "models arrive from the account"
+        );
         assert_eq!(
             app.settings.default_provider_id.as_deref(),
             Some(profile.id.as_str())
@@ -567,7 +559,8 @@ mod tests {
             .iter()
             .map(|model| model.id.as_str())
             .collect();
-        assert_eq!(ids, ["gpt-6.1", "gpt-6", "gpt-5.6", "gpt-5.5"]);
+        assert!(ids.is_empty(), "no model names are built in: {ids:?}");
+        assert_eq!(app.settings.model, None);
         assert_eq!(
             profile.models_url.as_deref(),
             Some("https://chatgpt.com/backend-api/codex/models")
@@ -589,11 +582,11 @@ mod tests {
             result: Ok((account("me@example.com"), session())),
         });
         let id = app.settings.providers[0].id.clone();
-        app.settings.providers[0].models.push(ModelProfile {
-            id: "gpt-5-codex".to_owned(),
+        app.settings.providers[0].models.push(crate::ModelProfile {
+            id: "retired-model".to_owned(),
             name: String::new(),
         });
-        app.settings.providers[0].model = "gpt-5-codex".to_owned();
+        app.settings.providers[0].model = "retired-model".to_owned();
         let fetched = |id: &str| FetchedModel {
             id: id.to_owned(),
             name: String::new(),
@@ -617,6 +610,11 @@ mod tests {
         assert_eq!(
             profile.model, "gpt-6.1",
             "a retired default moves to the first listed model"
+        );
+        assert_eq!(app.settings.model.as_deref(), Some("gpt-6.1"));
+        assert_eq!(
+            app.notice, "ChatGPT Plus/Pro (unofficial): 2 models loaded from your account.",
+            "the count is the real number of models"
         );
     }
 
