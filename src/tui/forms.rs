@@ -158,6 +158,7 @@ impl App {
             existing_id: Some(profile.id.clone()),
             preset,
             alias: profile.name.clone(),
+            suggested_alias: profile.name.clone(),
             base_url: profile.base_url.clone().unwrap_or_default(),
             api_key: String::new(),
             models,
@@ -195,7 +196,11 @@ impl App {
         let Some(draft) = self.provider_form.as_ref() else {
             return Ok(());
         };
-        let name = draft.alias.trim().to_owned();
+        let name = if draft.alias.trim().is_empty() {
+            draft.suggested_alias.trim().to_owned()
+        } else {
+            draft.alias.trim().to_owned()
+        };
         let api_key = draft.api_key.trim().to_owned();
         let preset = &PROVIDER_PRESETS[draft.preset];
         let models = draft
@@ -358,7 +363,9 @@ impl App {
                 KeyCode::Enter => {
                     let preset = &PROVIDER_PRESETS[form.preset];
                     form.choosing_preset = false;
-                    form.alias = unique_provider_alias(&self.settings.providers, preset.label);
+                    form.alias = String::new();
+                    form.suggested_alias =
+                        unique_provider_alias(&self.settings.providers, preset.label);
                     form.base_url = preset.base_url.unwrap_or_default().to_owned();
                     form.models = preset
                         .models
@@ -665,8 +672,9 @@ mod tests {
     use super::{remove_provider_profile, unique_provider_alias};
     use crate::tui::render::draw;
     use crate::tui::settings::Section;
-    use crate::tui::state::{App, ModelDraft, ProviderDraft};
+    use crate::tui::state::{App, ModelDraft, PROVIDER_PRESETS, ProviderDraft};
     use crate::{ChainModel, ModelChain, ProviderProfile, Settings};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -738,6 +746,111 @@ mod tests {
         assert!(settings.active_chain_id.is_some());
     }
 
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn custom_openai_preset() -> usize {
+        PROVIDER_PRESETS
+            .iter()
+            .position(|preset| preset.label == "Custom OpenAI-compatible API")
+            .expect("custom preset")
+    }
+
+    fn form_after_choosing_custom_preset() -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.open_settings(Section::Providers);
+        let mut form = ProviderDraft {
+            choosing_preset: true,
+            existing_id: None,
+            preset: custom_openai_preset(),
+            alias: String::new(),
+            suggested_alias: String::new(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: Vec::new(),
+            focus: 0,
+        };
+        form.choosing_preset = true;
+        app.provider_form = Some(form);
+        app.handle_provider_form(key(KeyCode::Enter))
+            .expect("choose preset");
+        app
+    }
+
+    #[test]
+    fn choosing_a_preset_leaves_the_alias_empty_with_a_suggestion() {
+        let app = form_after_choosing_custom_preset();
+        let form = app.provider_form.as_ref().expect("form");
+        assert_eq!(form.alias, "");
+        assert_eq!(form.suggested_alias, "Custom OpenAI-compatible API");
+    }
+
+    #[test]
+    fn typing_an_alias_needs_no_deleting_first() {
+        let mut app = form_after_choosing_custom_preset();
+        for c in "groq".chars() {
+            app.handle_provider_form(key(KeyCode::Char(c)))
+                .expect("type");
+        }
+        assert_eq!(app.provider_form.as_ref().expect("form").alias, "groq");
+    }
+
+    #[test]
+    fn a_blank_alias_saves_under_the_suggested_name() {
+        let mut app = form_after_choosing_custom_preset();
+        {
+            let form = app.provider_form.as_mut().expect("form");
+            form.base_url = "https://example.invalid/v1".to_owned();
+        }
+        app.save_provider(true).expect("save draft");
+        assert_eq!(app.settings.providers.len(), 1);
+        assert_eq!(
+            app.settings.providers[0].name,
+            "Custom OpenAI-compatible API"
+        );
+    }
+
+    #[test]
+    fn the_form_shows_the_suggestion_as_a_placeholder_until_typing() {
+        let mut app = form_after_choosing_custom_preset();
+        let mut terminal = Terminal::new(TestBackend::new(100, 36)).expect("terminal");
+        let text = |terminal: &Terminal<TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        assert!(text(&terminal).contains("Custom OpenAI-compatible API"));
+        app.handle_provider_form(key(KeyCode::Char('x')))
+            .expect("type");
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        assert!(!text(&terminal).contains("Custom OpenAI-compatible API"));
+    }
+
+    #[test]
+    fn editing_an_existing_provider_keeps_its_alias() {
+        let mut app = App::new(Settings::default());
+        app.settings.providers = vec![ProviderProfile {
+            id: "p1".to_owned(),
+            name: "My Router".to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            model: "m".to_owned(),
+            models: Vec::new(),
+            draft: false,
+            auto_switch: false,
+            base_url: Some("https://example.invalid/v1".to_owned()),
+        }];
+        app.edit_provider(0);
+        let form = app.provider_form.as_ref().expect("form");
+        assert_eq!(form.alias, "My Router");
+    }
+
     #[test]
     fn provider_settings_mask_api_key_input() {
         let backend = TestBackend::new(100, 36);
@@ -750,6 +863,7 @@ mod tests {
             existing_id: None,
             preset: 0,
             alias: "Test Provider".to_owned(),
+            suggested_alias: String::new(),
             base_url: String::new(),
             api_key: "super-secret-value".to_owned(),
             models: vec![ModelDraft {

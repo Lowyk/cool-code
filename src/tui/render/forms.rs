@@ -39,41 +39,60 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
         let (key_focus, model_start, create_focus, save_focus, draft_focus, cancel_focus) =
             provider_focus_layout(form);
         let mut y = inner.y;
-        let mut render_field = |label: &str, value: &str, selected: bool, masked: bool| {
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        if selected { "› " } else { "  " },
-                        Style::default().fg(Color::Rgb(98, 213, 244)),
-                    ),
-                    Span::styled(
-                        label,
-                        Style::default().fg(if selected { Color::White } else { Color::Gray }),
-                    ),
-                ])),
-                Rect::new(inner.x, y, inner.width, 1),
-            );
-            y = y.saturating_add(1);
-            let visible = if masked {
-                "•".repeat(value.chars().count().min(42))
-            } else if value.is_empty() {
-                "(empty)".to_owned()
-            } else {
-                value.to_owned()
+        let mut render_field =
+            |label: &str, value: &str, placeholder: &str, selected: bool, masked: bool| {
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(
+                            if selected { "› " } else { "  " },
+                            Style::default().fg(Color::Rgb(98, 213, 244)),
+                        ),
+                        Span::styled(
+                            label,
+                            Style::default().fg(if selected { Color::White } else { Color::Gray }),
+                        ),
+                    ])),
+                    Rect::new(inner.x, y, inner.width, 1),
+                );
+                y = y.saturating_add(1);
+                let placeholder_shown = value.is_empty() && !masked;
+                let visible = if masked {
+                    "•".repeat(value.chars().count().min(42))
+                } else if value.is_empty() {
+                    if placeholder.is_empty() {
+                        "(empty)".to_owned()
+                    } else {
+                        placeholder.to_owned()
+                    }
+                } else {
+                    value.to_owned()
+                };
+                let color = if placeholder_shown {
+                    Color::DarkGray
+                } else {
+                    Color::Rgb(185, 195, 205)
+                };
+                frame.render_widget(
+                    Paragraph::new(visible).style(Style::default().fg(color)),
+                    Rect::new(inner.x + 3, y, inner.width.saturating_sub(3), 1),
+                );
+                y = y.saturating_add(2);
             };
-            frame.render_widget(
-                Paragraph::new(visible).style(Style::default().fg(Color::Rgb(185, 195, 205))),
-                Rect::new(inner.x + 3, y, inner.width.saturating_sub(3), 1),
-            );
-            y = y.saturating_add(2);
-        };
-        render_field("Alias", &form.alias, form.focus == 0, false);
+        // An empty alias shows the suggested name dimly; typing replaces it, leaving it blank uses it.
+        render_field(
+            "Alias",
+            &form.alias,
+            &form.suggested_alias,
+            form.focus == 0,
+            false,
+        );
         if preset.custom {
-            render_field("Base URL", &form.base_url, form.focus == 1, false);
+            render_field("Base URL", &form.base_url, "", form.focus == 1, false);
         }
         render_field(
             "API Key · kept in OS credential store",
             &form.api_key,
+            "",
             form.focus == key_focus,
             true,
         );
