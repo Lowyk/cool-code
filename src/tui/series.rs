@@ -23,6 +23,10 @@ pub(super) fn resolve_series(settings: &Settings, query: &str) -> Vec<(usize, St
         .filter(|(_, profile)| !profile.draft)
     {
         for model in &profile.models {
+            // A provider that opted out of automatic switching is never picked by a series name.
+            if !super::models::is_auto_candidate(settings, profile, &model.id) {
+                continue;
+            }
             let found = ParsedName::new(model.id.rsplit('/').next().unwrap_or(&model.id));
             let has_words = wanted.words.iter().all(|word| found.words.contains(word));
             let has_version = wanted.version.is_empty() || wanted.version == found.version;
@@ -120,6 +124,7 @@ mod tests {
             name: id.to_owned(),
             adapter: "openai".to_owned(),
             model: models.first().map(|m| (*m).to_owned()).unwrap_or_default(),
+            auto_switch: true,
             models: models
                 .iter()
                 .map(|id| ModelProfile {
@@ -160,6 +165,40 @@ mod tests {
                 "gpt-oss-120b",
             ],
         )])
+    }
+
+    #[test]
+    fn a_provider_with_automatic_switching_off_is_never_picked_by_a_series_name() {
+        let mut off = provider("off", &["claude-fable-5", "claude-fable-6"]);
+        off.auto_switch = false;
+        let on = provider("on", &["claude-fable-5"]);
+        let both = settings(vec![off.clone(), on.clone()]);
+        let found = resolve_series(&both, "fable");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(both.providers[found[0].0].id, "on");
+        assert_eq!(
+            found[0].1, "claude-fable-5",
+            "its newer model is not offered either"
+        );
+        let none = settings(vec![off]);
+        assert!(resolve_series(&none, "fable").is_empty());
+    }
+
+    #[test]
+    fn a_chain_member_can_still_be_picked_by_a_series_name() {
+        let mut off = provider("off", &["claude-fable-5"]);
+        off.auto_switch = false;
+        let mut chained = settings(vec![off]);
+        chained.model_chains.push(crate::ModelChain {
+            id: "c".to_owned(),
+            alias: "C".to_owned(),
+            members: vec![crate::ChainModel {
+                provider_id: "off".to_owned(),
+                model_id: "claude-fable-5".to_owned(),
+            }],
+            activate_on_select: false,
+        });
+        assert_eq!(ids(resolve_series(&chained, "fable")), ["claude-fable-5"]);
     }
 
     #[test]

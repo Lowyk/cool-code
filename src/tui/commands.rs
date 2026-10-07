@@ -197,6 +197,16 @@ impl App {
             self.finish_command("Opened the model picker.");
             return Ok(());
         }
+        if value == "/forcemodel" || value.starts_with("/forcemodel ") {
+            let model = value.trim_start_matches("/forcemodel").trim();
+            if model.is_empty() {
+                self.notice = "Usage: /forcemodel <model-id> (sets it on the default provider, whatever the automatic-switching rules say)".to_owned();
+            } else {
+                self.force_model(model)?;
+            }
+            self.finish_command(self.notice.clone());
+            return Ok(());
+        }
         if let Some(model) = value.strip_prefix("/model ") {
             let model = model.trim();
             if model.is_empty() {
@@ -236,7 +246,7 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }
