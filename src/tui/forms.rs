@@ -470,6 +470,7 @@ impl App {
                 preset.label
             )
         };
+        self.refresh_key_shape(self.provider_index, true);
         if fetch_after_save {
             self.start_models_fetch(self.provider_index, true);
         }
@@ -805,6 +806,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{remove_provider_profile, unique_provider_alias};
+    use crate::endpoints::clean;
     use crate::tui::render::draw;
     use crate::tui::settings::Section;
     use crate::tui::state::{App, ModelDraft, PROVIDER_PRESETS, ProviderDraft};

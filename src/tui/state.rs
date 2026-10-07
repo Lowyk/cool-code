@@ -74,6 +74,8 @@ pub(super) struct App {
     pub(super) task_results: std::sync::mpsc::Receiver<crate::tui::settings::sync::TaskResult>,
     pub(super) limits: std::collections::HashMap<String, crate::tui::settings::sync::LimitsEntry>,
     pub(super) models_loading: std::collections::HashSet<String>,
+    /// Per-provider description of the saved key's shape (never the key itself).
+    pub(super) key_shapes: std::collections::HashMap<String, String>,
     #[cfg(test)]
     pub(super) spawned_tasks: usize,
     pub(super) history_scroll: u16,
@@ -334,6 +336,7 @@ impl App {
             task_results,
             limits: std::collections::HashMap::new(),
             models_loading: std::collections::HashSet::new(),
+            key_shapes: std::collections::HashMap::new(),
             #[cfg(test)]
             spawned_tasks: 0,
             history_scroll: 0,

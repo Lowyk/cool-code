@@ -41,7 +41,7 @@ pub(in crate::tui) struct LimitsEntry {
 /// explicitly asked (`allow_env`) the global `HARNESS_API_KEY`. Automatic fetches never use the
 /// environment key, which may belong to a different vendor.
 #[cfg(not(test))]
-fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
+pub(in crate::tui) fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
     crate::secrets::load(provider_id)
         .ok()
         .flatten()
@@ -56,7 +56,7 @@ fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
 // Tests must never read the real credential store. A provider named `no-key` has no key, and
 // one named `env-only` has only the environment key.
 #[cfg(test)]
-fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
+pub(in crate::tui) fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
     match provider_id {
         "no-key" => None,
         "env-only" => allow_env.then(|| "env-key".to_owned()),

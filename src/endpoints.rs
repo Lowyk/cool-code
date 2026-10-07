@@ -77,6 +77,36 @@ pub(crate) fn resolve_endpoint(base_url: &str, input: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+/// Describes the shape of a saved API key without revealing any of it: its length and anything
+/// that commonly makes providers reject a pasted key.
+pub(crate) fn describe_key(key: &str, expected_prefix: Option<&str>) -> String {
+    if key.is_empty() {
+        return "empty".to_owned();
+    }
+    let mut problems = Vec::new();
+    let quote = |c: char| matches!(c, '"' | '\'' | '`');
+    if key.starts_with(quote) || key.ends_with(quote) {
+        problems.push("wrapped in quotes".to_owned());
+    }
+    if key.chars().any(char::is_whitespace) {
+        problems.push("contains spaces or line breaks".to_owned());
+    }
+    if key.len() >= 7 && key[..7].eq_ignore_ascii_case("bearer ") {
+        problems.push("starts with Bearer".to_owned());
+    }
+    if let Some(prefix) = expected_prefix
+        && !key.starts_with(prefix)
+    {
+        problems.push(format!("does not start with {prefix}"));
+    }
+    let count = key.chars().count();
+    if problems.is_empty() {
+        format!("{count} characters · looks well-formed")
+    } else {
+        format!("{count} characters · {}", problems.join(", "))
+    }
+}
+
 /// Explains a rejected API key (HTTP 401 or 403) in terms of what the user can do about it;
 /// other errors pass through unchanged.
 pub(crate) fn friendly_fetch_error(raw: &str) -> String {
@@ -651,6 +681,29 @@ mod tests {
             .expect_err("too large")
             .to_string();
         assert!(error.contains("too large"), "{error}");
+    }
+
+    #[test]
+    fn key_shape_reports_length_and_common_paste_problems_without_revealing_the_key() {
+        let prefix = Some("ma-live-");
+        assert_eq!(
+            super::describe_key("ma-live-abcd", prefix),
+            "12 characters · looks well-formed"
+        );
+        assert_eq!(
+            super::describe_key("abc", None),
+            "3 characters · looks well-formed"
+        );
+        assert_eq!(super::describe_key("", prefix), "empty");
+        let quoted = super::describe_key("\"ma-live-abcd\"", prefix);
+        assert!(quoted.contains("wrapped in quotes"), "{quoted}");
+        assert!(quoted.contains("does not start with ma-live-"), "{quoted}");
+        assert!(super::describe_key("ma-live-ab cd", prefix).contains("spaces or line breaks"));
+        assert!(super::describe_key("Bearer ma-live-abcd", prefix).contains("starts with Bearer"));
+        assert!(super::describe_key("sk-abcd", prefix).contains("does not start with ma-live-"));
+        for text in ["ma-live-abcd", "\"ma-live-abcd\"", "Bearer ma-live-abcd"] {
+            assert!(!super::describe_key(text, prefix).contains("abcd"));
+        }
     }
 
     #[test]
