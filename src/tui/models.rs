@@ -158,6 +158,13 @@ pub(super) fn resolve_model_reference(
             matches.push((index, id));
         }
     }
+    // A series name (`fable`, `fable-5`) picks the newest listed model of that series.
+    if matches.is_empty() {
+        matches = super::series::resolve_series(settings, requested);
+        if let Some((_, id)) = matches.first() {
+            resolved_id = id.clone();
+        }
+    }
     (resolved_id, matches)
 }
 
@@ -336,7 +343,14 @@ impl App {
             return Ok(());
         }
         if let Some((index, registered_id)) = matches.first() {
-            return self.activate_model(*index, registered_id);
+            self.activate_model(*index, registered_id)?;
+            if !registered_id.eq_ignore_ascii_case(requested) {
+                self.notice = format!(
+                    "`{requested}` matched {registered_id} via {}.",
+                    self.settings.providers[*index].name
+                );
+            }
+            return Ok(());
         }
 
         let configured_elsewhere = find_model_matches_all(&self.settings, &model_id);
@@ -593,6 +607,40 @@ mod tests {
         )];
         let (_, matches) = resolve_model_reference(&settings, "shared-model");
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn a_series_name_resolves_to_the_newest_listed_model() {
+        let mut settings = Settings::default();
+        settings.providers = vec![profile(
+            "multiai",
+            "openai-compatible",
+            &["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5"],
+            false,
+        )];
+        let (resolved, matches) = resolve_model_reference(&settings, "fable");
+        assert_eq!(resolved, "claude-fable-5-1");
+        assert_eq!(matches, vec![(0, "claude-fable-5-1".to_owned())]);
+        let (_, exact) = resolve_model_reference(&settings, "fable-5");
+        assert_eq!(exact, vec![(0, "claude-fable-5".to_owned())]);
+        let (_, none) = resolve_model_reference(&settings, "banana");
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn selecting_a_series_name_activates_the_match_and_says_so() {
+        use crate::tui::state::App;
+        let mut app = App::new(Settings::default());
+        app.settings.providers = vec![profile(
+            "multiai",
+            "openai-compatible",
+            &["claude-fable-5", "claude-fable-5-1"],
+            false,
+        )];
+        app.select_model("fable").expect("select");
+        assert_eq!(app.settings.model.as_deref(), Some("claude-fable-5-1"));
+        assert!(app.notice.contains("fable"), "{}", app.notice);
+        assert!(app.notice.contains("claude-fable-5-1"), "{}", app.notice);
     }
 
     #[test]

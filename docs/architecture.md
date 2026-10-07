@@ -40,6 +40,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/state.rs` | Application state, draft structs, and constants |
 | `src/tui/commands.rs` | Prompt submission and slash-command handling |
 | `src/tui/models.rs` | Model, provider, and chain resolution and activation |
+| `src/tui/series.rs` | Resolves series names such as `fable` or `fable-5` to the newest matching listed model |
 | `src/tui/forms.rs` | Provider and chain editing forms: state changes and key handling |
 | `src/tui/context.rs` | Workspace trust and `COOL.md` / `@path` context loading |
 | `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `providers`, `models`, `auto_switch`, `privacy`) plus `sync` (background model and usage fetches reported to the UI each frame) |

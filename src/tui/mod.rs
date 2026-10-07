@@ -6,6 +6,7 @@ mod forms;
 mod models;
 mod pickers;
 mod render;
+mod series;
 mod settings;
 mod state;
 mod stats_view;
