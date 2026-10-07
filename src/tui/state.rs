@@ -90,6 +90,12 @@ pub(super) struct App {
     /// (messages, length of the last one, estimated tokens): the conversation's size, recomputed
     /// only when the conversation changes.
     pub(super) context_cache: std::cell::Cell<(usize, usize, u64)>,
+    /// The file changes the model has made in the turn that is running.
+    pub(super) journal: Vec<crate::tui::undo::FileChange>,
+    /// One entry per finished turn that changed files, for `/undo`.
+    pub(super) checkpoints: Vec<crate::tui::undo::Checkpoint>,
+    /// Tells the model about an undo, in front of the user's next message.
+    pub(super) pending_note: Option<String>,
     pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
     pub(super) usage_view: Option<crate::tui::usage_view::UsageView>,
     #[cfg(test)]
@@ -459,6 +465,9 @@ impl App {
             models_loading: std::collections::HashSet::new(),
             key_shapes: std::collections::HashMap::new(),
             context_cache: std::cell::Cell::new((usize::MAX, 0, 0)),
+            journal: Vec::new(),
+            checkpoints: Vec::new(),
+            pending_note: None,
             stats_view: None,
             usage_view: None,
             #[cfg(test)]

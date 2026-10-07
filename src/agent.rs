@@ -20,6 +20,13 @@ pub(crate) enum PendingEvent {
         with: Vec<provider::ChatMessage>,
         summary: String,
     },
+    /// A file was created or changed by an edit tool (for `/undo`).
+    FileChanged {
+        path: std::path::PathBuf,
+        name: String,
+        before: Option<String>,
+        after: String,
+    },
     /// A `/compact` finished (or failed); there is no answer to show.
     CompactFinished(std::result::Result<(), String>),
     ApprovalRequest(ToolApproval),
@@ -506,6 +513,12 @@ pub(crate) fn execute_agent_tool(
             }
         }
         crate::tools::apply_create(root, &proposal)?;
+        let _ = events.send(PendingEvent::FileChanged {
+            path: root.join(&proposal.relative_path),
+            name: proposal.relative_path.clone(),
+            before: None,
+            after: proposal.content.clone(),
+        });
         return Ok(format!("Created new file {}.", proposal.relative_path));
     }
 
@@ -587,6 +600,12 @@ pub(crate) fn execute_agent_tool(
         }
     }
     crate::tools::apply_edit(root, &proposal)?;
+    let _ = events.send(PendingEvent::FileChanged {
+        path: root.join(&proposal.relative_path),
+        name: proposal.relative_path.clone(),
+        before: Some(proposal.original.clone()),
+        after: proposal.updated.clone(),
+    });
     Ok(format!(
         "Updated {} ({}).",
         proposal.relative_path, proposal.change_summary
@@ -1165,5 +1184,104 @@ mod compaction_tests {
             "tried once, then sent the request as it was"
         );
         assert_eq!(asked[1].len(), history().len());
+    }
+}
+
+#[cfg(test)]
+mod file_change_tests {
+    use super::*;
+
+    /// (name, text before, text after)
+    type Change = (String, Option<String>, String);
+
+    fn workspace() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("harness-changes-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "alpha\nbeta\n").unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    fn run_tool(
+        root: &Path,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> (Result<String>, Vec<Change>) {
+        let mut settings = Settings::default();
+        settings.permission_mode = "accept-everything".to_owned();
+        let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let result = execute_agent_tool(
+            &settings,
+            root,
+            name,
+            &arguments,
+            &sender,
+            &mut Vec::new(),
+            &cancel,
+            None,
+        );
+        drop(sender);
+        let changes = receiver
+            .try_iter()
+            .filter_map(|event| match event {
+                PendingEvent::FileChanged {
+                    name,
+                    before,
+                    after,
+                    ..
+                } => Some((name, before, after)),
+                _ => None,
+            })
+            .collect();
+        (result, changes)
+    }
+
+    #[test]
+    fn an_edit_reports_the_text_before_and_after() {
+        let root = workspace();
+        let (result, changes) = run_tool(
+            &root,
+            "replace_text",
+            serde_json::json!({"path": "a.txt", "old_text": "beta", "new_text": "gamma"}),
+        );
+        result.unwrap();
+        assert_eq!(
+            changes,
+            [(
+                "a.txt".to_owned(),
+                Some("alpha\nbeta\n".to_owned()),
+                "alpha\ngamma\n".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_new_file_reports_no_earlier_text() {
+        let root = workspace();
+        let (result, changes) = run_tool(
+            &root,
+            "create_file",
+            serde_json::json!({"path": "b.txt", "content": "hello"}),
+        );
+        result.unwrap();
+        assert_eq!(changes, [("b.txt".to_owned(), None, "hello".to_owned())]);
+    }
+
+    #[test]
+    fn a_change_that_did_not_happen_reports_nothing() {
+        let root = workspace();
+        let (result, changes) = run_tool(
+            &root,
+            "replace_text",
+            serde_json::json!({"path": "a.txt", "old_text": "not there", "new_text": "x"}),
+        );
+        assert!(result.is_err());
+        assert!(changes.is_empty());
+        let (_, reads) = run_tool(&root, "read_file", serde_json::json!({"path": "a.txt"}));
+        assert!(reads.is_empty(), "reading is not a change");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "alpha\nbeta\n"
+        );
     }
 }

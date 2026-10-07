@@ -34,6 +34,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/chatgpt_auth.rs` | The unofficial ChatGPT Plus/Pro sign-in: OAuth with PKCE through a local redirect server, token renewal, and the account kept in the credential store (access tokens only in memory) |
 | `src/responses.rs` | Builds requests in the OpenAI Responses format, which the ChatGPT sign-in backend speaks |
 | `src/context.rs` | Keeping a long conversation inside the context window: token estimates, the model-reported window, where to cut, and the summary that replaces the older messages |
+| `src/tui/undo.rs` | `/undo`: per-turn checkpoints of the files the edit tools changed, restored only when a file is still as the turn left it |
 | `src/tui/usage_view.rs` | `/usage`: every provider's usage (live where an endpoint exists, a dashboard pointer otherwise) |
 | `src/tui/chatgpt_login.rs` | The sign-in screens: the API-key-or-subscription question, waiting for the browser, and saving the finished sign-in as a provider |
 | `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
