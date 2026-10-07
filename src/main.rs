@@ -156,6 +156,8 @@ struct Settings {
     workflows: bool,
     /// Keep the effort name in the status line animated instead of fading it after a change.
     effort_always_animated: bool,
+    /// Warn when the active provider reports that its balance or usage limits are running low.
+    usage_warnings: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -276,6 +278,7 @@ impl Default for Settings {
             dynamic_workflows: false,
             workflows: false,
             effort_always_animated: false,
+            usage_warnings: true,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

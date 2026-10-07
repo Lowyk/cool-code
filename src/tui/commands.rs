@@ -579,6 +579,7 @@ impl App {
         }
         if was_pending && self.pending.is_none() {
             self.save_session();
+            self.check_usage_after_turn();
         }
     }
 

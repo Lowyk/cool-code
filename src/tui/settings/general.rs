@@ -14,7 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 12;
+pub(super) const ROWS: usize = 13;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -88,6 +88,7 @@ pub(super) fn draw_general(
         vec![switch(app.settings.default_load_agents_md)],
         vec![switch(app.settings.load_global_claude_md)],
         vec![switch(app.settings.dynamic_workflows)],
+        vec![switch(app.settings.usage_warnings)],
         vec![Span::styled("…", Style::default().fg(Color::DarkGray))],
     ];
     let labels = [
@@ -102,6 +103,7 @@ pub(super) fn draw_general(
         "Load AGENTS.md",
         "Global CLAUDE.md",
         "Dynamic workflows",
+        "Usage warnings",
         "Reset",
     ];
     let focused = view.focus == Focus::Content;
@@ -190,7 +192,14 @@ impl App {
                     };
                     write_settings(&self.settings)?;
                 }
-                11 => view.reset = Some(ResetStage::Menu { row: 0 }),
+                11 => {
+                    self.settings.usage_warnings = !self.settings.usage_warnings;
+                    if !self.settings.usage_warnings {
+                        self.usage_warning = None;
+                    }
+                    write_settings(&self.settings)?;
+                }
+                12 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;

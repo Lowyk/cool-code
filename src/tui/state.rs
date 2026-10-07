@@ -81,6 +81,12 @@ pub(super) struct App {
     pub(super) models_loading: std::collections::HashSet<String>,
     /// Per-provider description of the saved key's shape (never the key itself).
     pub(super) key_shapes: std::collections::HashMap<String, String>,
+    /// The most serious running-low warning for the active provider, shown in the status line.
+    pub(super) usage_warning: Option<crate::tui::usage_warnings::UsageWarning>,
+    /// Warnings already announced, so each is said only once.
+    pub(super) announced_warnings: std::collections::HashSet<String>,
+    /// The largest balance seen per provider, to judge a shrinking balance against.
+    pub(super) peak_balances: std::collections::HashMap<String, u64>,
     pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
     #[cfg(test)]
     pub(super) spawned_tasks: usize,
@@ -367,6 +373,9 @@ impl App {
             pending_model: None,
             model_picker: None,
             session_picker: None,
+            usage_warning: None,
+            announced_warnings: std::collections::HashSet::new(),
+            peak_balances: std::collections::HashMap::new(),
             cursor: std::cell::Cell::new(None),
             session_id: crate::session::new_id(session_created),
             session_created,

@@ -397,6 +397,17 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
     ];
     status_spans.extend(effort_spans);
+    if let Some(warning) = app.usage_warning.as_ref() {
+        let color = match warning.severity {
+            crate::tui::usage_warnings::Severity::Low => Color::Rgb(255, 197, 92),
+            crate::tui::usage_warnings::Severity::Critical => Color::Rgb(235, 80, 80),
+        };
+        status_spans.push(Span::raw("  "));
+        status_spans.push(Span::styled(
+            format!("!! {} !!", warning.short),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
     let status = Line::from(status_spans);
     // The one-line message about what just happened sits above the status line.
     frame.render_widget(
