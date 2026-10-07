@@ -1,3 +1,4 @@
+mod appearance;
 mod auto_switch;
 mod general;
 mod models;
@@ -5,6 +6,7 @@ mod privacy;
 mod providers;
 pub(super) mod sync;
 
+use crate::tui::settings::appearance::draw_appearance;
 use crate::tui::settings::auto_switch::draw_auto_switch;
 use crate::tui::settings::general::draw_general;
 use crate::tui::settings::models::{ModelEdit, draw_models};
@@ -23,6 +25,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum Section {
     General,
+    Appearance,
     Providers,
     Models,
     AutoSwitch,
@@ -30,8 +33,9 @@ pub(in crate::tui) enum Section {
 }
 
 impl Section {
-    pub(in crate::tui) const ALL: [Section; 5] = [
+    pub(in crate::tui) const ALL: [Section; 6] = [
         Section::General,
+        Section::Appearance,
         Section::Providers,
         Section::Models,
         Section::AutoSwitch,
@@ -41,6 +45,7 @@ impl Section {
     pub(in crate::tui) fn label(self) -> &'static str {
         match self {
             Section::General => "General",
+            Section::Appearance => "Appearance",
             Section::Providers => "Providers",
             Section::Models => "Models",
             Section::AutoSwitch => "Auto-switch",
@@ -58,7 +63,6 @@ impl Section {
 
 const SIDEBAR_WIDTH: u16 = 18;
 const COLLAPSE_BELOW_WIDTH: u16 = 70;
-const ACCENT: Color = Color::Rgb(98, 213, 244);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum Focus {
@@ -99,6 +103,7 @@ impl App {
     fn handle_section_key(&mut self, section: Section, key: event::KeyEvent) -> Result<()> {
         match section {
             Section::General => self.handle_general_key(key),
+            Section::Appearance => self.handle_appearance_key(key),
             Section::Providers => self.handle_providers_key(key),
             Section::Models => self.handle_models_key(key),
             Section::AutoSwitch => self.handle_auto_switch_key(key),
@@ -164,8 +169,8 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
     let block = Block::default()
         .title(" Settings ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(Color::Rgb(22, 24, 27)));
+        .border_style(Style::default().fg(crate::tui::theme::accent()))
+        .style(Style::default().bg(crate::tui::theme::panel_alt()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 3 || inner.width < 10 {
@@ -186,7 +191,9 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
     } else {
         let switcher = Line::from(Span::styled(
             format!("‹ {} ›", view.section.label()),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(crate::tui::theme::accent())
+                .add_modifier(Modifier::BOLD),
         ));
         frame.render_widget(
             Paragraph::new(switcher).alignment(Alignment::Center),
@@ -202,6 +209,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
 
     match view.section {
         Section::General => draw_general(frame, content, app, view),
+        Section::Appearance => draw_appearance(frame, content, app, view),
         Section::Providers => draw_providers(frame, content, app, view),
         Section::Models => draw_models(frame, content, app, view),
         Section::AutoSwitch => draw_auto_switch(frame, content, app, view),
@@ -230,14 +238,16 @@ fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView)
         .map(|section| {
             let selected = *section == view.section;
             let style = match (selected, view.focus) {
-                (true, Focus::Sidebar) => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                (true, Focus::Sidebar) => Style::default()
+                    .fg(crate::tui::theme::accent())
+                    .add_modifier(Modifier::BOLD),
                 (true, Focus::Content) => Style::default().fg(Color::White),
                 (false, _) => Style::default().fg(Color::Gray),
             };
             Line::from(vec![
                 Span::styled(
                     if selected { "▸ " } else { "  " },
-                    Style::default().fg(ACCENT),
+                    Style::default().fg(crate::tui::theme::accent()),
                 ),
                 Span::styled(section.label(), style),
             ])
@@ -280,7 +290,7 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
             "Remove this redaction value? y/n".to_owned()
         }
         Section::Privacy => privacy_confirm_question(view.row).to_owned(),
-        Section::General | Section::Providers => {
+        Section::General | Section::Appearance | Section::Providers => {
             let name = app
                 .settings
                 .providers
@@ -304,7 +314,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
         (Focus::Content, Section::Models) => {
             "↑↓ move   n add   r rename   x remove   ← sections   Esc back"
         }
-        (Focus::Content, Section::General) => "↑↓ move   Enter change   ← sections   Esc back",
+        (Focus::Content, Section::General | Section::Appearance) => {
+            "↑↓ move   Enter change   ← sections   Esc back"
+        }
         (Focus::Content, Section::Providers) => {
             "↑↓ move   Enter edit   n add   d default   a auto   f models   u usage   x delete   Esc back"
         }
@@ -359,7 +371,14 @@ mod tests {
             Some(SettingsView::open(Section::General))
         );
         let text = screen(&app, 100, 30);
-        for label in ["General", "Providers", "Models", "Auto-switch", "Privacy"] {
+        for label in [
+            "General",
+            "Appearance",
+            "Providers",
+            "Models",
+            "Auto-switch",
+            "Privacy",
+        ] {
             assert!(text.contains(label), "{label} missing:\n{text}");
         }
         assert!(text.contains("Effort"), "{text}");
@@ -383,7 +402,7 @@ mod tests {
         app.open_settings(Section::General);
         app.handle_settings_view_key(key(KeyCode::Right))
             .expect("focus");
-        for _ in 0..5 {
+        for _ in 0..4 {
             app.handle_settings_view_key(key(KeyCode::Down))
                 .expect("down");
         }
@@ -401,7 +420,7 @@ mod tests {
         app.open_settings(Section::General);
         app.handle_settings_view_key(key(KeyCode::Right))
             .expect("focus");
-        for _ in 0..6 {
+        for _ in 0..5 {
             app.handle_settings_view_key(key(KeyCode::Down))
                 .expect("down");
         }
@@ -412,22 +431,6 @@ mod tests {
         app.handle_settings_view_key(key(KeyCode::Enter))
             .expect("off");
         assert!(!app.settings.stats_enabled);
-    }
-
-    #[test]
-    fn general_background_row_toggles_the_animation() {
-        let mut app = app();
-        app.open_settings(Section::General);
-        app.handle_settings_view_key(key(KeyCode::Right))
-            .expect("focus");
-        for _ in 0..4 {
-            app.handle_settings_view_key(key(KeyCode::Down))
-                .expect("down");
-        }
-        let before = app.settings.background_animation;
-        app.handle_settings_view_key(key(KeyCode::Enter))
-            .expect("toggle");
-        assert_eq!(app.settings.background_animation, !before);
     }
 
     #[test]
@@ -494,6 +497,11 @@ mod tests {
     fn sidebar_up_moves_to_previous_section() {
         let mut app = app();
         app.open_settings(Section::Providers);
+        app.handle_settings_view_key(key(KeyCode::Up)).expect("up");
+        assert_eq!(
+            app.settings_view.as_ref().map(|v| v.section),
+            Some(Section::Appearance)
+        );
         app.handle_settings_view_key(key(KeyCode::Up)).expect("up");
         assert_eq!(
             app.settings_view.as_ref().map(|v| v.section),

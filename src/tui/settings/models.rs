@@ -46,7 +46,7 @@ pub(super) fn draw_models(
     app: &App,
     view: &SettingsView,
 ) {
-    let accent = Color::Rgb(98, 213, 244);
+    let accent = crate::tui::theme::accent();
     let prompt = |label: &str, text: &str| {
         Line::from(vec![
             Span::styled(format!("{label}: "), Style::default().fg(Color::Gray)),

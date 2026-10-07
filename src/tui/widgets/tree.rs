@@ -386,7 +386,7 @@ pub(in crate::tui) fn draw_tree(
         );
         return;
     }
-    let accent = Color::Rgb(120, 220, 245);
+    let accent = crate::tui::theme::accent_bright();
     let selected = selected.min(rows.len() - 1);
     let lines = rows
         .iter()

@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 7;
+pub(super) const ROWS: usize = 6;
 
 pub(super) fn draw_general(
     frame: &mut ratatui::Frame<'_>,
@@ -57,11 +57,6 @@ pub(super) fn draw_general(
         )],
         vec![mode_span(&app.settings.permission_mode, true)],
         vec![trust],
-        vec![if app.settings.background_animation {
-            Span::styled("on", Style::default().fg(Color::Rgb(110, 220, 130)))
-        } else {
-            Span::styled("off", Style::default().fg(Color::Gray))
-        }],
         vec![Span::styled(
             match app.settings.pulse {
                 PulseMode::Off => "off",
@@ -81,7 +76,6 @@ pub(super) fn draw_general(
         "Effort",
         "Mode",
         "Workspace trust",
-        "Background",
         "Pulse",
         "Usage stats",
     ];
@@ -92,7 +86,7 @@ pub(super) fn draw_general(
         let mut spans = vec![
             Span::styled(
                 if selected { "▸ " } else { "  " },
-                Style::default().fg(Color::Rgb(98, 213, 244)),
+                Style::default().fg(crate::tui::theme::accent()),
             ),
             Span::styled(
                 format!("{label:<17}"),
@@ -141,11 +135,7 @@ impl App {
                     self.mode_picker = true;
                 }
                 3 => self.set_workspace_trusted(!self.workspace_trusted)?,
-                4 => {
-                    self.settings.background_animation = !self.settings.background_animation;
-                    write_settings(&self.settings)?;
-                }
-                6 => {
+                5 => {
                     self.settings.stats_enabled = !self.settings.stats_enabled;
                     self.settings.stats_prompt_answered = true;
                     write_settings(&self.settings)?;
