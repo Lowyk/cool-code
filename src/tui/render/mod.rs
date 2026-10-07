@@ -251,21 +251,13 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         {
             lines.extend(streaming_lines(turn, app.settings.pulse));
         }
-        let wrapped_line_count = lines
-            .iter()
-            .map(|line| {
-                let display_width = line
-                    .spans
-                    .iter()
-                    .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
-                    .sum::<usize>();
-                display_width
-                    .div_ceil(history_area.width.max(1) as usize)
-                    .max(1)
-            })
-            .sum::<usize>();
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-        let max_scroll = wrapped_line_count.saturating_sub(history_area.height as usize) as u16;
+        // Exact count from the same word wrapping the paragraph draws with; estimating it
+        // from character widths under-counts and hides the end of long answers.
+        let wrapped_line_count = paragraph.line_count(history_area.width.max(1));
+        let max_scroll = wrapped_line_count
+            .saturating_sub(history_area.height as usize)
+            .min(u16::MAX as usize) as u16;
         let scroll = max_scroll.saturating_sub(app.history_scroll.min(max_scroll));
         frame.render_widget(paragraph.scroll((scroll, 0)), history_area);
     }
@@ -665,5 +657,82 @@ mod streaming_tests {
             .collect::<String>();
         assert!(text.contains("Hello▍"), "{text}");
         assert!(text.contains("Esc to cancel"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::draw;
+    use crate::Settings;
+    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn screen(app: &App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    fn app_with_answer(text: String) -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.settings.background_animation = false;
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::Assistant,
+            text,
+        });
+        app
+    }
+
+    #[test]
+    fn the_last_line_of_a_long_answer_is_visible_when_words_wrap() {
+        // Three 30-character words wrap onto three screen lines, not the two that
+        // dividing the line width by the screen width would suggest.
+        let word = "abcdefghijklmnopqrstuvwxyz0123";
+        let line = format!("{word} {word} {word}");
+        let mut text = vec![line; 14];
+        text.push("ENDMARK".to_owned());
+        let app = app_with_answer(text.join(
+            "
+",
+        ));
+        let shown = screen(&app, 50, 24);
+        assert!(
+            shown.contains("ENDMARK"),
+            "the answer's last line is cut off"
+        );
+    }
+
+    #[test]
+    fn a_streaming_answer_stays_pinned_to_its_newest_text() {
+        let word = "abcdefghijklmnopqrstuvwxyz0123";
+        let mut app = app_with_answer("hello".to_owned());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.pending = Some(receiver);
+        app.streaming = Some(crate::tui::state::StreamingTurn::new(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )));
+        for _ in 0..14 {
+            sender
+                .send(crate::agent::PendingEvent::TextDelta(format!(
+                    "{word} {word} {word}
+"
+                )))
+                .unwrap();
+        }
+        sender
+            .send(crate::agent::PendingEvent::TextDelta(
+                "NEWESTWORD".to_owned(),
+            ))
+            .unwrap();
+        app.poll_response();
+        assert!(screen(&app, 50, 24).contains("NEWESTWORD"));
     }
 }
