@@ -1,0 +1,159 @@
+name: Bug Report
+description: Report a defect or unexpected behavior in Cool Code
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to submit a bug report.
+
+        **Please review the following before proceeding:**
+        - Search the existing issues to confirm this defect has not already been reported.
+        - Complete all required fields. Incomplete reports may be closed without further notice.
+        - Remove all API keys, access tokens, and private file paths from any logs or screenshots. The built-in redaction engine is provided as a convenience and does not replace manual review.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Provide a clear and concise summary of the defect.
+      placeholder: "A brief description of the issue."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: Describe the behavior you expected to observe.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Describe the behavior you actually observed, including any error messages.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      description: Provide the minimal set of steps required to reproduce the issue consistently.
+      placeholder: |
+        1. Launch Cool Code with ...
+        2. Select the effort level ...
+        3. Submit the following prompt ...
+        4. Observe the error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Select the operating system on which the issue occurred.
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - HarmonyOS
+        - Other (please specify under Additional Context)
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version and Architecture
+      description: Provide the full operating system version and CPU architecture.
+      placeholder: "e.g. Windows 11 23H2 x86_64, macOS 15 arm64, Ubuntu 24.04 aarch64"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Cool Code Version or Commit Hash
+      description: Provide the version string or the Git commit hash of your build.
+      placeholder: "e.g. 0.1.0 or a1b2c3d"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider API Type
+      description: Select the provider API type in use when the issue occurred.
+      options:
+        - OpenAI-compatible
+        - OpenAI Responses-compatible
+        - Anthropic-compatible
+        - Google GenAI
+        - Not provider-related
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Provide the exact model identifier, if applicable.
+      placeholder: "e.g. claude-opus-5-5"
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort Level
+      description: Select the effort level that was active when the issue occurred, if applicable.
+      options:
+        - Low
+        - Medium
+        - High
+        - XHigh
+        - Max
+        - Super
+        - Ultimate
+        - Not applicable
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Affected Areas
+      description: Select all areas that appear to be related to this issue.
+      options:
+        - label: Privacy disclaimer or smart redaction
+        - label: Image generation tool
+        - label: Workflows
+        - label: Effort level selector
+        - label: Tool calling or agent loop
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, Panic Output, or Screenshots
+      description: |
+        Paste any relevant output below. If the application panicked, please re-run with `RUST_BACKTRACE=1` and include the full backtrace.
+        **Redact all secrets prior to submission.**
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Include any other information that may assist with triage, such as workarounds, regression timing, or hardware specifics.
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      description: Please confirm the following before submitting.
+      options:
+        - label: I have searched the existing issues and confirmed this is not a duplicate.
+          required: true
+        - label: I have removed all API keys, tokens, and private data from this report.
+          required: true
