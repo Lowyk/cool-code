@@ -135,6 +135,9 @@ pub(super) fn input_prompt_height(input: &str, area: Rect) -> u16 {
     needed.clamp(4, available) as u16
 }
 
+/// How strongly the backdrop shows behind a conversation when dimming is on.
+const CHAT_BACKDROP_DIM: f32 = 0.4;
+
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
     crate::tui::theme::set_current(app.settings.theme);
@@ -195,8 +198,26 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         };
 
     let no_color = std::env::var_os("NO_COLOR").is_some();
-    if app.transcript.is_empty() && backdrop_enabled(app.settings.background_animation, no_color) {
-        draw_backdrop(frame, area, app.launched_at.elapsed().as_secs_f32());
+    // The backdrop fills the welcome screen; behind a conversation it is opt-in and dimmed.
+    let chatting = !app.transcript.is_empty();
+    let wanted = if chatting {
+        app.settings.backdrop_in_chat
+    } else {
+        app.settings.background_animation
+    };
+    if backdrop_enabled(wanted, no_color) {
+        let dim = if chatting && app.settings.dim_backdrop_in_chat {
+            CHAT_BACKDROP_DIM
+        } else {
+            1.0
+        };
+        draw_backdrop(
+            frame,
+            area,
+            app.launched_at.elapsed().as_secs_f32(),
+            crate::tui::theme::current(),
+            dim,
+        );
     }
 
     let launched = app.launched_at.elapsed().as_secs_f32();
