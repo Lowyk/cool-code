@@ -29,6 +29,13 @@ fn dashboard(profile: &ProviderProfile) -> Option<&'static str> {
     }
 }
 
+fn is_local(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]"))
+}
+
 impl App {
     /// Opens the view and starts loading usage for every provider that can report it.
     pub(in crate::tui) fn open_usage(&mut self) {
@@ -93,6 +100,12 @@ fn usage_lines(app: &App) -> Vec<Line<'static>> {
             |text: String, style: Style| Line::from(Span::styled(format!("  {text}"), style));
         if profile.draft {
             lines.push(indent("draft · finish its setup first".to_owned(), dim));
+        } else if profile.limits_url.is_none() && profile.base_url.as_deref().is_some_and(is_local)
+        {
+            lines.push(indent(
+                "runs on this computer · nothing to track".to_owned(),
+                dim,
+            ));
         } else if profile.limits_url.is_none() {
             let hint = dashboard(profile)
                 .map(|host| format!(" ({host})"))
@@ -281,6 +294,20 @@ mod tests {
         app.limits.get_mut("a").unwrap().state = LimitsState::Ready(Vec::new());
         app.handle_usage_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
         assert_eq!(app.spawned_tasks, 2, "refreshing goes back to the provider");
+    }
+
+    #[test]
+    fn a_local_server_says_there_is_nothing_to_track() {
+        let mut local = profile("ollama", "openai-compatible", false);
+        local.base_url = Some("http://localhost:11434/v1".to_owned());
+        let mut app = app_with(vec![local]);
+        app.open_usage();
+        let shown = screen(&app);
+        assert!(shown.contains("runs on this computer"), "{shown}");
+        assert!(
+            !shown.contains("check your provider's API dashboard"),
+            "{shown}"
+        );
     }
 
     #[test]

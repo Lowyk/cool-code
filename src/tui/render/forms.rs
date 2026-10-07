@@ -90,6 +90,7 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
             render_field("Base URL", &form.base_url, "", form.focus == 1, false);
         }
         let key_label = match (form.existing_id.is_some(), preset.key_prefix) {
+            _ if preset.key_optional => "API Key · optional, local servers need none".to_owned(),
             (true, Some(prefix)) => {
                 format!("API Key · starts with {prefix} · leave blank to keep the saved key")
             }

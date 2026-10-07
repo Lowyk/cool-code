@@ -257,6 +257,8 @@ fn complete_turn(
             .or(stored_key)
             .or_else(|| env::var(&key_variable).ok())
             .filter(|value| !value.trim().is_empty())
+            // A server on this computer (Ollama and the like) does not ask for a key.
+            .or_else(|| is_loopback(&base_url).then(String::new))
             .with_context(|| {
                 format!("set {key_variable} or HARNESS_API_KEY in your environment")
             })?;
@@ -735,9 +737,7 @@ fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
     let sent = add_effort(&mut body, request);
     let response = send_with_effort_fallback(body, sent, |body| {
         successful(
-            client
-                .post(&endpoint)
-                .bearer_auth(api_key)
+            with_bearer(client.post(&endpoint), api_key)
                 .json(body)
                 .send()
                 .context("sending request to the OpenAI-compatible API")?,
@@ -1107,6 +1107,26 @@ fn extract_response(value: &Value) -> Result<String> {
 
 pub(crate) const PRIVACY_FAMILIES: [&str; 2] = ["Google/Gemini", "GLM/Z.ai"];
 
+/// Whether `base_url` points at this computer.
+fn is_loopback(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]"))
+}
+
+/// Adds the key as a bearer token, unless there is none (a local server).
+fn with_bearer(
+    builder: reqwest::blocking::RequestBuilder,
+    key: &str,
+) -> reqwest::blocking::RequestBuilder {
+    if key.is_empty() {
+        builder
+    } else {
+        builder.bearer_auth(key)
+    }
+}
+
 fn privacy_risk(provider: &str, model: &str, base_url: &str) -> Option<&'static str> {
     let identity = format!("{provider} {model} {base_url}").to_ascii_lowercase();
     if ["gemini", "google", "generativelanguage", "googleapis.com"]
@@ -1138,6 +1158,33 @@ mod tests {
         restore_redactions_value,
     };
     use crate::stream::Interrupted;
+
+    #[test]
+    fn only_addresses_on_this_computer_count_as_local() {
+        for local in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8080",
+            "http://[::1]:1234/v1",
+        ] {
+            assert!(super::is_loopback(local), "{local}");
+        }
+        for remote in [
+            "https://api.openai.com/v1",
+            "http://localhost.evil.example/v1",
+            "http://192.168.1.5:11434",
+            "not a url",
+        ] {
+            assert!(!super::is_loopback(remote), "{remote}");
+        }
+        let client = reqwest::blocking::Client::new();
+        let request = |key| {
+            super::with_bearer(client.post("http://localhost/x"), key)
+                .build()
+                .unwrap()
+        };
+        assert!(request("").headers().get("authorization").is_none());
+        assert!(request("k").headers().get("authorization").is_some());
+    }
 
     #[test]
     fn extracts_plain_and_segmented_responses() {
