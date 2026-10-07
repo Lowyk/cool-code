@@ -2,18 +2,25 @@ use crate::tui::state::App;
 use crate::{ChainModel, ProviderProfile, Settings, write_settings};
 use anyhow::Result;
 
-pub(super) fn find_model_matches(settings: &Settings, model_id: &str) -> Vec<(usize, String)> {
-    let mut matches = Vec::new();
-    for (index, profile) in settings.providers.iter().enumerate() {
-        if profile.draft {
-            continue;
-        }
-        let is_in_chain = settings.model_chains.iter().any(|chain| {
+/// Whether a model may be chosen for the user automatically: its provider takes part in
+/// automatic switching, or the model is a member of a preference chain.
+pub(super) fn is_auto_candidate(
+    settings: &Settings,
+    profile: &ProviderProfile,
+    model_id: &str,
+) -> bool {
+    profile.auto_switch
+        || settings.model_chains.iter().any(|chain| {
             chain.members.iter().any(|member| {
                 member.provider_id == profile.id && member.model_id.eq_ignore_ascii_case(model_id)
             })
-        });
-        if !profile.auto_switch && !is_in_chain {
+        })
+}
+
+pub(super) fn find_model_matches(settings: &Settings, model_id: &str) -> Vec<(usize, String)> {
+    let mut matches = Vec::new();
+    for (index, profile) in settings.providers.iter().enumerate() {
+        if profile.draft || !is_auto_candidate(settings, profile, model_id) {
             continue;
         }
         if let Some(id) = model_id_for_profile(profile, model_id) {
@@ -392,6 +399,38 @@ impl App {
         }
     }
 
+    /// Sets `requested` on the default provider exactly as typed, ignoring automatic switching,
+    /// chains, and whether the provider lists the model at all. This is for providers that cannot
+    /// list their models.
+    pub(super) fn force_model(&mut self, requested: &str) -> Result<()> {
+        let default = self
+            .settings
+            .default_provider_id
+            .as_deref()
+            .or(self.settings.active_provider_id.as_deref());
+        let Some(index) = default.and_then(|id| {
+            self.settings
+                .providers
+                .iter()
+                .position(|profile| profile.id == id && !profile.draft)
+        }) else {
+            self.notice = "There is no default provider to force a model on. Set one in Settings → Providers.".to_owned();
+            return Ok(());
+        };
+        let listed = model_id_for_profile(&self.settings.providers[index], requested);
+        let model_id = listed.clone().unwrap_or_else(|| requested.to_owned());
+        self.activate_model(index, &model_id)?;
+        let provider = &self.settings.providers[index].name;
+        self.notice = if listed.is_some() {
+            format!("Forced {model_id} on {provider}.")
+        } else {
+            format!(
+                "Forced {model_id} on {provider}, which does not list it; the provider decides whether it exists."
+            )
+        };
+        Ok(())
+    }
+
     pub(super) fn activate_model(&mut self, provider_index: usize, model_id: &str) -> Result<()> {
         let profile = &self.settings.providers[provider_index];
         let provider_id = profile.id.clone();
@@ -617,7 +656,7 @@ mod tests {
             "multiai",
             "openai-compatible",
             &["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5"],
-            false,
+            true,
         )];
         let (resolved, matches) = resolve_model_reference(&settings, "fable");
         assert_eq!(resolved, "claude-fable-5-1");
@@ -636,12 +675,73 @@ mod tests {
             "multiai",
             "openai-compatible",
             &["claude-fable-5", "claude-fable-5-1"],
-            false,
+            true,
         )];
         app.select_model("fable").expect("select");
         assert_eq!(app.settings.model.as_deref(), Some("claude-fable-5-1"));
         assert!(app.notice.contains("fable"), "{}", app.notice);
         assert!(app.notice.contains("claude-fable-5-1"), "{}", app.notice);
+    }
+
+    #[test]
+    fn forcemodel_sets_the_model_on_the_default_provider_ignoring_automatic_switching() {
+        use crate::tui::state::App;
+        let mut app = App::new(Settings::default());
+        app.settings.providers = vec![
+            profile("manual", "openai-compatible", &["listed-model"], false),
+            profile("auto", "openai-compatible", &["unlisted-elsewhere"], true),
+        ];
+        app.settings.default_provider_id = Some("manual".to_owned());
+        app.settings.active_provider_id = Some("auto".to_owned());
+        app.force_model("Listed-Model").expect("force");
+        assert_eq!(app.settings.active_provider_id.as_deref(), Some("manual"));
+        assert_eq!(
+            app.settings.model.as_deref(),
+            Some("listed-model"),
+            "uses its own spelling"
+        );
+        assert!(
+            app.notice.starts_with("Forced listed-model on manual."),
+            "{}",
+            app.notice
+        );
+        app.force_model("brand-new-model").expect("force");
+        assert_eq!(app.settings.model.as_deref(), Some("brand-new-model"));
+        assert!(app.notice.contains("does not list it"), "{}", app.notice);
+        assert!(app.model_choices.is_none(), "never asks which provider");
+    }
+
+    #[test]
+    fn forcemodel_needs_a_default_provider_and_a_name() {
+        use crate::tui::state::App;
+        let mut app = App::new(Settings::default());
+        app.input = "/forcemodel".to_owned();
+        app.submit().expect("usage");
+        assert!(
+            app.notice.starts_with("Usage: /forcemodel"),
+            "{}",
+            app.notice
+        );
+        app.input = "/forcemodel some-model".to_owned();
+        app.submit().expect("no provider");
+        assert!(app.notice.contains("no default provider"), "{}", app.notice);
+        assert_eq!(app.settings.model, None);
+    }
+
+    #[test]
+    fn a_series_name_never_offers_a_provider_with_automatic_switching_off() {
+        use crate::tui::state::App;
+        let mut app = App::new(Settings::default());
+        app.settings.providers = vec![
+            profile("manual", "openai-compatible", &["claude-fable-5"], false),
+            profile("auto", "openai-compatible", &["claude-fable-5"], true),
+        ];
+        app.select_model("fable").expect("select");
+        assert!(
+            app.model_choices.is_none(),
+            "only one provider is eligible, so nothing to ask"
+        );
+        assert_eq!(app.settings.active_provider_id.as_deref(), Some("auto"));
     }
 
     #[test]
