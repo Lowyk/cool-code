@@ -29,20 +29,20 @@ pub(super) fn cool_code_wordmark(elapsed: f32, width: u16) -> Vec<Line<'static>>
         compact_wordmark(elapsed.clamp(0.0, 1.0))
     } else {
         vec![Line::from(vec![
-            Span::styled("◆ ", Style::default().fg(Color::Rgb(135, 226, 250))),
+            Span::styled("◆ ", Style::default().fg(crate::tui::theme::accent_soft())),
             Span::styled(
                 "COOL",
                 Style::default()
-                    .fg(Color::Rgb(135, 226, 250))
+                    .fg(crate::tui::theme::accent_soft())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 " CODE",
                 Style::default()
-                    .fg(Color::Rgb(205, 213, 224))
+                    .fg(silver_gradient_color(3.0))
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" ◆", Style::default().fg(Color::Rgb(135, 226, 250))),
+            Span::styled(" ◆", Style::default().fg(crate::tui::theme::accent_soft())),
         ])]
     }
 }
@@ -95,11 +95,7 @@ fn full_glyph(character: char) -> [&'static str; FULL_ROWS] {
 
 /// Silver for the second word, so the two halves read as warm and cold metal.
 fn silver_gradient_color(position: f32) -> Color {
-    let palette = [
-        [150.0, 162.0, 178.0],
-        [226.0, 232.0, 240.0],
-        [170.0, 182.0, 198.0],
-    ];
+    let palette = crate::tui::theme::current().logo_secondary;
     let phase = position.rem_euclid(12.0) / 12.0 * palette.len() as f32;
     let left = phase.floor() as usize % palette.len();
     let right = (left + 1) % palette.len();
@@ -142,7 +138,7 @@ fn full_wordmark(elapsed: f32) -> Vec<Line<'static>> {
                             base
                         } else {
                             // The strokes that draw the shadow sit back in the dark.
-                            logo_blend_color(base, Color::Rgb(12, 18, 28), 0.58)
+                            logo_blend_color(base, crate::tui::theme::panel_alt(), 0.58)
                         };
                         let horizontal = column as f32 - f32::from(FULL_WIDTH) / 2.0;
                         let vertical = (row as f32 - 2.5) * 2.0;
@@ -152,7 +148,7 @@ fn full_wordmark(elapsed: f32) -> Vec<Line<'static>> {
                         if bloom < 1.0 && distance < 5.0 {
                             color = logo_blend_color(
                                 color,
-                                Color::Rgb(232, 251, 255),
+                                crate::tui::theme::current().bloom,
                                 (1.0 - distance / 5.0) * 0.94,
                             );
                         }
@@ -160,7 +156,7 @@ fn full_wordmark(elapsed: f32) -> Vec<Line<'static>> {
                             let gap = column as f32 - glint_at;
                             color = logo_blend_color(
                                 color,
-                                Color::Rgb(240, 252, 255),
+                                crate::tui::theme::current().bloom,
                                 0.5 * (-(gap * gap) / 24.0).exp(),
                             );
                         }
@@ -228,14 +224,14 @@ fn compact_wordmark(elapsed: f32) -> Vec<Line<'static>> {
                                 if elapsed < 1.0 && distance < 4.5 {
                                     logo_blend_color(
                                         base,
-                                        Color::Rgb(232, 251, 255),
+                                        crate::tui::theme::current().bloom,
                                         (1.0 - distance / 4.5) * 0.94,
                                     )
                                 } else {
                                     base
                                 }
                             } else {
-                                Color::Rgb(139, 146, 156)
+                                silver_gradient_color(0.0)
                             };
                             spans.push(Span::styled(
                                 if word_index == 0
@@ -277,18 +273,26 @@ pub(super) fn tagline_lines(elapsed: f32) -> Vec<Line<'static>> {
         .enumerate()
         .map(|(index, character)| {
             let gap = index as f32 - sweep;
-            let base = logo_blend_color(Color::Rgb(8, 10, 14), Color::Rgb(128, 158, 184), fade);
+            let base = logo_blend_color(
+                crate::tui::theme::panel_alt(),
+                crate::tui::theme::current().tagline,
+                fade,
+            );
             let color = logo_blend_color(
                 base,
-                Color::Rgb(240, 252, 255),
+                crate::tui::theme::current().bloom,
                 0.85 * fade * (-(gap * gap) / 10.0).exp(),
             );
             Span::styled(character.to_string(), Style::default().fg(color))
         })
         .collect::<Vec<_>>();
-    let rule = Style::default().fg(Color::Rgb(58, 80, 100));
-    let ice = Style::default().fg(Color::Rgb(135, 226, 250));
-    let detail = Style::default().fg(Color::Rgb(108, 128, 148));
+    let rule = Style::default().fg(crate::tui::theme::current().rule);
+    let ice = Style::default().fg(crate::tui::theme::accent_soft());
+    let detail = Style::default().fg(logo_blend_color(
+        crate::tui::theme::current().tagline,
+        crate::tui::theme::current().rule,
+        0.3,
+    ));
     let version = Line::from(vec![
         Span::styled("──────  ", rule),
         Span::styled("◆", ice),
@@ -308,12 +312,7 @@ pub(super) fn logo_blend_color(left: Color, right: Color, amount: f32) -> Color 
 }
 
 pub(super) fn ice_gradient_color(position: f32) -> Color {
-    let palette = [
-        [83.0, 197.0, 237.0],
-        [135.0, 226.0, 250.0],
-        [215.0, 249.0, 255.0],
-        [130.0, 190.0, 246.0],
-    ];
+    let palette = crate::tui::theme::current().logo_primary;
     let phase = position.rem_euclid(16.0) / 16.0 * palette.len() as f32;
     let left = phase.floor() as usize % palette.len();
     let right = (left + 1) % palette.len();
@@ -454,6 +453,33 @@ mod tests {
             text_of(&cool_code_wordmark(4.0, 120)),
             "only colors move"
         );
+    }
+
+    #[test]
+    fn the_logo_takes_its_colors_from_the_theme() {
+        use crate::ThemeId;
+        use crate::tui::theme::{set_current, theme_for};
+        let first_fill = |width: u16| {
+            cool_code_wordmark(2.0, width)
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| span.content.as_ref() == "█")
+                .and_then(|span| span.style.fg)
+        };
+        set_current(ThemeId::Cool);
+        let cool = (first_fill(120), first_fill(COMPACT_WIDTH));
+        set_current(ThemeId::Sakura);
+        let sakura = (first_fill(120), first_fill(COMPACT_WIDTH));
+        let tagline = tagline_lines(5.0)[0].spans[0].style.fg;
+        set_current(ThemeId::Cool);
+        assert_ne!(cool.0, sakura.0, "the large logo recolors");
+        assert_ne!(cool.1, sakura.1, "the compact logo recolors");
+        assert_ne!(tagline_lines(5.0)[0].spans[0].style.fg, tagline);
+        let Some(Color::Rgb(r, _, b)) = sakura.0 else {
+            panic!("expected RGB")
+        };
+        assert!(r > b, "Sakura's logo is pink, not blue: {r},{b}");
+        let _ = theme_for(ThemeId::Sakura);
     }
 
     #[test]

@@ -124,6 +124,11 @@ struct Settings {
     #[serde(alias = "extreme_acknowledged")]
     ultimate_acknowledged: bool,
     background_animation: bool,
+    theme: ThemeId,
+    /// Keep the animated backdrop behind the conversation, not only on the welcome screen.
+    backdrop_in_chat: bool,
+    /// Draw the backdrop dimmer behind the conversation so text stays easy to read.
+    dim_backdrop_in_chat: bool,
     pulse: PulseMode,
     motion_prompt_answered: bool,
     max_tool_rounds: usize,
@@ -141,6 +146,21 @@ enum PulseMode {
     #[default]
     Words,
     Characters,
+}
+
+/// The look of the interface: accent colors, panel colors, and the animated backdrop.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ThemeId {
+    #[default]
+    Cool,
+    Galaxy,
+    GalaxyVoid,
+    Sakura,
+    Mint,
+    Autumn,
+    Retro,
+    Synthwave,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -217,6 +237,9 @@ impl Default for Settings {
             privacy_image_acknowledged: Vec::new(),
             ultimate_acknowledged: false,
             background_animation: true,
+            theme: ThemeId::Cool,
+            backdrop_in_chat: false,
+            dim_backdrop_in_chat: true,
             pulse: PulseMode::Words,
             motion_prompt_answered: false,
             max_tool_rounds: 40,

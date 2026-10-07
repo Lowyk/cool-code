@@ -102,11 +102,17 @@ pub(crate) fn default_dir() -> Result<PathBuf> {
 pub(crate) fn default_dir() -> Result<PathBuf> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    Ok(std::env::temp_dir().join(format!(
-        "harness-test-{}-sessions-{}",
+    // Process ids are reused, so a folder left by an earlier run must never be picked up again.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let dir = std::env::temp_dir().join(format!(
+        "harness-test-{}-{started}-sessions-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
-    )))
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(dir)
 }
 
 /// A new session id: sortable by time, unique enough for one person's machine.

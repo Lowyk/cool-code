@@ -381,8 +381,8 @@ pub(super) fn draw_effort_picker(
     let block = Block::default()
         .title(" Select effort ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(98, 213, 244)))
-        .style(Style::default().bg(Color::Rgb(29, 30, 32)));
+        .border_style(Style::default().fg(crate::tui::theme::accent()))
+        .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.width < LEVELS.len() as u16 || inner.height == 0 {

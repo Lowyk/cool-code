@@ -45,7 +45,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/creators.rs` | Attributes model IDs to the lab that made them, for grouping |
 | `src/tui/forms.rs` | Provider and chain editing forms: state changes and key handling |
 | `src/tui/context.rs` | Workspace trust and `COOL.md` / `@path` context loading |
-| `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `providers`, `models`, `auto_switch`, `privacy`) plus `sync` (background model and usage fetches reported to the UI each frame) |
+| `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `appearance`, `providers`, `models`, `auto_switch`, `privacy`) plus `sync` (background model and usage fetches reported to the UI each frame) |
 | `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
 | `src/tui/widgets/` | Reusable widgets: the filterable selectable list and the collapsible provider/creator/model tree |
 | `src/tui/stats_view.rs` | The `/stats` full-screen view: overview, models tab, range selection, and clearing history |
@@ -53,11 +53,12 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs`, `motion.rs` (text pulse and reduced-motion prompt) |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
 | `src/tui/wordmark.rs` | Welcome wordmark and gradient |
-| `src/tui/backdrop.rs` | Drifting ice-crystal backdrop on the welcome screen |
+| `src/tui/backdrop.rs` | The animated backdrop: one kind per theme (snow, stars with a nebula, plain stars, petals, bubbles, leaves, CRT noise, synthwave sun and grid), always drawn first and only into empty cells |
+| `src/tui/theme.rs` | The theme table (accent, panel, prompt and screen colors, logo gradients, backdrop kind) and the per-thread current theme that `draw` sets from the settings each frame |
 
 ## Terminal experience
 
-The default interactive launch should feel like a coding workspace, not a bare prompt loop: a centered project wordmark in ASCII art, a comfortable prompt area with subtle contrast, and a status strip showing permission mode, model, and effort separated by small dots. The UI must adapt to terminal width, support reduced/no color, and keep status visible during a session. The welcome screen shows a sparse, dim backdrop of drifting ice crystals in three depth layers; it is hidden once a conversation starts, can be turned off under Settings → General → Background, and is disabled when `NO_COLOR` is set. The selected brand name remains undecided.
+The default interactive launch should feel like a coding workspace, not a bare prompt loop: a centered project wordmark in ASCII art, a comfortable prompt area with subtle contrast, and a status strip showing permission mode, model, and effort separated by small dots. The UI must adapt to terminal width, support reduced/no color, and keep status visible during a session. The welcome screen shows a sparse, dim backdrop of drifting ice crystals in three depth layers; it is hidden once a conversation starts unless Settings → Appearance → While chatting is on (then it is dimmed by default, see Dim while chatting), can be turned off under Settings → Appearance, and is disabled when `NO_COLOR` is set. The look comes from the selected theme: Cool (the original, which keeps the terminal's own background), Galaxy, Galaxy (Void, near-OLED black), Sakura, Mint, Autumn, Retro (CRT) and Synthwave. Themes paint their own screen background; semantic colors (success, warning, error, permission modes) are the same in every theme. The selected brand name remains undecided.
 
 ## Effort semantics
 

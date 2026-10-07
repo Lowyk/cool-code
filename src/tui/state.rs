@@ -395,6 +395,7 @@ impl App {
         if reduce_motion {
             self.settings.pulse = PulseMode::Off;
             self.settings.background_animation = false;
+            self.settings.backdrop_in_chat = false;
         }
         self.settings.motion_prompt_answered = true;
         self.motion_prompt = false;

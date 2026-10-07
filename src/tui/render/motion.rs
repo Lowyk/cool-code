@@ -99,14 +99,14 @@ pub(super) fn pulse_spans(
 }
 
 pub(super) fn draw_motion_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, choice: usize) {
-    let accent = Color::Rgb(98, 213, 244);
+    let accent = crate::tui::theme::accent();
     let popup = centered_rect(64, 36, area);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(" Motion ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(Color::Rgb(25, 32, 38)));
+        .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let option = |label: &'static str, selected: bool| {
@@ -153,14 +153,14 @@ pub(super) fn draw_motion_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, cho
 }
 
 pub(super) fn draw_stats_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, choice: usize) {
-    let accent = Color::Rgb(98, 213, 244);
+    let accent = crate::tui::theme::accent();
     let popup = centered_rect(70, 44, area);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(" Usage stats ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(Color::Rgb(25, 32, 38)));
+        .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let option = |label: &'static str, selected: bool| {
