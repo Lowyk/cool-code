@@ -12,16 +12,20 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 mod agent;
+mod chatgpt_auth;
 mod effort_support;
 mod endpoints;
 mod policy;
 mod projects;
 mod prompt;
 mod provider;
+mod responses;
 mod secrets;
 mod session;
 mod stats;
 mod stream;
+#[cfg(test)]
+mod testutil;
 mod tools;
 mod tui;
 mod workflow;

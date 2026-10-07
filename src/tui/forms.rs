@@ -206,6 +206,12 @@ impl App {
         let Some(profile) = self.settings.providers.get(provider_index) else {
             return;
         };
+        if profile.adapter == "chatgpt" {
+            // A sign-in has nothing to edit; Enter signs in again.
+            let id = profile.id.clone();
+            self.start_chatgpt_login(Some(id));
+            return;
+        }
         let preset = preset_for_profile(profile);
         // Providers whose model list comes from an endpoint can hold hundreds of models, so the
         // form leaves them to Settings → Models instead of listing every one as an editable row.
@@ -263,7 +269,12 @@ impl App {
             self.settings = previous_settings;
             return Err(error);
         }
-        if let Err(error) = secrets::delete(&profile.id) {
+        let forgotten = if profile.adapter == "chatgpt" {
+            crate::chatgpt_auth::sign_out(&profile.id)
+        } else {
+            secrets::delete(&profile.id)
+        };
+        if let Err(error) = forgotten {
             self.settings = previous_settings;
             if let Err(restore_error) = write_settings(&self.settings) {
                 return Err(error).context(format!(
@@ -477,12 +488,45 @@ impl App {
         Ok(())
     }
 
+    /// Moves from the preset list to the form for the highlighted preset.
+    pub(in crate::tui) fn apply_preset_choice(&mut self) {
+        let Some(form) = self.provider_form.as_mut() else {
+            return;
+        };
+        let preset = &PROVIDER_PRESETS[form.preset];
+        form.choosing_preset = false;
+        form.alias = String::new();
+        form.suggested_alias = unique_provider_alias(&self.settings.providers, preset.label);
+        form.base_url = preset.base_url.unwrap_or_default().to_owned();
+        form.models = preset
+            .models
+            .iter()
+            .map(|(id, name)| ModelDraft {
+                id: (*id).to_owned(),
+                name: (*name).to_owned(),
+            })
+            .collect();
+        form.focus = 0;
+    }
+
     pub(super) fn handle_provider_form(&mut self, key: event::KeyEvent) -> Result<()> {
         let choosing_preset = self
             .provider_form
             .as_ref()
             .is_some_and(|form| form.choosing_preset);
         if choosing_preset {
+            if key.code == KeyCode::Enter {
+                // OpenAI offers two ways in, so it asks which before showing the key form.
+                let asks_how = self.provider_form.as_ref().is_some_and(|form| {
+                    PROVIDER_PRESETS[form.preset].id == "openai" && form.existing_id.is_none()
+                });
+                if asks_how {
+                    self.ask_openai_sign_in_method();
+                } else {
+                    self.apply_preset_choice();
+                }
+                return Ok(());
+            }
             let Some(form) = self.provider_form.as_mut() else {
                 return Ok(());
             };
@@ -491,23 +535,6 @@ impl App {
                 KeyCode::Up | KeyCode::Left => form.preset = form.preset.saturating_sub(1),
                 KeyCode::Down | KeyCode::Right => {
                     form.preset = (form.preset + 1).min(PROVIDER_PRESETS.len() - 1)
-                }
-                KeyCode::Enter => {
-                    let preset = &PROVIDER_PRESETS[form.preset];
-                    form.choosing_preset = false;
-                    form.alias = String::new();
-                    form.suggested_alias =
-                        unique_provider_alias(&self.settings.providers, preset.label);
-                    form.base_url = preset.base_url.unwrap_or_default().to_owned();
-                    form.models = preset
-                        .models
-                        .iter()
-                        .map(|(id, name)| ModelDraft {
-                            id: (*id).to_owned(),
-                            name: (*name).to_owned(),
-                        })
-                        .collect();
-                    form.focus = 0;
                 }
                 _ => {}
             }
