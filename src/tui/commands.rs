@@ -726,6 +726,7 @@ mod tests {
     #[test]
     fn a_finished_turn_is_saved_as_a_session() {
         let (mut app, sender) = streaming_app();
+        app.settings.sessions_enabled = true;
         app.messages.push(provider::ChatMessage::user_with_images(
             "write a parser".to_owned(),
             "write a parser".to_owned(),
@@ -758,6 +759,7 @@ mod tests {
     #[test]
     fn a_failed_turn_is_saved_too() {
         let (mut app, sender) = streaming_app();
+        app.settings.sessions_enabled = true;
         app.messages.push(provider::ChatMessage::user_with_images(
             "try this".to_owned(),
             "try this".to_owned(),
@@ -774,6 +776,7 @@ mod tests {
     fn sending_a_prompt_saves_it_before_the_answer_arrives() {
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
+        app.settings.sessions_enabled = true;
         app.input = "hello there".to_owned();
         app.submit().expect("submit");
         let listed = crate::session::list_in(&app.session_dir, None);

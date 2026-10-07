@@ -66,9 +66,9 @@ fn is_prompt(entry: &StoredEntry) -> bool {
 }
 
 impl App {
-    /// Writes the conversation to disk. Does nothing until there is something to resume.
+    /// Writes the conversation to disk, if the user opted in and there is something to resume.
     pub(in crate::tui) fn save_session(&mut self) {
-        if self.messages.is_empty() {
+        if !self.settings.sessions_enabled || self.messages.is_empty() {
             return;
         }
         let transcript = self
@@ -152,6 +152,15 @@ impl App {
         };
     }
 
+    /// Said when there is nothing to resume and saving is switched off.
+    fn saving_hint(&self) -> &'static str {
+        if self.settings.sessions_enabled {
+            ""
+        } else {
+            " Saving sessions is off; turn it on in Settings → General."
+        }
+    }
+
     fn sessions_here(&self, all_folders: bool) -> Vec<Header> {
         let folder = current_folder();
         session::list_in(&self.session_dir, (!all_folders).then_some(folder.as_str()))
@@ -161,7 +170,7 @@ impl App {
         let sessions = self.sessions_here(all_folders);
         if sessions.is_empty() && !all_folders {
             self.notice = if self.sessions_here(true).is_empty() {
-                "There are no saved sessions yet.".to_owned()
+                format!("There are no saved sessions yet.{}", self.saving_hint())
             } else {
                 "No saved sessions for this folder. Tab in /resume all lists every folder."
                     .to_owned()
@@ -188,8 +197,10 @@ impl App {
                 {
                     Some(id) => self.resume_session(&id),
                     None => {
-                        self.notice =
-                            "No earlier session to continue here; starting a new one.".to_owned();
+                        self.notice = format!(
+                            "No earlier session to continue here; starting a new one.{}",
+                            self.saving_hint()
+                        );
                     }
                 }
             }
@@ -374,8 +385,7 @@ mod tests {
     fn app() -> App {
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
-        app.motion_prompt = false;
-        app.stats_prompt = false;
+        app.settings.sessions_enabled = true;
         app
     }
 
@@ -435,6 +445,58 @@ mod tests {
 
     fn put(app: &App, session: &Session) {
         session::save_in(&app.session_dir, session).expect("save");
+    }
+
+    #[test]
+    fn nothing_is_saved_until_the_user_opts_in() {
+        let mut app = app();
+        app.settings.sessions_enabled = false;
+        talk(&mut app, "private thoughts", "ok");
+        app.save_session();
+        assert!(session::list_in(&app.session_dir, None).is_empty());
+        assert!(!app.session_dir.exists(), "not even the folder is created");
+        app.input = "/clear".to_owned();
+        app.submit().expect("clear");
+        app.input = "/quit".to_owned();
+        app.submit().expect("quit");
+        assert!(!app.session_dir.exists());
+    }
+
+    #[test]
+    fn turning_saving_on_starts_saving_from_then_on() {
+        let mut app = app();
+        app.settings.sessions_enabled = false;
+        talk(&mut app, "before", "ok");
+        app.save_session();
+        app.settings.sessions_enabled = true;
+        talk(&mut app, "after", "ok");
+        app.save_session();
+        let listed = session::list_in(&app.session_dir, None);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].prompts, 2,
+            "the whole conversation is saved once enabled"
+        );
+    }
+
+    #[test]
+    fn old_sessions_stay_resumable_even_with_saving_off() {
+        let mut app = app();
+        put(&app, &stored("s1-aaaa", &here(), 100, "from before"));
+        app.settings.sessions_enabled = false;
+        app.start_from(Resume::Latest { all_folders: false });
+        assert_eq!(app.session_id, "s1-aaaa");
+    }
+
+    #[test]
+    fn with_saving_off_an_empty_resume_says_how_to_turn_it_on() {
+        let mut app = app();
+        app.settings.sessions_enabled = false;
+        app.start_from(Resume::Pick { all_folders: false });
+        assert!(app.notice.contains("Settings → General"), "{}", app.notice);
+        app.settings.sessions_enabled = true;
+        app.start_from(Resume::Pick { all_folders: false });
+        assert!(!app.notice.contains("Settings"), "{}", app.notice);
     }
 
     #[test]

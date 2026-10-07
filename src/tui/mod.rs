@@ -11,6 +11,7 @@ mod render;
 mod series;
 pub(crate) mod sessions;
 mod settings;
+mod setup;
 mod state;
 mod stats_view;
 mod theme;
@@ -63,8 +64,7 @@ fn run_app(
     if let Some(resume) = resume {
         app.start_from(resume);
     }
-    app.motion_prompt = !app.settings.motion_prompt_answered;
-    app.stats_prompt = !app.settings.stats_prompt_answered;
+    app.start_setup();
     let animation_start = std::time::Instant::now();
     let mut presenter = present::Presenter::new();
     while app.running {
@@ -108,24 +108,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Enter => app.set_workspace_trusted(false)?,
             _ => {}
         }
-    } else if app.motion_prompt {
-        match key.code {
-            KeyCode::Left => app.motion_choice = 0,
-            KeyCode::Right => app.motion_choice = 1,
-            KeyCode::Enter => app.answer_motion_prompt(app.motion_choice == 1)?,
-            KeyCode::Char('r' | 'R') => app.answer_motion_prompt(true)?,
-            KeyCode::Char('k' | 'K') | KeyCode::Esc => app.answer_motion_prompt(false)?,
-            _ => {}
-        }
-    } else if app.stats_prompt {
-        match key.code {
-            KeyCode::Left => app.stats_choice = 0,
-            KeyCode::Right => app.stats_choice = 1,
-            KeyCode::Enter => app.answer_stats_prompt(app.stats_choice == 0)?,
-            KeyCode::Char('y' | 'Y') => app.answer_stats_prompt(true)?,
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => app.answer_stats_prompt(false)?,
-            _ => {}
-        }
+    } else if app.wizard.is_some() {
+        app.handle_setup_key(key)?;
     } else if app.tool_approval.is_some() {
         match key.code {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
@@ -377,96 +361,45 @@ mod tests {
         assert_eq!(app.transcript.len(), before);
     }
 
-    #[test]
-    fn motion_prompt_reduce_motion_disables_effects_and_is_answered_once() {
-        let mut app = App::new(Settings::default());
-        app.trust_prompt = false;
-        app.motion_prompt = true;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)).expect("right");
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).expect("enter");
-        assert!(!app.motion_prompt);
-        assert!(app.settings.motion_prompt_answered);
-        assert_eq!(app.settings.pulse, crate::PulseMode::Off);
-        assert!(!app.settings.background_animation);
-    }
-
-    #[test]
-    fn motion_prompt_keep_animations_leaves_effects_on() {
-        let mut app = App::new(Settings::default());
-        app.trust_prompt = false;
-        app.motion_prompt = true;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).expect("enter");
-        assert!(!app.motion_prompt);
-        assert!(app.settings.motion_prompt_answered);
-        assert_eq!(app.settings.pulse, crate::PulseMode::Words);
-        assert!(app.settings.background_animation);
-        assert!(app.running);
-    }
-
-    fn stats_prompt_app() -> App {
-        let mut app = App::new(Settings::default());
-        app.trust_prompt = false;
-        app.stats_prompt = true;
-        app
-    }
-
     fn press(app: &mut App, code: KeyCode) {
         handle_key(app, KeyEvent::new(code, KeyModifiers::NONE)).expect("key");
     }
 
-    #[test]
-    fn the_stats_prompt_defaults_to_no_and_enter_declines() {
-        let mut app = stats_prompt_app();
-        press(&mut app, KeyCode::Enter);
-        assert!(!app.stats_prompt);
-        assert!(!app.settings.stats_enabled);
-        assert!(app.settings.stats_prompt_answered);
+    fn setup_app() -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.start_setup();
+        app
     }
 
     #[test]
-    fn choosing_yes_in_the_stats_prompt_turns_recording_on() {
-        let mut app = stats_prompt_app();
-        press(&mut app, KeyCode::Left);
+    fn the_setup_wizard_takes_keys_before_the_prompt() {
+        let mut app = setup_app();
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(app.input, "", "typing does not reach the prompt");
         press(&mut app, KeyCode::Enter);
-        assert!(app.settings.stats_enabled && app.settings.stats_prompt_answered);
-        let mut shortcut = stats_prompt_app();
-        press(&mut shortcut, KeyCode::Char('y'));
-        assert!(shortcut.settings.stats_enabled);
-        let mut declined = stats_prompt_app();
-        press(&mut declined, KeyCode::Esc);
-        assert!(!declined.settings.stats_enabled && declined.settings.stats_prompt_answered);
         assert!(
-            declined.running,
-            "Esc answers the prompt instead of quitting"
+            app.settings.theme_prompt_answered,
+            "Enter answered the first step"
         );
     }
 
     #[test]
-    fn the_stats_prompt_waits_for_the_motion_prompt() {
-        let mut app = stats_prompt_app();
-        app.motion_prompt = true;
-        press(&mut app, KeyCode::Char('y'));
-        // The key went to the motion prompt, not the stats prompt.
-        assert!(app.stats_prompt && !app.settings.stats_enabled);
+    fn escape_in_the_wizard_skips_setup_instead_of_quitting() {
+        let mut app = setup_app();
+        press(&mut app, KeyCode::Esc);
+        assert!(app.wizard.is_none());
+        assert!(app.running, "Esc answers the question instead of quitting");
     }
 
     #[test]
-    fn the_stats_prompt_explains_what_is_stored() {
-        let app = stats_prompt_app();
-        let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 36)).expect("terminal");
-        terminal
-            .draw(|frame| crate::tui::render::draw(frame, &app, 0))
-            .expect("draw");
-        let shown: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(shown.contains("usage stats"), "{shown}");
-        assert!(shown.contains("never your prompts"), "{shown}");
+    fn the_setup_wizard_waits_for_the_workspace_trust_question() {
+        let mut app = setup_app();
+        app.trust_prompt = true;
+        press(&mut app, KeyCode::Char('y'));
+        // The key went to the trust prompt, so the wizard has not moved.
+        assert!(app.wizard.is_some() && !app.settings.theme_prompt_answered);
+        assert!(!app.trust_prompt);
     }
 
     #[test]

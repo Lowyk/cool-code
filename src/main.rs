@@ -135,6 +135,10 @@ struct Settings {
     /// Usage stats are recorded locally only after the user opts in.
     stats_enabled: bool,
     stats_prompt_answered: bool,
+    /// Save conversations to disk so they can be resumed. Off until the user opts in.
+    sessions_enabled: bool,
+    sessions_prompt_answered: bool,
+    theme_prompt_answered: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -245,6 +249,9 @@ impl Default for Settings {
             max_tool_rounds: 40,
             stats_enabled: false,
             stats_prompt_answered: false,
+            sessions_enabled: false,
+            sessions_prompt_answered: false,
+            theme_prompt_answered: false,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

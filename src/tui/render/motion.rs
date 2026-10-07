@@ -1,9 +1,6 @@
 use crate::PulseMode;
-use crate::tui::render::centered_rect;
-use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 use std::time::{Duration, Instant};
 
 pub(super) const BASE_TEXT: Color = Color::Rgb(226, 230, 235);
@@ -96,114 +93,6 @@ pub(super) fn pulse_spans(
         spans.push(Span::styled(current, Style::default().fg(color)));
     }
     spans
-}
-
-pub(super) fn draw_motion_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, choice: usize) {
-    let accent = crate::tui::theme::accent();
-    let popup = centered_rect(64, 36, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Motion ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(crate::tui::theme::panel()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let option = |label: &'static str, selected: bool| {
-        if selected {
-            Span::styled(
-                format!("[ {label} ]"),
-                Style::default().fg(accent).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(label, Style::default().fg(Color::Gray))
-        }
-    };
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Do you prefer reduced motion?",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Text pulses and the background animation can be turned off. You can change this later in Settings → General.",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            option("Keep animations", choice == 0),
-            Span::raw("     "),
-            option("Reduce motion", choice == 1),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "←/→ choose   Enter confirm",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
-}
-
-pub(super) fn draw_stats_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, choice: usize) {
-    let accent = crate::tui::theme::accent();
-    let popup = centered_rect(70, 44, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Usage stats ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(crate::tui::theme::panel()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let option = |label: &'static str, selected: bool| {
-        if selected {
-            Span::styled(
-                format!("[ {label} ]"),
-                Style::default().fg(accent).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(label, Style::default().fg(Color::Gray))
-        }
-    };
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Keep local usage stats?",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Cool Code can record which models you use and how many tokens, to power /stats. It saves only counts, model names, and timestamps on this computer, in ~/.coolcode/stats.jsonl: never your prompts or answers. Nothing is sent anywhere.",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            option("Yes, record", choice == 0),
-            Span::raw("     "),
-            option("No thanks", choice == 1),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "←/→ choose   Enter confirm   change it any time in Settings",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
 }
 
 #[cfg(test)]
