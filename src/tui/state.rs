@@ -93,6 +93,8 @@ pub(super) struct App {
     pub(super) pending_model: Option<String>,
     pub(super) model_picker: Option<crate::tui::pickers::model::ModelPicker>,
     pub(super) session_picker: Option<crate::tui::sessions::SessionPicker>,
+    /// Where the prompt cursor belongs after the latest draw (`None`: hidden).
+    pub(super) cursor: std::cell::Cell<Option<ratatui::layout::Position>>,
     pub(super) session_id: String,
     pub(super) session_created: i64,
     pub(super) session_dir: std::path::PathBuf,
@@ -362,6 +364,7 @@ impl App {
             pending_model: None,
             model_picker: None,
             session_picker: None,
+            cursor: std::cell::Cell::new(None),
             session_id: crate::session::new_id(session_created),
             session_created,
             session_dir: crate::tui::sessions::default_session_dir(),

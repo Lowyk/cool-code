@@ -141,6 +141,7 @@ const CHAT_BACKDROP_DIM: f32 = 0.4;
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
     crate::tui::theme::set_current(app.settings.theme);
+    app.cursor.set(None);
     if let Some(background) = crate::tui::theme::current().screen_bg {
         frame.render_widget(
             ratatui::widgets::Block::default().style(Style::default().bg(background)),
@@ -343,12 +344,14 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         && app.privacy_confirmation.is_none()
     {
         let visible_line = cursor_line.saturating_sub(prompt_scroll as usize);
-        frame.set_cursor_position(Position::new(
+        let position = Position::new(
             (prompt_inner.x + cursor_column as u16).min(prompt_inner.right().saturating_sub(1)),
             (prompt_inner.y
                 + visible_line.min(prompt_inner.height.saturating_sub(1) as usize) as u16)
                 .min(prompt_inner.bottom().saturating_sub(1)),
-        ));
+        );
+        frame.set_cursor_position(position);
+        app.cursor.set(Some(position));
     }
 
     let help = Line::from(vec![
