@@ -16,6 +16,7 @@ mod effort_support;
 mod endpoints;
 mod policy;
 mod projects;
+mod prompt;
 mod provider;
 mod secrets;
 mod session;
@@ -306,8 +307,18 @@ fn settings_were_migrated() -> bool {
 // Tests exercise code paths that persist settings; keep them away from the user's config.
 #[cfg(test)]
 fn settings_path() -> Result<PathBuf> {
+    // One file per test thread (every test runs on its own), so tests that save and reload
+    // settings cannot overwrite each other; the start time keeps reused process ids apart.
+    static RUN: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+    let run = RUN.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos())
+    });
+    let thread = format!("{:?}", std::thread::current().id()).replace(['(', ')'], "-");
     Ok(std::env::temp_dir()
-        .join(format!("harness-test-{}", std::process::id()))
+        .join(format!("harness-test-{}-{run}", std::process::id()))
+        .join(thread)
         .join("config.toml"))
 }
 

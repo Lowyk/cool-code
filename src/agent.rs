@@ -291,7 +291,10 @@ fn execute_agent_tool(
         }
         return crate::tools::run_command(root, command, cancel);
     }
-    if !matches!(name, "replace_in_file" | "write_to_file" | "create_file") {
+    if !matches!(
+        name,
+        "replace_in_file" | "replace_text" | "write_to_file" | "create_file"
+    ) {
         return crate::tools::execute_read_only(root, name, arguments);
     }
     let object = arguments
@@ -333,7 +336,26 @@ fn execute_agent_tool(
         return Ok(format!("Created new file {}.", proposal.relative_path));
     }
 
-    let proposal = if name == "replace_in_file" {
+    let proposal = if name == "replace_text" {
+        if object
+            .keys()
+            .any(|key| !["path", "old_text", "new_text", "replace_all"].contains(&key.as_str()))
+        {
+            bail!("replace_text received an unknown argument");
+        }
+        let replace_all = match arguments.get("replace_all") {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::Bool(value)) => *value,
+            Some(_) => bail!("replace_text `replace_all` must be true or false"),
+        };
+        crate::tools::prepare_replace_text(
+            root,
+            path,
+            required("old_text")?,
+            required_allowing_empty(arguments, "new_text", name)?,
+            replace_all,
+        )?
+    } else if name == "replace_in_file" {
         if object.keys().any(|key| {
             ![
                 "path",
@@ -394,6 +416,18 @@ fn execute_agent_tool(
     ))
 }
 
+/// A string argument that may be empty (an empty `new_text` deletes the matched text).
+fn required_allowing_empty<'a>(
+    arguments: &'a serde_json::Value,
+    key: &str,
+    tool: &str,
+) -> Result<&'a str> {
+    arguments
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .context(format!("{tool} requires a string `{key}`"))
+}
+
 fn request_plan_approval(
     settings: &Settings,
     root: &Path,
@@ -441,11 +475,29 @@ fn request_plan_approval(
             .context("each plan action needs an arguments object")?;
         if !matches!(
             name,
-            "replace_in_file" | "write_to_file" | "create_file" | "run_command"
+            "replace_text" | "replace_in_file" | "write_to_file" | "create_file" | "run_command"
         ) {
             bail!("plans may include only file edits/creation and run_command actions");
         }
-        if name == "replace_in_file" {
+        if name == "replace_text" {
+            let text = |key: &str| -> Result<&str> {
+                args.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .context(format!("planned replace_text requires `{key}`"))
+            };
+            let replace_all = args
+                .get("replace_all")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let proposal = crate::tools::prepare_replace_text(
+                root,
+                text("path")?,
+                text("old_text")?,
+                text("new_text")?,
+                replace_all,
+            )?;
+            lines.push(format!("{}. Edit:\n{}", index + 1, proposal.preview()));
+        } else if name == "replace_in_file" {
             let path = args
                 .get("path")
                 .and_then(serde_json::Value::as_str)
