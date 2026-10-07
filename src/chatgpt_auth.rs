@@ -11,7 +11,7 @@
 //! system's credential store; the access token is a long JWT that does not fit comfortably in
 //! every credential store, so it lives in memory and is renewed when needed.
 
-use crate::login_page::Outcome;
+use crate::login_page::{Outcome, Palette};
 use crate::secrets;
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -132,6 +132,8 @@ pub(crate) struct LoginFlow {
     listener: TcpListener,
     state: String,
     verifier: String,
+    /// The colors of the page the browser lands on.
+    palette: Palette,
 }
 
 impl LoginFlow {
@@ -157,23 +159,53 @@ impl LoginFlow {
             listener,
             state,
             verifier,
+            palette: Palette::default(),
         })
+    }
+
+    /// Draws the page the browser lands on in these colors.
+    pub(crate) fn with_palette(mut self, palette: Palette) -> LoginFlow {
+        self.palette = palette;
+        self
     }
 
     /// Waits for the browser to return, then trades the code for tokens.
     pub(crate) fn finish(self, token_url: &str, cancel: &AtomicBool) -> Result<(Account, Session)> {
-        let code = wait_for_code(&self.listener, &self.state, cancel, LOGIN_TIMEOUT)?;
+        let code = wait_for_code_with(
+            &self.listener,
+            &self.state,
+            cancel,
+            LOGIN_TIMEOUT,
+            &self.palette,
+        )?;
         exchange_code(token_url, &code, &self.verifier)
     }
 }
 
 /// Accepts connections until one carries the redirect, answers it with a short page, and returns
 /// the authorization code. Connections that are not the redirect get a 404 and are ignored.
+#[cfg(test)]
 fn wait_for_code(
     listener: &TcpListener,
     expected_state: &str,
     cancel: &AtomicBool,
     timeout: Duration,
+) -> Result<String> {
+    wait_for_code_with(
+        listener,
+        expected_state,
+        cancel,
+        timeout,
+        &Palette::default(),
+    )
+}
+
+fn wait_for_code_with(
+    listener: &TcpListener,
+    expected_state: &str,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    palette: &Palette,
 ) -> Result<String> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -211,6 +243,7 @@ fn wait_for_code(
         let Some(url) = parsed.filter(|url| url.path() == "/auth/callback") else {
             reply(
                 &mut connection,
+                palette,
                 404,
                 "Not found",
                 Outcome::Failure,
@@ -228,6 +261,7 @@ fn wait_for_code(
             let detail = param("error_description").unwrap_or_default();
             reply(
                 &mut connection,
+                palette,
                 200,
                 "Sign-in failed",
                 Outcome::Failure,
@@ -239,6 +273,7 @@ fn wait_for_code(
         if param("state").as_deref() != Some(expected_state) {
             reply(
                 &mut connection,
+                palette,
                 400,
                 "Bad request",
                 Outcome::Failure,
@@ -250,6 +285,7 @@ fn wait_for_code(
         let Some(code) = param("code").filter(|code| !code.is_empty()) else {
             reply(
                 &mut connection,
+                palette,
                 400,
                 "Bad request",
                 Outcome::Failure,
@@ -260,6 +296,7 @@ fn wait_for_code(
         };
         reply(
             &mut connection,
+            palette,
             200,
             "Signed in",
             Outcome::Success,
@@ -272,13 +309,14 @@ fn wait_for_code(
 
 fn reply(
     connection: &mut std::net::TcpStream,
+    palette: &Palette,
     status: u16,
     reason: &str,
     outcome: Outcome,
     headline: &str,
     detail: &str,
 ) {
-    let body = crate::login_page::page(outcome, headline, detail);
+    let body = crate::login_page::page(outcome, headline, detail, palette);
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -744,6 +782,30 @@ mod tests {
         let page = browser.join().unwrap();
         assert!(page.starts_with("HTTP/1.1 200"), "{page}");
         assert!(page.contains("You are signed in"), "{page}");
+    }
+
+    #[test]
+    fn the_page_the_browser_gets_is_drawn_in_the_palette_the_flow_was_given() {
+        let palette = Palette {
+            window: [11, 22, 33],
+            ..Palette::default()
+        };
+        let flow = LoginFlow::start_on("127.0.0.1:0")
+            .expect("flow")
+            .with_palette(palette);
+        let browser = browser_returns("abc", "/auth/callback?code=c&state=STATE", &flow.listener);
+        let cancel = AtomicBool::new(false);
+        wait_for_code_with(
+            &flow.listener,
+            "abc",
+            &cancel,
+            Duration::from_secs(5),
+            &flow.palette,
+        )
+        .expect("code");
+        let page = browser.join().unwrap();
+        assert!(page.contains("rgb(11,22,33)"), "{page}");
+        assert!(page.contains("cool-code sign-in"), "{page}");
     }
 
     #[test]

@@ -318,6 +318,29 @@ pub(super) fn set_current(id: ThemeId) {
     CURRENT.with(|current| current.set(id));
 }
 
+/// The colors of a theme as the sign-in page needs them.
+pub(super) fn login_palette(id: ThemeId) -> crate::login_page::Palette {
+    let theme = theme_for(id);
+    let channels = |color: Color, fallback: [u8; 3]| match color {
+        Color::Rgb(red, green, blue) => [red, green, blue],
+        _ => fallback,
+    };
+    let defaults = crate::login_page::Palette::default();
+    let window = channels(theme.panel, defaults.window);
+    crate::login_page::Palette {
+        background: theme.screen_bg.map_or_else(
+            || channels(theme.panel_alt, defaults.background),
+            |color| channels(color, defaults.background),
+        ),
+        window,
+        text: defaults.text,
+        dim: channels(theme.tagline, defaults.dim),
+        accent: channels(theme.accent, defaults.accent),
+        good: channels(theme.accent_bright, defaults.good),
+        bad: defaults.bad,
+    }
+}
+
 pub(super) fn current() -> &'static Theme {
     theme_for(CURRENT.with(Cell::get))
 }
@@ -358,6 +381,28 @@ mod tests {
         match color {
             Color::Rgb(r, g, b) => (r, g, b),
             other => panic!("expected RGB, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_sign_in_page_takes_its_colors_from_the_theme() {
+        let cool = login_palette(ThemeId::Cool);
+        let galaxy = login_palette(ThemeId::GalaxyVoid);
+        assert_eq!(cool.accent, [98, 213, 244]);
+        assert_eq!(
+            galaxy.background,
+            [0, 0, 0],
+            "a theme's own screen color is used"
+        );
+        assert_eq!(galaxy.window, [5, 5, 9]);
+        assert_ne!(cool, galaxy);
+        for id in [
+            ThemeId::Cool,
+            ThemeId::Sakura,
+            ThemeId::Synthwave,
+            ThemeId::Retro,
+        ] {
+            assert_ne!(login_palette(id).window, login_palette(id).text, "readable");
         }
     }
 
