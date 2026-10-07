@@ -401,6 +401,7 @@ mod tests {
     }
 
     fn with_endpoints(mut profile: ProviderProfile) -> ProviderProfile {
+        profile.base_url = Some("https://api.example.com/v1".to_owned());
         profile.models_url = Some("https://api.example.com/v1/models".to_owned());
         profile.limits_url = Some("https://api.example.com/v1/limits".to_owned());
         profile
@@ -456,6 +457,7 @@ mod tests {
         assert!(app.models_loading.contains("p1"));
         app.apply_task_result(crate::tui::settings::sync::TaskResult::Limits {
             provider_id: "p1".to_owned(),
+            url: "https://api.example.com/v1/limits".to_owned(),
             result: Ok(Vec::new()),
         });
         press(&mut app, KeyCode::Char('u'));
