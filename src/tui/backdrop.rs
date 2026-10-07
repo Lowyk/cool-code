@@ -2,9 +2,14 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 pub(super) const PARTICLE_GLYPHS: [&str; 4] = ["⋅", "∘", "✧", "✶"];
-const FLARE_GLYPH: &str = "✶";
-// The aurora fades out before this fraction of the screen height.
-const AURORA_REACH: f32 = 0.45;
+const SPARKLE_GLYPH: &str = "✶";
+// One sparkle spot per this many cells.
+const CELLS_PER_SPARKLE: usize = 160;
+const SPARKLE_SECONDS: f32 = 5.0;
+// Share of each cycle a sparkle spends shining; it rests for the remainder.
+const SPARKLE_SHINE: f32 = 0.8;
+// Chance that a sparkle appears in a given cycle.
+const SPARKLE_CHANCE: f32 = 0.7;
 
 // One particle per this many cells keeps the field sparse enough to stay in the background.
 const CELLS_PER_PARTICLE: usize = 45;
@@ -28,27 +33,45 @@ fn twinkle(particle: u32, t: f32) -> f32 {
     0.7 + 0.3 * (t * pace + phase).sin()
 }
 
-/// A very faint teal shimmer along the top of the screen, drawn only behind empty cells.
-fn draw_aurora(buffer: &mut ratatui::buffer::Buffer, area: Rect, t: f32) {
-    let reach = (area.height as f32 * AURORA_REACH).floor() as u16;
-    for row in 0..reach {
-        let falloff = (1.0 - row as f32 / reach as f32).powf(1.5);
-        for column in 0..area.width {
-            let x = column as f32;
-            let wave = 0.5 + 0.5 * (x * 0.09 + t * 0.35 + (x * 0.031 + t * 0.12).sin() * 2.0).sin();
-            let strength = wave * falloff;
-            if strength < 0.12 {
-                continue;
-            }
-            let greenness = 0.6 + 0.4 * (x * 0.05 + t * 0.2).sin();
-            let cell = &mut buffer[(area.x + column, area.y + row)];
-            if cell.symbol() == " " {
-                cell.set_bg(Color::Rgb(
-                    (6.0 + 10.0 * strength) as u8,
-                    (16.0 + 34.0 * strength * greenness) as u8,
-                    (24.0 + 40.0 * strength) as u8,
-                ));
-            }
+/// One sparkle: a fixed spot that fades in, peaks and fades out, then reappears elsewhere.
+/// Returns the cell and its brightness (0..=1), or `None` while this sparkle is resting.
+fn sparkle(index: u32, t: f32, width: u16, height: u16) -> Option<(u16, u16, f32)> {
+    let seed = index * 7919;
+    let length = SPARKLE_SECONDS * (0.7 + unit(seed + 1) * 0.8);
+    let shifted = t + unit(seed + 2) * length;
+    let cycle = (shifted / length).floor();
+    let age = shifted / length - cycle;
+    // Each cycle is a new place and may be skipped altogether, so sparkles come and go.
+    let place = seed.wrapping_add((cycle as i64).rem_euclid(10_007) as u32 * 31);
+    if unit(place + 3) > SPARKLE_CHANCE || age >= SPARKLE_SHINE {
+        return None;
+    }
+    let level = (std::f32::consts::PI * age / SPARKLE_SHINE).sin().powi(2);
+    let x = (unit(place) * width as f32) as u16;
+    let y = (unit(place + 1) * height as f32) as u16;
+    Some((x.min(width - 1), y.min(height - 1), level))
+}
+
+fn draw_sparkles(buffer: &mut ratatui::buffer::Buffer, area: Rect, t: f32) {
+    let count = (area.width as usize * area.height as usize) / CELLS_PER_SPARKLE;
+    for index in 0..count as u32 {
+        let Some((x, y, level)) = sparkle(index, t, area.width, area.height) else {
+            continue;
+        };
+        let glyph = match level {
+            l if l < 0.25 => continue,
+            l if l < 0.55 => PARTICLE_GLYPHS[0],
+            l if l < 0.85 => PARTICLE_GLYPHS[2],
+            _ => SPARKLE_GLYPH,
+        };
+        let cell = &mut buffer[(area.x + x, area.y + y)];
+        if cell.symbol() == " " {
+            let channel = |full: f32| (full * (0.35 + 0.65 * level)).min(255.0) as u8;
+            cell.set_symbol(glyph).set_fg(Color::Rgb(
+                channel(190.0),
+                channel(235.0),
+                channel(255.0),
+            ));
         }
     }
 }
@@ -60,7 +83,7 @@ pub(super) fn draw_backdrop(frame: &mut ratatui::Frame<'_>, area: Rect, t: f32) 
     let (width, height) = (area.width as f32, area.height as f32);
     let count = (area.width as usize * area.height as usize) / CELLS_PER_PARTICLE;
     let buffer = frame.buffer_mut();
-    draw_aurora(buffer, area, t);
+    draw_sparkles(buffer, area, t);
     // A slow wind that comes and goes, felt more by the particles nearer the viewer.
     let gust = (t * 0.17).sin() * (t * 0.05).cos();
     for particle in 0..count as u32 {
@@ -73,27 +96,20 @@ pub(super) fn draw_backdrop(frame: &mut ratatui::Frame<'_>, area: Rect, t: f32) 
         let cell = &mut buffer[position];
         if cell.symbol() == " " {
             let pulse = twinkle(particle, t);
-            // Only the nearest layer flares, and only at the peak of its pulse.
-            let flare = layer == 2 && pulse > 0.96;
-            let shade = if flare {
-                0.9
-            } else {
-                LAYER_BRIGHTNESS[layer] * (0.55 + 0.45 * pulse)
-            };
+            let shade = LAYER_BRIGHTNESS[layer] * (0.55 + 0.45 * pulse);
             let channel = |full: f32| (full * shade / 0.45).min(255.0) as u8;
-            cell.set_symbol(if flare {
-                FLARE_GLYPH
-            } else {
-                PARTICLE_GLYPHS[layer]
-            })
-            .set_fg(Color::Rgb(channel(150.0), channel(205.0), channel(235.0)));
+            cell.set_symbol(PARTICLE_GLYPHS[layer]).set_fg(Color::Rgb(
+                channel(150.0),
+                channel(205.0),
+                channel(235.0),
+            ));
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PARTICLE_GLYPHS, backdrop_enabled, draw_backdrop};
+    use super::{PARTICLE_GLYPHS, backdrop_enabled, draw_backdrop, sparkle};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
@@ -157,33 +173,61 @@ mod tests {
     }
 
     #[test]
-    fn the_nearest_particles_sometimes_flare() {
-        let flare = (0..400).any(|step| {
+    fn sparkles_shine_in_place_and_rise_then_fall() {
+        // Follow one sparkle for a long time: whenever it shines it stays on one cell, and its
+        // brightness climbs to a single peak and falls back.
+        let mut runs = 0;
+        let mut previous: Option<(u16, u16, f32)> = None;
+        let mut peaks = 0;
+        let mut rising = true;
+        for step in 0..4000 {
+            let now = sparkle(3, step as f32 * 0.02, 80, 24);
+            match (previous, now) {
+                (Some((px, py, pl)), Some((x, y, l))) => {
+                    assert_eq!((px, py), (x, y), "a sparkle never moves while it shines");
+                    if rising && l < pl - 1e-6 {
+                        rising = false;
+                        peaks += 1;
+                    } else if !rising && l > pl + 1e-6 {
+                        panic!("brightness rose again within one shine");
+                    }
+                }
+                (None, Some(_)) => {
+                    runs += 1;
+                    rising = true;
+                }
+                _ => {}
+            }
+            previous = now;
+        }
+        assert!(runs >= 5, "only {runs} shines in 80 seconds");
+        assert!(peaks >= runs - 1, "each shine peaks once: {peaks}/{runs}");
+    }
+
+    #[test]
+    fn sparkles_relocate_between_shines() {
+        let mut places = std::collections::HashSet::new();
+        for step in 0..4000 {
+            if let Some((x, y, _)) = sparkle(3, step as f32 * 0.02, 80, 24) {
+                places.insert((x, y));
+            }
+        }
+        assert!(places.len() >= 4, "{} distinct places", places.len());
+    }
+
+    #[test]
+    fn the_brightest_sparkles_use_the_star_glyph() {
+        let found = (0..400).any(|step| {
             let buffer = buffer_at(step as f32 * 0.25);
             (0..24).any(|y| (0..80).any(|x| buffer[(x, y)].symbol() == "✶"))
         });
-        assert!(flare, "no flare in 100 seconds of animation");
+        assert!(found, "no star in 100 seconds of animation");
     }
 
     #[test]
-    fn a_faint_aurora_shimmers_in_the_upper_part_and_moves() {
-        let first = tinted(&buffer_at(0.0));
-        assert!(first.len() > 40, "{} tinted cells", first.len());
-        assert!(
-            first.iter().all(|(_, y)| *y < 14),
-            "the lower part of the screen stays clear"
-        );
-        assert_ne!(first, tinted(&buffer_at(7.0)));
-    }
-
-    #[test]
-    fn the_aurora_stays_dark_enough_to_read_text_over() {
-        let buffer = buffer_at(1.0);
-        for (x, y) in tinted(&buffer) {
-            let Color::Rgb(r, g, b) = buffer[(x, y)].bg else {
-                unreachable!()
-            };
-            assert!(r < 40 && g < 90 && b < 110, "({x},{y}) is {r},{g},{b}");
+    fn nothing_tints_the_background() {
+        for t in [0.0, 3.0, 9.0] {
+            assert!(tinted(&buffer_at(t)).is_empty());
         }
     }
 
