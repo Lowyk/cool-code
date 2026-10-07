@@ -1,9 +1,7 @@
 use crate::Settings;
-use crate::endpoints::model_tags;
-use crate::tui::models::model_name;
 use crate::tui::render::centered_rect;
 use crate::tui::state::App;
-use crate::tui::widgets::list::{ListItem, ListState, draw_list};
+use crate::tui::widgets::tree::{RowKind, TreeState, draw_tree};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
@@ -12,65 +10,25 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub(in crate::tui) struct ModelPicker {
-    pub(in crate::tui) items: Vec<ListItem>,
-    pub(in crate::tui) targets: Vec<Option<(usize, String)>>,
-    pub(in crate::tui) state: ListState,
+    pub(in crate::tui) tree: TreeState,
 }
 
 impl ModelPicker {
     pub(in crate::tui) fn new(settings: &Settings) -> ModelPicker {
-        let mut items = Vec::new();
-        let mut targets = Vec::new();
-        let mut active = None;
-        for (index, profile) in settings.providers.iter().enumerate() {
-            let models: Vec<(String, String)> = if profile.models.is_empty() {
-                (!profile.model.is_empty())
-                    .then(|| (profile.model.clone(), String::new()))
-                    .into_iter()
-                    .collect()
-            } else {
-                profile
-                    .models
-                    .iter()
-                    .map(|model| (model.id.clone(), model.name.clone()))
-                    .collect()
-            };
-            for (id, name) in models {
-                let marked = settings.active_provider_id.as_deref() == Some(profile.id.as_str())
-                    && settings.model.as_deref() == Some(id.as_str());
-                if marked {
-                    active = Some(items.len());
-                }
-                items.push(ListItem {
-                    label: if name.is_empty() {
-                        model_name(&id)
-                    } else {
-                        name
-                    },
-                    detail: format!("{id}{}", model_tags(profile.model_info.get(&id))),
-                    group: Some(profile.name.clone()),
-                    dimmed: profile.draft,
-                    selectable: !profile.draft,
-                    marked,
-                });
-                targets.push((!profile.draft).then_some((index, id)));
-            }
-        }
-        let mut state = ListState::default();
-        if let Some(active) = active {
-            state.select_item(&items, active);
-        }
-        ModelPicker {
-            items,
-            targets,
-            state,
-        }
+        let mut tree = TreeState::default();
+        let rows = tree.rows(settings, true);
+        tree.select_active(&rows);
+        ModelPicker { tree }
     }
 
-    pub(in crate::tui) fn current_target(&self) -> Option<&(usize, String)> {
-        self.state
-            .current(&self.items)
-            .and_then(|index| self.targets[index].as_ref())
+    /// The model under the cursor, when the cursor is on a usable model row.
+    #[cfg(test)]
+    pub(in crate::tui) fn current_target(
+        &self,
+        settings: &Settings,
+    ) -> Option<crate::tui::widgets::tree::ModelTarget> {
+        let rows = self.tree.rows(settings, true);
+        self.tree.current(&rows).and_then(|row| row.target.clone())
     }
 }
 
@@ -79,19 +37,26 @@ impl App {
         let Some(picker) = self.model_picker.as_mut() else {
             return Ok(());
         };
+        let rows = picker.tree.rows(&self.settings, true);
         match key.code {
-            KeyCode::Up => picker.state.move_by(&picker.items, -1),
-            KeyCode::Down => picker.state.move_by(&picker.items, 1),
-            KeyCode::Backspace => picker.state.pop_filter(&picker.items),
+            KeyCode::Up => picker.tree.move_by(&rows, -1),
+            KeyCode::Down => picker.tree.move_by(&rows, 1),
+            KeyCode::Right => picker.tree.expand(&rows),
+            KeyCode::Left => picker.tree.collapse(&rows),
+            KeyCode::Backspace => picker.tree.pop_filter(),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                picker.state.push_filter(&picker.items, c)
+                picker.tree.push_filter(c)
             }
-            KeyCode::Enter => {
-                if let Some((provider_index, model_id)) = picker.current_target().cloned() {
-                    self.model_picker = None;
-                    self.activate_model(provider_index, &model_id)?;
+            KeyCode::Enter => match picker.tree.current(&rows).cloned() {
+                Some(row) if row.kind == RowKind::Model => {
+                    if let Some(target) = row.target {
+                        self.model_picker = None;
+                        self.activate_model(target.provider, &target.id)?;
+                    }
                 }
-            }
+                Some(_) => picker.tree.toggle(&rows),
+                None => {}
+            },
             KeyCode::Esc => self.model_picker = None,
             _ => {}
         }
@@ -103,8 +68,9 @@ pub(in crate::tui) fn draw_model_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     picker: &ModelPicker,
+    settings: &Settings,
 ) {
-    let popup = centered_rect(64, 70, area);
+    let popup = centered_rect(72, 76, area);
     frame.render_widget(Clear, popup);
     let accent = Color::Rgb(120, 220, 245);
     let block = Block::default()
@@ -119,7 +85,7 @@ pub(in crate::tui) fn draw_model_picker(
     }
     let filter = Line::from(vec![
         Span::styled("> ", Style::default().fg(accent)),
-        Span::raw(picker.state.filter.clone()),
+        Span::raw(picker.tree.filter.clone()),
         Span::styled("_", Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(
@@ -127,10 +93,11 @@ pub(in crate::tui) fn draw_model_picker(
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     let list_area = Rect::new(inner.x, inner.y + 2, inner.width, inner.height - 3);
-    draw_list(frame, list_area, &picker.items, &picker.state, true);
+    let rows = picker.tree.rows(settings, true);
+    draw_tree(frame, list_area, &rows, picker.tree.selected, true);
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "type to filter   ↑↓ move   Enter use   Esc close",
+            "type to filter   ↑↓ move   ←→ fold   Enter use or fold   Esc close",
             Style::default().fg(Color::DarkGray),
         ))
         .alignment(Alignment::Center),
@@ -142,6 +109,7 @@ pub(in crate::tui) fn draw_model_picker(
 mod tests {
     use super::ModelPicker;
     use crate::tui::state::App;
+    use crate::tui::widgets::tree::{RowKind, TreeRow};
     use crate::{ModelProfile, ProviderProfile, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -185,45 +153,42 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn rows(picker: &ModelPicker, settings: &Settings) -> Vec<TreeRow> {
+        picker.tree.rows(settings, true)
+    }
+
     #[test]
-    fn model_picker_groups_by_provider_and_marks_active() {
-        let picker = ModelPicker::new(&settings());
-        let groups = picker
-            .items
-            .iter()
-            .map(|item| item.group.clone().unwrap_or_default())
-            .collect::<Vec<_>>();
-        assert_eq!(groups[0], "google");
-        assert_eq!(groups[2], "groq");
-        let marked = picker
-            .items
-            .iter()
-            .position(|item| item.marked)
-            .expect("active model marked");
+    fn the_picker_opens_on_the_active_model_inside_its_provider() {
+        let settings = settings();
+        let picker = ModelPicker::new(&settings);
+        let rows = rows(&picker, &settings);
+        assert_eq!(rows[0].label, "google");
+        assert!(!rows[0].open, "inactive providers start folded");
+        let groq = rows.iter().position(|row| row.label == "groq").unwrap();
+        assert!(rows[groq].open && rows[groq].marked);
+        let target = picker.current_target(&settings).expect("on a model");
         assert_eq!(
-            picker.targets[marked],
-            Some((1, "qwen/qwen3.8-27b".to_owned()))
-        );
-        assert_eq!(
-            picker.current_target(),
-            Some(&(1, "qwen/qwen3.8-27b".to_owned()))
+            (target.provider, target.id.as_str()),
+            (1, "qwen/qwen3.8-27b")
         );
     }
 
     #[test]
-    fn model_picker_filter_finds_groq_model_by_bare_name() {
-        let mut picker = ModelPicker::new(&settings());
+    fn the_picker_filter_finds_a_model_by_bare_name() {
+        let settings = settings();
+        let mut picker = ModelPicker::new(&settings);
         for c in "gpt".chars() {
-            picker.state.push_filter(&picker.items, c);
+            picker.tree.push_filter(c);
         }
+        let target = picker.current_target(&settings).expect("match");
         assert_eq!(
-            picker.current_target(),
-            Some(&(1, "openai/gpt-oss-120b".to_owned()))
+            (target.provider, target.id.as_str()),
+            (1, "openai/gpt-oss-120b")
         );
     }
 
     #[test]
-    fn model_picker_tags_free_and_no_tools_models() {
+    fn the_picker_tags_free_and_no_tools_models() {
         let mut settings = settings();
         settings.providers[1].model_info.insert(
             "openai/gpt-oss-120b".to_owned(),
@@ -234,35 +199,38 @@ mod tests {
             },
         );
         let picker = ModelPicker::new(&settings);
-        let row = picker
-            .items
+        let rows = rows(&picker, &settings);
+        let tagged = rows
             .iter()
-            .find(|item| item.detail.starts_with("openai/gpt-oss-120b"))
-            .expect("model row");
+            .find(|row| row.label.contains("openai/gpt-oss-120b"))
+            .expect("tagged row");
         assert!(
-            row.detail.contains("free") && row.detail.contains("no tools"),
+            tagged.detail.contains("free") && tagged.detail.contains("no tools"),
             "{}",
-            row.detail
+            tagged.detail
         );
-        let plain = picker
-            .items
+        let plain = rows
             .iter()
-            .find(|item| item.detail == "qwen/qwen3.8-27b")
+            .find(|row| row.label.contains("qwen/qwen3.8-27b"))
             .expect("untagged row");
-        assert_eq!(plain.detail, "qwen/qwen3.8-27b");
+        assert_eq!(plain.detail, "");
     }
 
     #[test]
-    fn model_picker_draft_provider_models_are_not_selectable() {
-        let picker = ModelPicker::new(&settings());
-        let draft = picker
-            .items
+    fn draft_providers_are_listed_dimmed_and_cannot_be_chosen() {
+        let settings = settings();
+        let mut picker = ModelPicker::new(&settings);
+        let all = rows(&picker, &settings);
+        let draft = all.iter().position(|row| row.label == "half-done").unwrap();
+        assert!(all[draft].dimmed);
+        picker.tree.selected = draft;
+        picker.tree.expand(&all);
+        let opened = rows(&picker, &settings);
+        let model = opened
             .iter()
-            .position(|item| item.detail.contains("draft-model"))
+            .find(|row| row.label.contains("draft-model"))
             .expect("draft model listed");
-        assert!(picker.items[draft].dimmed);
-        assert!(!picker.items[draft].selectable);
-        assert_eq!(picker.targets[draft], None);
+        assert!(model.dimmed && model.target.is_none());
     }
 
     #[test]
@@ -275,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn model_picker_enter_activates_exact_pair_and_closes() {
+    fn enter_on_a_model_activates_the_exact_pair_and_closes() {
         let mut app = App::new(settings());
         app.trust_prompt = false;
         app.model_picker = Some(ModelPicker::new(&app.settings));
@@ -291,7 +259,47 @@ mod tests {
     }
 
     #[test]
-    fn model_picker_esc_closes_without_changes() {
+    fn enter_on_a_provider_folds_it_instead_of_choosing() {
+        let mut app = App::new(settings());
+        app.trust_prompt = false;
+        app.model_picker = Some(ModelPicker::new(&app.settings));
+        app.handle_model_picker_key(key(KeyCode::Left))
+            .expect("climb to the creator");
+        app.handle_model_picker_key(key(KeyCode::Left))
+            .expect("fold it");
+        // Selection climbed to the "Qwen" creator, then folded it away.
+        app.handle_model_picker_key(key(KeyCode::Enter))
+            .expect("enter");
+        assert!(app.model_picker.is_some(), "a heading is not a model");
+        assert_eq!(app.settings.model.as_deref(), Some("qwen/qwen3.8-27b"));
+        let picker = app.model_picker.as_ref().unwrap();
+        let rows = picker.tree.rows(&app.settings, true);
+        assert!(
+            rows.iter()
+                .any(|row| row.kind == RowKind::Creator && row.open)
+        );
+    }
+
+    #[test]
+    fn right_unfolds_a_provider_to_reach_its_models() {
+        let mut app = App::new(settings());
+        app.trust_prompt = false;
+        app.model_picker = Some(ModelPicker::new(&app.settings));
+        for _ in 0..10 {
+            app.handle_model_picker_key(key(KeyCode::Up)).expect("up");
+        }
+        app.handle_model_picker_key(key(KeyCode::Right))
+            .expect("unfold google");
+        app.handle_model_picker_key(key(KeyCode::Down))
+            .expect("down");
+        app.handle_model_picker_key(key(KeyCode::Enter))
+            .expect("choose");
+        assert_eq!(app.settings.active_provider_id.as_deref(), Some("google"));
+        assert_eq!(app.settings.model.as_deref(), Some("gemini-flash-latest"));
+    }
+
+    #[test]
+    fn esc_closes_without_changes() {
         let mut app = App::new(settings());
         app.model_picker = Some(ModelPicker::new(&app.settings));
         app.handle_model_picker_key(key(KeyCode::Down))

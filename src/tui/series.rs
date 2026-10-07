@@ -55,6 +55,11 @@ pub(super) fn resolve_series(settings: &Settings, query: &str) -> Vec<(usize, St
         .collect()
 }
 
+/// The numeric version in a model id (`claude-opus-5-5` is `[5, 5]`); empty when it has none.
+pub(super) fn version_of(model_id: &str) -> Vec<u32> {
+    ParsedName::new(model_id.rsplit('/').next().unwrap_or(model_id)).version
+}
+
 /// A model name split into lowercase words and a numeric version (`5.1` is `[5, 1]`).
 struct ParsedName {
     words: Vec<String>,

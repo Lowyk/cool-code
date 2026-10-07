@@ -1,8 +1,6 @@
-use crate::endpoints::model_tags;
-use crate::tui::models::model_name;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::App;
-use crate::tui::widgets::list::{ListItem, ListState, draw_list};
+use crate::tui::widgets::tree::{ModelTarget, draw_tree};
 use crate::{ModelProfile, Settings, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
@@ -30,36 +28,6 @@ pub(in crate::tui) enum ModelEdit {
         id: String,
         text: String,
     },
-}
-
-pub(super) fn model_rows(settings: &Settings) -> Vec<(ListItem, (usize, usize))> {
-    let mut rows = Vec::new();
-    for (provider_index, profile) in settings.providers.iter().enumerate() {
-        if profile.draft {
-            continue;
-        }
-        for (model_index, model) in profile.models.iter().enumerate() {
-            rows.push((
-                ListItem {
-                    label: if model.name.is_empty() {
-                        model_name(&model.id)
-                    } else {
-                        model.name.clone()
-                    },
-                    detail: format!(
-                        "{} · {}{}",
-                        model.id,
-                        profile.name,
-                        model_tags(profile.model_info.get(&model.id))
-                    ),
-                    selectable: true,
-                    ..ListItem::default()
-                },
-                (provider_index, model_index),
-            ));
-        }
-    }
-    rows
 }
 
 fn provider_choices(settings: &Settings) -> Vec<usize> {
@@ -123,13 +91,14 @@ pub(super) fn draw_models(
             lines
         }
         None => {
-            let rows = model_rows(&app.settings);
-            let items = rows.into_iter().map(|(item, _)| item).collect::<Vec<_>>();
-            let state = ListState {
-                selected: view.row,
-                filter: String::new(),
-            };
-            draw_list(frame, area, &items, &state, view.focus == Focus::Content);
+            let rows = view.tree.rows(&app.settings, false);
+            draw_tree(
+                frame,
+                area,
+                &rows,
+                view.tree.selected,
+                view.focus == Focus::Content,
+            );
             return;
         }
     };
@@ -141,14 +110,18 @@ impl App {
         let Some(view) = self.settings_view.as_mut() else {
             return Ok(());
         };
-        let rows = model_rows(&self.settings);
-        let row = view.row.min(rows.len().saturating_sub(1));
+        let rows = view.tree.rows(&self.settings, false);
+        let target = view.tree.current(&rows).and_then(|row| row.target.clone());
         if view.confirm_delete {
             view.confirm_delete = false;
             if key.code == KeyCode::Char('y')
-                && let Some((_, (provider, model))) = rows.get(row)
+                && let Some(ModelTarget {
+                    provider,
+                    index: Some(model),
+                    ..
+                }) = target
             {
-                self.remove_model(*provider, *model)?;
+                self.remove_model(provider, model)?;
             } else {
                 self.notice = "Removal cancelled.".to_owned();
             }
@@ -165,21 +138,30 @@ impl App {
             return Ok(());
         }
         match key.code {
-            KeyCode::Up => view.row = row.saturating_sub(1),
-            KeyCode::Down => view.row = (row + 1).min(rows.len().saturating_sub(1)),
+            KeyCode::Up => view.tree.move_by(&rows, -1),
+            KeyCode::Down => view.tree.move_by(&rows, 1),
+            KeyCode::Right => view.tree.expand(&rows),
+            KeyCode::Left => view.tree.collapse(&rows),
+            KeyCode::Enter | KeyCode::Char(' ') => view.tree.toggle(&rows),
             KeyCode::Char('n') => view.model_edit = Some(ModelEdit::ChooseProvider { choice: 0 }),
-            KeyCode::Char('r') => {
-                if let Some((_, (provider, model))) = rows.get(row) {
+            KeyCode::Char('r') => match target {
+                Some(ModelTarget {
+                    provider,
+                    index: Some(model),
+                    ..
+                }) => {
                     view.model_edit = Some(ModelEdit::Rename {
-                        provider: *provider,
-                        model: *model,
-                        text: self.settings.providers[*provider].models[*model]
-                            .name
-                            .clone(),
+                        provider,
+                        model,
+                        text: self.settings.providers[provider].models[model].name.clone(),
                     });
                 }
-            }
-            KeyCode::Char('x') if !rows.is_empty() => view.confirm_delete = true,
+                _ => self.notice = "Select a model to rename it.".to_owned(),
+            },
+            KeyCode::Char('x') => match target {
+                Some(ModelTarget { index: Some(_), .. }) => view.confirm_delete = true,
+                _ => self.notice = "Select a model to remove it.".to_owned(),
+            },
             _ => {}
         }
         Ok(())
@@ -326,9 +308,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::model_rows;
     use crate::tui::settings::Section;
     use crate::tui::state::App;
+    use crate::tui::widgets::tree::RowKind;
     use crate::{ModelProfile, ProviderProfile, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -377,6 +359,23 @@ mod tests {
             .expect("key");
     }
 
+    /// Unfolds the provider (if needed) and puts the cursor on one of its models.
+    fn select_model_row(app: &mut App, provider_id: &str, model_id: &str) {
+        let view = app.settings_view.as_mut().expect("settings open");
+        let rows = view.tree.rows(&app.settings, false);
+        let header = rows
+            .iter()
+            .position(|row| row.kind == RowKind::Provider && row.label == provider_id)
+            .expect("provider row");
+        view.tree.selected = header;
+        view.tree.expand(&rows);
+        let rows = view.tree.rows(&app.settings, false);
+        view.tree.selected = rows
+            .iter()
+            .position(|row| row.target.as_ref().is_some_and(|t| t.id == model_id))
+            .expect("model row");
+    }
+
     fn type_text(app: &mut App, text: &str) {
         for c in text.chars() {
             press(app, KeyCode::Char(c));
@@ -384,18 +383,71 @@ mod tests {
     }
 
     #[test]
-    fn models_section_lists_models_across_providers() {
-        let rows = model_rows(&settings());
-        let targets = rows.iter().map(|(_, target)| *target).collect::<Vec<_>>();
-        assert_eq!(targets, vec![(0, 0), (1, 0), (1, 1)]);
-        assert!(rows[2].0.detail.contains("openai/gpt-oss-120b"));
-        assert!(rows[2].0.detail.contains("groq"));
+    fn models_section_is_a_tree_with_only_the_active_provider_open() {
+        let app = app();
+        let view = app.settings_view.as_ref().expect("view");
+        let rows = view.tree.rows(&app.settings, false);
+        let shown = rows
+            .iter()
+            .map(|row| (row.kind, row.label.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(shown[0], (RowKind::Provider, "google"));
+        assert_eq!(shown[1], (RowKind::Provider, "groq"));
+        assert!(
+            rows.iter()
+                .any(|row| row.label == "Qwen3.8-27B (qwen/qwen3.8-27b)"),
+            "{:?}",
+            rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.label.contains("gemini-pro-latest"))
+        );
+    }
+
+    #[test]
+    fn enter_unfolds_a_provider_and_the_arrows_move_between_rows() {
+        let mut app = app();
+        {
+            let view = app.settings_view.as_mut().expect("view");
+            view.tree.selected = 0;
+        }
+        press(&mut app, KeyCode::Enter);
+        let view = app.settings_view.as_ref().expect("view");
+        let rows = view.tree.rows(&app.settings, false);
+        assert!(
+            rows.iter()
+                .any(|row| row.label.contains("gemini-pro-latest"))
+        );
+        press(&mut app, KeyCode::Down);
+        let view = app.settings_view.as_ref().expect("view");
+        assert_eq!(view.tree.selected, 1);
+    }
+
+    #[test]
+    fn rename_and_remove_need_a_model_under_the_cursor() {
+        let mut app = app();
+        app.settings_view.as_mut().expect("view").tree.selected = 0;
+        press(&mut app, KeyCode::Char('r'));
+        assert!(app.notice.contains("Select a model"), "{}", app.notice);
+        assert!(
+            app.settings_view
+                .as_ref()
+                .is_some_and(|view| view.model_edit.is_none())
+        );
+        press(&mut app, KeyCode::Char('x'));
+        assert!(
+            app.settings_view
+                .as_ref()
+                .is_some_and(|view| !view.confirm_delete)
+        );
     }
 
     #[test]
     fn models_rename_updates_display_name() {
         let mut app = app();
-        press(&mut app, KeyCode::Down);
+        select_model_row(&mut app, "groq", "qwen/qwen3.8-27b");
         press(&mut app, KeyCode::Char('r'));
         type_text(&mut app, "Qwen Fast");
         press(&mut app, KeyCode::Enter);
@@ -421,7 +473,7 @@ mod tests {
     #[test]
     fn removing_active_model_moves_provider_to_next_model() {
         let mut app = app();
-        press(&mut app, KeyCode::Down);
+        select_model_row(&mut app, "groq", "qwen/qwen3.8-27b");
         press(&mut app, KeyCode::Char('x'));
         press(&mut app, KeyCode::Char('y'));
         let groq = &app.settings.providers[1];
@@ -433,6 +485,7 @@ mod tests {
     #[test]
     fn removing_only_model_is_refused() {
         let mut app = app();
+        select_model_row(&mut app, "google", "gemini-pro-latest");
         press(&mut app, KeyCode::Char('x'));
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(app.settings.providers[0].models.len(), 1);
@@ -442,6 +495,7 @@ mod tests {
     #[test]
     fn esc_cancels_a_rename_without_leaving_the_section() {
         let mut app = app();
+        select_model_row(&mut app, "google", "gemini-pro-latest");
         press(&mut app, KeyCode::Char('r'));
         type_text(&mut app, "zzz");
         press(&mut app, KeyCode::Esc);
@@ -486,7 +540,7 @@ mod tests {
         app.trust_prompt = false;
         app.open_settings(Section::Models);
         press(&mut app, KeyCode::Right);
-        press(&mut app, KeyCode::Down);
+        select_model_row(&mut app, "groq", "qwen/qwen3.8-27b");
         press(&mut app, KeyCode::Char('x'));
         press(&mut app, KeyCode::Char('y'));
         assert_eq!(app.settings.model_chains.len(), 1);

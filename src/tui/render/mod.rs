@@ -413,7 +413,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         draw_model_provider_picker(frame, area, app);
     }
     if let Some(picker) = app.model_picker.as_ref() {
-        draw_model_picker(frame, area, picker);
+        draw_model_picker(frame, area, picker, &app.settings);
     }
     if app.motion_prompt && !app.trust_prompt {
         draw_motion_prompt(frame, area, app.motion_choice);

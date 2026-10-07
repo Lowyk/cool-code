@@ -41,11 +41,12 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/commands.rs` | Prompt submission and slash-command handling |
 | `src/tui/models.rs` | Model, provider, and chain resolution and activation |
 | `src/tui/series.rs` | Resolves series names such as `fable` or `fable-5` to the newest matching listed model |
+| `src/tui/creators.rs` | Attributes model IDs to the lab that made them, for grouping |
 | `src/tui/forms.rs` | Provider and chain editing forms: state changes and key handling |
 | `src/tui/context.rs` | Workspace trust and `COOL.md` / `@path` context loading |
 | `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `providers`, `models`, `auto_switch`, `privacy`) plus `sync` (background model and usage fetches reported to the UI each frame) |
 | `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
-| `src/tui/widgets/` | Reusable widgets, such as the filterable selectable list |
+| `src/tui/widgets/` | Reusable widgets: the filterable selectable list and the collapsible provider/creator/model tree |
 | `src/tui/stats_view.rs` | The `/stats` full-screen view: overview, models tab, range selection, and clearing history |
 | `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs`, `motion.rs` (text pulse and reduced-motion prompt) |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
