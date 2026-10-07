@@ -8,6 +8,7 @@ mod pickers;
 mod render;
 mod settings;
 mod state;
+mod stats_view;
 mod widgets;
 mod wordmark;
 
@@ -52,6 +53,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new(read_settings()?);
     app.motion_prompt = !app.settings.motion_prompt_answered;
+    app.stats_prompt = !app.settings.stats_prompt_answered;
     let animation_start = std::time::Instant::now();
     while app.running {
         app.poll_response();
@@ -97,6 +99,15 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Enter => app.answer_motion_prompt(app.motion_choice == 1)?,
             KeyCode::Char('r' | 'R') => app.answer_motion_prompt(true)?,
             KeyCode::Char('k' | 'K') | KeyCode::Esc => app.answer_motion_prompt(false)?,
+            _ => {}
+        }
+    } else if app.stats_prompt {
+        match key.code {
+            KeyCode::Left => app.stats_choice = 0,
+            KeyCode::Right => app.stats_choice = 1,
+            KeyCode::Enter => app.answer_stats_prompt(app.stats_choice == 0)?,
+            KeyCode::Char('y' | 'Y') => app.answer_stats_prompt(true)?,
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => app.answer_stats_prompt(false)?,
             _ => {}
         }
     } else if app.tool_approval.is_some() {
@@ -250,6 +261,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             }
             _ => {}
         }
+    } else if app.stats_view.is_some() {
+        app.handle_stats_key(key)?;
     } else if app.settings_view.is_some() {
         app.handle_settings_view_key(key)?;
     } else {
@@ -370,6 +383,72 @@ mod tests {
         assert_eq!(app.settings.pulse, crate::PulseMode::Words);
         assert!(app.settings.background_animation);
         assert!(app.running);
+    }
+
+    fn stats_prompt_app() -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.stats_prompt = true;
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        handle_key(app, KeyEvent::new(code, KeyModifiers::NONE)).expect("key");
+    }
+
+    #[test]
+    fn the_stats_prompt_defaults_to_no_and_enter_declines() {
+        let mut app = stats_prompt_app();
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.stats_prompt);
+        assert!(!app.settings.stats_enabled);
+        assert!(app.settings.stats_prompt_answered);
+    }
+
+    #[test]
+    fn choosing_yes_in_the_stats_prompt_turns_recording_on() {
+        let mut app = stats_prompt_app();
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings.stats_enabled && app.settings.stats_prompt_answered);
+        let mut shortcut = stats_prompt_app();
+        press(&mut shortcut, KeyCode::Char('y'));
+        assert!(shortcut.settings.stats_enabled);
+        let mut declined = stats_prompt_app();
+        press(&mut declined, KeyCode::Esc);
+        assert!(!declined.settings.stats_enabled && declined.settings.stats_prompt_answered);
+        assert!(
+            declined.running,
+            "Esc answers the prompt instead of quitting"
+        );
+    }
+
+    #[test]
+    fn the_stats_prompt_waits_for_the_motion_prompt() {
+        let mut app = stats_prompt_app();
+        app.motion_prompt = true;
+        press(&mut app, KeyCode::Char('y'));
+        // The key went to the motion prompt, not the stats prompt.
+        assert!(app.stats_prompt && !app.settings.stats_enabled);
+    }
+
+    #[test]
+    fn the_stats_prompt_explains_what_is_stored() {
+        let app = stats_prompt_app();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 36)).expect("terminal");
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &app, 0))
+            .expect("draw");
+        let shown: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(shown.contains("usage stats"), "{shown}");
+        assert!(shown.contains("never your prompts"), "{shown}");
     }
 
     #[test]

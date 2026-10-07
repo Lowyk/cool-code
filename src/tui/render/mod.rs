@@ -11,9 +11,10 @@ use crate::tui::render::dialogs::{
     draw_extreme_confirmation, draw_mode_picker, draw_model_provider_picker,
     draw_privacy_confirmation, draw_tool_approval, draw_workspace_trust_prompt,
 };
-use crate::tui::render::motion::{draw_motion_prompt, pulse_spans};
+use crate::tui::render::motion::{draw_motion_prompt, draw_stats_prompt, pulse_spans};
 use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
+use crate::tui::stats_view::draw_stats;
 use crate::tui::wordmark::cool_code_wordmark;
 use crate::{Effort, PulseMode, provider};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
@@ -389,6 +390,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if app.settings_view.is_some() {
         draw_settings_view(frame, area, app);
     }
+    if app.stats_view.is_some() {
+        draw_stats(frame, area, app);
+    }
     if app.picker {
         draw_effort_picker(frame, area, app, animation_tick);
     }
@@ -413,6 +417,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     }
     if app.motion_prompt && !app.trust_prompt {
         draw_motion_prompt(frame, area, app.motion_choice);
+    }
+    if app.stats_prompt && !app.motion_prompt && !app.trust_prompt {
+        draw_stats_prompt(frame, area, app.stats_choice);
     }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);

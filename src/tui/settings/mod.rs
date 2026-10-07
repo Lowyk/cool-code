@@ -394,6 +394,25 @@ mod tests {
     }
 
     #[test]
+    fn general_usage_stats_row_toggles_recording() {
+        let mut app = app();
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..6 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        assert!(!app.settings.stats_enabled);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("on");
+        assert!(app.settings.stats_enabled && app.settings.stats_prompt_answered);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("off");
+        assert!(!app.settings.stats_enabled);
+    }
+
+    #[test]
     fn general_background_row_toggles_the_animation() {
         let mut app = app();
         app.open_settings(Section::General);

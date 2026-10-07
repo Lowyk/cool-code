@@ -156,6 +156,12 @@ pub(super) fn draw_motion_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, cho
 mod tests {
     use super::{BASE_TEXT, pulse_spans, pulse_strength};
     use crate::PulseMode;
+    use crate::tui::render::centered_rect;
+    use crate::tui::render::motion::draw_stats_prompt;
+    use ratatui::layout::{Alignment, Rect};
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -217,4 +223,58 @@ mod tests {
         let spans = pulse_spans("done ", &[(0, long_ago)], PulseMode::Words, Instant::now());
         assert!(spans.iter().all(|span| span.style.fg == Some(BASE_TEXT)));
     }
+}
+
+pub(super) fn draw_stats_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, choice: usize) {
+    let accent = Color::Rgb(98, 213, 244);
+    let popup = centered_rect(70, 44, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Usage stats ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(accent))
+        .style(Style::default().bg(Color::Rgb(25, 32, 38)));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let option = |label: &'static str, selected: bool| {
+        if selected {
+            Span::styled(
+                format!("[ {label} ]"),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(label, Style::default().fg(Color::Gray))
+        }
+    };
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Keep local usage stats?",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Cool Code can record which models you use and how many tokens, to power /stats. It saves only counts, model names, and timestamps on this computer, in ~/.coolcode/stats.jsonl: never your prompts or answers. Nothing is sent anywhere.",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            option("Yes, record", choice == 0),
+            Span::raw("     "),
+            option("No thanks", choice == 1),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "←/→ choose   Enter confirm   change it any time in Settings",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        inner,
+    );
 }

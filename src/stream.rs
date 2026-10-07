@@ -10,7 +10,11 @@ use crate::provider::{AgentTurn, ToolCall};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum StreamEvent {
     TextDelta(String),
-    Usage(u64),
+    /// Token counts a provider reported; either may be missing, and later events can refine them.
+    Usage {
+        input: Option<u64>,
+        output: Option<u64>,
+    },
 }
 
 pub(crate) struct Stream<'a> {
@@ -105,6 +109,21 @@ fn drive(
     }
 }
 
+fn emit_usage(stream: &Stream, input: Option<u64>, output: Option<u64>) {
+    if input.is_some() || output.is_some() {
+        stream.emit(StreamEvent::Usage { input, output });
+    }
+}
+
+/// Adds up whichever of the named token counters the provider reported.
+fn sum_tokens(value: &Value, pointers: &[&str]) -> Option<u64> {
+    let counts = pointers
+        .iter()
+        .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    (!counts.is_empty()).then(|| counts.iter().sum())
+}
+
 fn push_text(text: &std::cell::RefCell<String>, stream: &Stream, delta: &str) {
     if !delta.is_empty() {
         text.borrow_mut().push_str(delta);
@@ -152,12 +171,11 @@ pub(crate) fn parse_openai_stream(reader: impl BufRead, stream: &Stream) -> Resu
                 format!("provider error: {message}"),
             ));
         }
-        if let Some(tokens) = chunk
-            .pointer("/usage/completion_tokens")
-            .and_then(Value::as_u64)
-        {
-            stream.emit(StreamEvent::Usage(tokens));
-        }
+        emit_usage(
+            stream,
+            sum_tokens(&chunk, &["/usage/prompt_tokens"]),
+            sum_tokens(&chunk, &["/usage/completion_tokens"]),
+        );
         let Some(delta) = chunk.pointer("/choices/0/delta") else {
             return Ok(());
         };
@@ -260,13 +278,26 @@ pub(crate) fn parse_anthropic_stream(reader: impl BufRead, stream: &Stream) -> R
                     _ => {}
                 }
             }
+            "message_start" => {
+                emit_usage(
+                    stream,
+                    sum_tokens(
+                        &event,
+                        &[
+                            "/message/usage/input_tokens",
+                            "/message/usage/cache_read_input_tokens",
+                            "/message/usage/cache_creation_input_tokens",
+                        ],
+                    ),
+                    sum_tokens(&event, &["/message/usage/output_tokens"]),
+                );
+            }
             "message_delta" => {
-                if let Some(tokens) = event
-                    .pointer("/usage/output_tokens")
-                    .and_then(Value::as_u64)
-                {
-                    stream.emit(StreamEvent::Usage(tokens));
-                }
+                emit_usage(
+                    stream,
+                    sum_tokens(&event, &["/usage/input_tokens"]),
+                    sum_tokens(&event, &["/usage/output_tokens"]),
+                );
             }
             "error" => {
                 let message = event
@@ -314,12 +345,17 @@ pub(crate) fn parse_google_stream(reader: impl BufRead, stream: &Stream) -> Resu
                 format!("provider error: {message}"),
             ));
         }
-        if let Some(tokens) = chunk
-            .pointer("/usageMetadata/candidatesTokenCount")
-            .and_then(Value::as_u64)
-        {
-            stream.emit(StreamEvent::Usage(tokens));
-        }
+        emit_usage(
+            stream,
+            sum_tokens(&chunk, &["/usageMetadata/promptTokenCount"]),
+            sum_tokens(
+                &chunk,
+                &[
+                    "/usageMetadata/candidatesTokenCount",
+                    "/usageMetadata/thoughtsTokenCount",
+                ],
+            ),
+        );
         for part in chunk
             .pointer("/candidates/0/content/parts")
             .and_then(Value::as_array)
@@ -405,10 +441,19 @@ event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
         let (result, events) = run_with(super::parse_anthropic_stream, fixture);
         assert_eq!(result.expect("turn").text, "Hello");
         assert_eq!(
-            events.first(),
+            events
+                .iter()
+                .find(|event| matches!(event, StreamEvent::TextDelta(_))),
             Some(&StreamEvent::TextDelta("Hel".to_owned()))
         );
-        assert!(events.contains(&StreamEvent::Usage(15)));
+        assert!(events.contains(&StreamEvent::Usage {
+            input: Some(10),
+            output: Some(1)
+        }));
+        assert!(events.contains(&StreamEvent::Usage {
+            input: None,
+            output: Some(15)
+        }));
     }
 
     #[test]
@@ -446,7 +491,10 @@ data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"},{\"functionCal
         assert_eq!(turn.tool_calls[0].name, "read_file");
         assert_eq!(turn.tool_calls[0].arguments["path"], "a.rs");
         assert!(turn.tool_calls[0].id.starts_with("google-call-"));
-        assert!(events.contains(&StreamEvent::Usage(7)));
+        assert!(events.contains(&StreamEvent::Usage {
+            input: None,
+            output: Some(7)
+        }));
     }
 
     #[test]
@@ -493,6 +541,40 @@ data: {\"error\":{\"code\":500,\"message\":\"Internal\"}}\n\n";
         let mut restorer = super::Restorer::new(&[]);
         assert_eq!(restorer.push("⟦partial"), "⟦partial");
         assert_eq!(restorer.flush(), "");
+    }
+
+    #[test]
+    fn openai_usage_reports_prompt_and_completion_tokens() {
+        let fixture = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n\
+data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":8}}\n\n\
+data: [DONE]\n\n";
+        let (_, events) = run_openai(fixture, &AtomicBool::new(false));
+        assert!(events.contains(&StreamEvent::Usage {
+            input: Some(120),
+            output: Some(8)
+        }));
+    }
+
+    #[test]
+    fn anthropic_input_includes_cached_tokens() {
+        let fixture = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":20,\"output_tokens\":1}}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n\
+data: {\"type\":\"message_stop\"}\n\n";
+        let (_, events) = run_with(super::parse_anthropic_stream, fixture);
+        assert!(events.contains(&StreamEvent::Usage {
+            input: Some(125),
+            output: Some(1)
+        }));
+    }
+
+    #[test]
+    fn google_usage_counts_thinking_tokens_as_output() {
+        let fixture = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}],\"usageMetadata\":{\"promptTokenCount\":50,\"candidatesTokenCount\":7,\"thoughtsTokenCount\":30}}\n\n";
+        let (_, events) = run_with(super::parse_google_stream, fixture);
+        assert!(events.contains(&StreamEvent::Usage {
+            input: Some(50),
+            output: Some(37)
+        }));
     }
 
     #[test]
@@ -546,7 +628,10 @@ data: {\"choices\":[],\"usage\":{\"completion_tokens\":42}}\n\n\
 data: [DONE]\n\n";
         let (result, events) = run_openai(fixture, &AtomicBool::new(false));
         assert_eq!(result.expect("turn").text, "ok");
-        assert!(events.contains(&StreamEvent::Usage(42)));
+        assert!(events.contains(&StreamEvent::Usage {
+            input: None,
+            output: Some(42)
+        }));
     }
 
     #[test]
