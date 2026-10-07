@@ -79,4 +79,4 @@ Recording is **opt-in**: on first launch a prompt asks, and the choice can be ch
 - The harness—not the model—enforces permissions and resource limits.
 - Plans, actions, edits, and verification should be inspectable and resumable.
 
-See [ROADMAP.md](ROADMAP.md) and [docs/architecture.md](docs/architecture.md).
+See [docs/architecture.md](docs/architecture.md) for how the pieces fit together.
