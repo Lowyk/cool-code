@@ -15,7 +15,7 @@ use crate::tui::render::motion::{draw_motion_prompt, draw_stats_prompt, pulse_sp
 use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::stats_view::draw_stats;
-use crate::tui::wordmark::cool_code_wordmark;
+use crate::tui::wordmark::{cool_code_wordmark, tagline_lines, wordmark_height};
 use crate::{Effort, PulseMode, provider};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -144,8 +144,8 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Fill(1),
-                    Constraint::Length(5),
-                    Constraint::Length(2),
+                    Constraint::Length(wordmark_height(area.width)),
+                    Constraint::Length(3),
                     Constraint::Length(prompt_height),
                     Constraint::Length(1),
                     Constraint::Length(2),
@@ -192,17 +192,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         draw_backdrop(frame, area, app.launched_at.elapsed().as_secs_f32());
     }
 
-    let logo_elapsed = app.launched_at.elapsed().as_secs_f32().min(1.0);
-    let logo_lines = cool_code_wordmark(logo_elapsed);
+    let launched = app.launched_at.elapsed().as_secs_f32();
     if logo_area.width > 0 {
         frame.render_widget(
-            Paragraph::new(logo_lines).alignment(Alignment::Center),
+            Paragraph::new(cool_code_wordmark(launched, logo_area.width))
+                .alignment(Alignment::Center),
             logo_area,
         );
         frame.render_widget(
-            Paragraph::new("Rust · temperature-conscious coding harness")
-                .style(Style::default().fg(Color::DarkGray))
-                .alignment(Alignment::Center),
+            Paragraph::new(tagline_lines(launched)).alignment(Alignment::Center),
             subtitle_area,
         );
     }
