@@ -18,6 +18,10 @@ pub(in crate::tui) struct StatsView {
     pub(in crate::tui) range: crate::stats::Range,
     pub(in crate::tui) records: Vec<crate::stats::Record>,
     pub(in crate::tui) confirm_clear: bool,
+    // Summaries are recomputed only when the range, the data, or the minute changes.
+    summary_cache:
+        std::cell::RefCell<Option<((crate::stats::Range, usize, i64), crate::stats::Summary)>>,
+    grid_cache: std::cell::RefCell<Option<((usize, usize, i64), crate::stats::HeatGrid)>>,
 }
 
 const RANGES: [crate::stats::Range; 3] = [
@@ -33,7 +37,33 @@ impl StatsView {
             range: crate::stats::Range::All,
             records,
             confirm_clear: false,
+            summary_cache: std::cell::RefCell::new(None),
+            grid_cache: std::cell::RefCell::new(None),
         }
+    }
+
+    fn summary(&self, now_ts: i64) -> crate::stats::Summary {
+        let key = (self.range, self.records.len(), now_ts.div_euclid(60));
+        if let Some((cached_key, summary)) = self.summary_cache.borrow().as_ref()
+            && *cached_key == key
+        {
+            return summary.clone();
+        }
+        let summary = crate::stats::summarize(&self.records, self.range, &chrono::Local, now_ts);
+        *self.summary_cache.borrow_mut() = Some((key, summary.clone()));
+        summary
+    }
+
+    fn heat(&self, now_ts: i64, weeks: usize) -> crate::stats::HeatGrid {
+        let key = (weeks, self.records.len(), now_ts.div_euclid(60));
+        if let Some((cached_key, grid)) = self.grid_cache.borrow().as_ref()
+            && *cached_key == key
+        {
+            return grid.clone();
+        }
+        let grid = crate::stats::heat_grid(&self.records, &chrono::Local, now_ts, weeks);
+        *self.grid_cache.borrow_mut() = Some((key, grid.clone()));
+        grid
     }
 }
 
@@ -49,12 +79,19 @@ impl App {
             return Ok(());
         };
         if view.confirm_clear {
-            let confirmed = key.code == KeyCode::Char('y');
+            let confirmed = matches!(key.code, KeyCode::Char('y' | 'Y'));
             view.confirm_clear = false;
             if confirmed {
-                crate::stats::clear()?;
-                view.records.clear();
-                self.notice = "Usage history deleted.".to_owned();
+                // A file that cannot be deleted (locked, read-only) must not end the session.
+                match crate::stats::clear() {
+                    Ok(()) => {
+                        view.records.clear();
+                        self.notice = "Usage history deleted.".to_owned();
+                    }
+                    Err(error) => {
+                        self.notice = format!("Could not delete the usage history: {error:#}");
+                    }
+                }
             }
             return Ok(());
         }
@@ -76,8 +113,10 @@ impl App {
             KeyCode::Char('r') if !self.settings.stats_enabled => {
                 self.settings.stats_enabled = true;
                 self.settings.stats_prompt_answered = true;
-                write_settings(&self.settings)?;
-                self.notice = "Usage stats are now recorded on this computer.".to_owned();
+                self.notice = match write_settings(&self.settings) {
+                    Ok(()) => "Usage stats are now recorded on this computer.".to_owned(),
+                    Err(error) => format!("Could not save the setting: {error:#}"),
+                };
             }
             _ => {}
         }
@@ -137,10 +176,9 @@ pub(in crate::tui) fn overview_lines(
     width: u16,
     now_ts: i64,
 ) -> Vec<Line<'static>> {
-    use crate::stats::{compact_tokens, format_duration, fun_fact, heat_grid, summarize};
+    use crate::stats::{compact_tokens, format_duration, fun_fact};
 
-    let local = chrono::Local;
-    let summary = summarize(&view.records, view.range, &local, now_ts);
+    let summary = view.summary(now_ts);
     if view.records.is_empty() {
         return vec![Line::from(Span::styled(
             "No usage recorded yet. Stats appear here after your next request.",
@@ -156,7 +194,7 @@ pub(in crate::tui) fn overview_lines(
     let mut lines = Vec::new();
 
     let weeks = ((width as usize).saturating_sub(6) / 2).clamp(4, 26);
-    let grid = heat_grid(&view.records, &local, now_ts, weeks);
+    let grid = view.heat(now_ts, weeks);
     for row in 0..7 {
         let label = match row {
             0 => "Mon",
@@ -248,9 +286,9 @@ pub(in crate::tui) fn models_lines(
     width: u16,
     now_ts: i64,
 ) -> Vec<Line<'static>> {
-    use crate::stats::{compact_tokens, summarize};
+    use crate::stats::compact_tokens;
 
-    let summary = summarize(&view.records, view.range, &chrono::Local, now_ts);
+    let summary = view.summary(now_ts);
     if summary.models.is_empty() {
         return vec![Line::from(Span::styled(
             "No models used yet in this range.",
@@ -422,6 +460,9 @@ mod tests {
 
     const NOW: i64 = 1_791_400_000;
 
+    // Tests that touch the shared per-process stats file take this lock.
+    static STATS_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn record(days_ago: i64, model: &str, input: u64, output: u64, turn: &str) -> Record {
         Record {
             ts: NOW - days_ago * 86_400,
@@ -564,6 +605,9 @@ mod tests {
 
     #[test]
     fn clearing_history_needs_confirmation() {
+        let _guard = STATS_FILE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut app = app_with_view();
         app.handle_stats_key(key(KeyCode::Char('c'))).expect("c");
         assert!(app.stats_view.as_ref().unwrap().confirm_clear);
@@ -574,6 +618,55 @@ mod tests {
         app.handle_stats_key(key(KeyCode::Char('y'))).expect("y");
         let view = app.stats_view.as_ref().expect("view stays open");
         assert!(view.records.is_empty() && !view.confirm_clear);
+    }
+
+    #[test]
+    fn a_failed_delete_shows_a_message_and_keeps_the_session_alive() {
+        let _guard = STATS_FILE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = crate::stats::stats_path().expect("path");
+        // A directory where the file should be makes the deletion fail.
+        std::fs::create_dir_all(&path).expect("blocker");
+        let mut app = app_with_view();
+        app.handle_stats_key(key(KeyCode::Char('c'))).expect("c");
+        let result = app.handle_stats_key(key(KeyCode::Char('y')));
+        std::fs::remove_dir_all(&path).expect("cleanup");
+        assert!(result.is_ok(), "a failed delete must not end the session");
+        assert!(app.notice.contains("Could not delete"), "{}", app.notice);
+        let view = app.stats_view.as_ref().expect("view stays open");
+        assert_eq!(
+            view.records.len(),
+            4,
+            "history is kept when deleting failed"
+        );
+        assert!(!view.confirm_clear);
+    }
+
+    #[test]
+    fn a_capital_y_also_confirms() {
+        let _guard = STATS_FILE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut app = app_with_view();
+        app.handle_stats_key(key(KeyCode::Char('c'))).expect("c");
+        app.handle_stats_key(key(KeyCode::Char('Y'))).expect("Y");
+        assert!(app.stats_view.as_ref().unwrap().records.is_empty());
+    }
+
+    #[test]
+    fn switching_ranges_never_shows_a_stale_summary() {
+        let mut view = view();
+        let all = text(&overview_lines(&view, 110, NOW));
+        view.range = Range::Days(7);
+        let week = text(&overview_lines(&view, 110, NOW));
+        view.range = Range::All;
+        let again = text(&overview_lines(&view, 110, NOW));
+        assert_ne!(all, week);
+        assert_eq!(all, again);
+        // New data invalidates the cache too.
+        view.records.push(record(0, "new-model", 1_000_000, 0, "z"));
+        assert!(text(&overview_lines(&view, 110, NOW)).contains("1.2M"));
     }
 
     #[test]

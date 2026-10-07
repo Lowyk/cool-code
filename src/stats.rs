@@ -66,7 +66,7 @@ pub(crate) struct Summary {
 
 impl Summary {
     pub(crate) fn total_tokens(&self) -> u64 {
-        self.total_input + self.total_output
+        self.total_input.saturating_add(self.total_output)
     }
 
     pub(crate) fn favorite(&self) -> Option<&str> {
@@ -106,8 +106,11 @@ pub(crate) fn append_to(path: &Path, record: &Record) -> Result<()> {
         .append(true)
         .open(path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let line = serde_json::to_string(record).context("serializing a usage record")?;
-    writeln!(file, "{line}").with_context(|| format!("writing {}", path.display()))
+    // One write call per record, so two app windows appending at once cannot interleave lines.
+    let mut line = serde_json::to_string(record).context("serializing a usage record")?;
+    line.push('\n');
+    file.write_all(line.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// Reads every readable record; a missing file is empty and damaged lines are skipped.
@@ -213,7 +216,9 @@ pub(crate) fn summarize<Tz: TimeZone>(
     };
     let cutoff = match range {
         Range::All => None,
-        Range::Days(days) => Some(today - Duration::days(i64::from(days.max(1)) - 1)),
+        // An out-of-range window simply means no cutoff.
+        Range::Days(days) => Duration::try_days(i64::from(days.max(1)) - 1)
+            .and_then(|span| today.checked_sub_signed(span)),
     };
     let mut summary = Summary::default();
     let mut models: HashMap<&str, ModelTotals> = HashMap::new();
@@ -227,9 +232,9 @@ pub(crate) fn summarize<Tz: TimeZone>(
         if cutoff.is_some_and(|cutoff| date < cutoff) {
             continue;
         }
-        let tokens = record.input_tokens + record.output_tokens;
-        summary.total_input += record.input_tokens;
-        summary.total_output += record.output_tokens;
+        let tokens = record.input_tokens.saturating_add(record.output_tokens);
+        summary.total_input = summary.total_input.saturating_add(record.input_tokens);
+        summary.total_output = summary.total_output.saturating_add(record.output_tokens);
         summary.estimated |= record.estimated;
         summary.requests += 1;
         match record.outcome {
@@ -238,16 +243,17 @@ pub(crate) fn summarize<Tz: TimeZone>(
             Outcome::Failed => summary.failed += 1,
         }
         let totals = models.entry(record.model.as_str()).or_default();
-        totals.tokens += tokens;
+        totals.tokens = totals.tokens.saturating_add(tokens);
         totals.requests += 1;
         if record.duration_ms > 0 {
-            totals.output_with_time += record.output_tokens;
-            totals.millis += record.duration_ms;
+            totals.output_with_time = totals.output_with_time.saturating_add(record.output_tokens);
+            totals.millis = totals.millis.saturating_add(record.duration_ms);
         }
-        *day_tokens.entry(date).or_default() += tokens;
+        let day_total = day_tokens.entry(date).or_default();
+        *day_total = day_total.saturating_add(tokens);
         hour_requests[hour as usize] += 1;
-        let start = record.ts * 1000;
-        let end = start + record.duration_ms as i64;
+        let start = record.ts.saturating_mul(1000);
+        let end = start.saturating_add(i64::try_from(record.duration_ms).unwrap_or(i64::MAX));
         let span = turn_spans
             .entry(record.turn.as_str())
             .or_insert((start, end));
@@ -257,7 +263,7 @@ pub(crate) fn summarize<Tz: TimeZone>(
     summary.turns = turn_spans.len() as u64;
     summary.longest_turn_ms = turn_spans
         .values()
-        .map(|(start, end)| (end - start).max(0) as u64)
+        .map(|(start, end)| end.saturating_sub(*start).max(0) as u64)
         .max()
         .unwrap_or(0);
     let mut model_list: Vec<ModelStats> = models
@@ -330,7 +336,9 @@ pub(crate) fn heat_grid<Tz: TimeZone>(
     let mut day_tokens: HashMap<NaiveDate, u64> = HashMap::new();
     for record in records {
         if let Some((date, _)) = local_date(tz, record.ts) {
-            *day_tokens.entry(date).or_default() += record.input_tokens + record.output_tokens;
+            let day_total = day_tokens.entry(date).or_default();
+            *day_total =
+                day_total.saturating_add(record.input_tokens.saturating_add(record.output_tokens));
         }
     }
     let mut shown: Vec<u64> = day_tokens
@@ -614,6 +622,30 @@ mod tests {
         assert_eq!(summary.peak_hour, Some(21));
         // Turn "b" starts at 21:00 and its last request ends 120 s later.
         assert_eq!(summary.longest_turn_ms, 120_000);
+    }
+
+    #[test]
+    fn corrupt_records_cannot_crash_the_summary() {
+        let mut absurd = rec("2026-10-02", 9, "m", 1, 1, "t", 1);
+        absurd.ts = i64::MAX;
+        let mut huge = rec("2026-10-02", 9, "m", u64::MAX, u64::MAX, "t", 1);
+        huge.duration_ms = u64::MAX;
+        let mut also = rec("2026-10-02", 9, "m", u64::MAX, 1, "u", u64::MAX);
+        also.ts = i64::MIN / 2000;
+        let records = vec![absurd, huge, also, rec("2026-10-02", 9, "m", 5, 5, "v", 5)];
+        let now = at("2026-10-03", 0);
+        for range in [
+            Range::All,
+            Range::Days(7),
+            Range::Days(u32::MAX),
+            Range::Days(0),
+        ] {
+            let summary = summarize(&records, range, &tz(), now);
+            let _ = (summary.total_tokens(), summary.longest_turn_ms);
+        }
+        let _ = heat_grid(&records, &tz(), now, 26);
+        let _ = heat_grid(&records, &tz(), i64::MAX, 4);
+        let _ = summarize(&records, Range::All, &tz(), i64::MIN);
     }
 
     #[test]
