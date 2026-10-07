@@ -93,7 +93,10 @@ pub(crate) fn describe_key(key: &str, expected_prefix: Option<&str>) -> String {
     if key.chars().any(char::is_whitespace) {
         problems.push("contains spaces or line breaks".to_owned());
     }
-    if key.len() >= 7 && key[..7].eq_ignore_ascii_case("bearer ") {
+    if key
+        .get(..7)
+        .is_some_and(|start| start.eq_ignore_ascii_case("bearer "))
+    {
         problems.push("starts with Bearer".to_owned());
     }
     if let Some(prefix) = expected_prefix
@@ -976,6 +979,15 @@ mod tests {
         for text in ["ma-live-abcd", "\"ma-live-abcd\"", "Bearer ma-live-abcd"] {
             assert!(!super::describe_key(text, prefix).contains("abcd"));
         }
+    }
+
+    #[test]
+    fn describing_a_key_with_non_ascii_text_near_the_start_does_not_panic() {
+        for key in ["abcdef…ghi", "ключключ", "ab😀cdef"] {
+            let shown = super::describe_key(key, None);
+            assert!(!shown.contains("Bearer"), "{shown}");
+        }
+        assert!(super::describe_key("Bearer ключ", None).contains("starts with Bearer"));
     }
 
     #[test]
