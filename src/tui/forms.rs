@@ -168,7 +168,10 @@ fn provider_endpoints(
 /// whitespace inside the key are removed, because providers reject keys carrying them.
 pub(super) fn normalize_api_key(raw: &str) -> String {
     let mut key = raw.trim();
-    if key.len() >= 7 && key[..7].eq_ignore_ascii_case("bearer ") {
+    if key
+        .get(..7)
+        .is_some_and(|start| start.eq_ignore_ascii_case("bearer "))
+    {
         key = key[7..].trim();
     }
     let quote = |c: char| matches!(c, '"' | '\'' | '`');
@@ -1270,6 +1273,14 @@ mod tests {
         assert_eq!(clean("ma-live-abc 123"), "ma-live-abc123");
         assert_eq!(clean(""), "");
         assert_eq!(clean("   "), "");
+    }
+
+    #[test]
+    fn a_pasted_key_with_non_ascii_text_near_the_start_does_not_panic() {
+        let clean = super::normalize_api_key;
+        assert_eq!(clean("abcdef…ghi"), "abcdef…ghi");
+        assert_eq!(clean("ключключ"), "ключключ");
+        assert_eq!(clean("Bearer ключ"), "ключ");
     }
 
     #[test]
