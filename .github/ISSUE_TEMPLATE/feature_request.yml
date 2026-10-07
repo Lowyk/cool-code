@@ -1,0 +1,73 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Cool Code
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to suggest a feature.
+
+        **Please review the following before proceeding:**
+        - Search the existing issues and discussions to confirm this feature has not already been suggested.
+        - Cool Code is designed to remain lightweight and token-efficient. Suggestions will be evaluated with this principle in mind.
+        - Submission of a suggestion does not guarantee implementation or a specific delivery timeline.
+
+  - type: textarea
+    id: feature
+    attributes:
+      label: Feature Description
+      description: Provide a clear and concise description of the feature you would like to see added.
+      placeholder: "I would like Cool Code to ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Proposed Behavior
+      description: Describe how you envision this feature working. Details such as commands, UI behavior, or configuration options are appreciated.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Select the area of the project most relevant to this suggestion.
+      options:
+        - CLI
+        - Providers and Models
+        - Effort Levels
+        - Workflows
+        - Privacy and Redaction
+        - Image Generation and Tools
+        - Platform Support (New OS or Hardware)
+        - Configuration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platforms
+    attributes:
+      label: Relevant Platforms
+      description: Select all platforms to which this suggestion applies.
+      options:
+        - label: Windows
+        - label: macOS
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Include any supporting material such as mockups, reference links, examples from other tools, or related issues.
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      description: Please confirm the following before submitting.
+      options:
+        - label: I have searched the existing issues and discussions and confirmed this feature has not already been suggested.
+          required: true
+        - label: I am willing to assist with implementation or testing of this feature.
