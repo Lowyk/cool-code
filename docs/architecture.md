@@ -34,7 +34,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
 | `src/endpoints.rs` | Provider models and limits endpoints: same-host URL validation, tolerant model-list parsing and merging, usage summaries, and the redirect-refusing fetch |
 | `src/stats.rs` | Opt-in usage recording to `~/.coolcode/stats.jsonl` (metadata only), the pure summary engine (totals, favorite model, streaks, peak hour, heatmap grid), and the fun size comparison |
-| `src/session.rs` | Saved conversations: one file per session under `~/.coolcode/sessions/` (header line plus body, written atomically) |
+| `src/session.rs` | Saved conversations (opt-in): one file per session under `~/.coolcode/sessions/` (header line plus body, written atomically) |
 | `src/tools.rs` | Workspace tools, edit and create proposals |
 | `src/secrets.rs` | OS credential-store access |
 | `src/tui/mod.rs` | Terminal setup and the event loop |
@@ -48,6 +48,8 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `appearance`, `providers`, `models`, `auto_switch`, `privacy`) plus `sync` (background model and usage fetches reported to the UI each frame) |
 | `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
 | `src/tui/widgets/` | Reusable widgets: the filterable selectable list and the collapsible provider/creator/model tree |
+| `src/tui/setup.rs` | The first-run setup wizard: theme (with live preview), reduced motion, usage stats and saved sessions; only unanswered questions are asked |
+| `src/tui/present.rs` | Puts each frame on the terminal: synchronized update, cursor hidden only while cells are written, nothing written for an unchanged frame |
 | `src/tui/stats_view.rs` | The `/stats` full-screen view: overview, models tab, range selection, and clearing history |
 | `src/tui/sessions.rs` | Saving the live conversation, resuming a saved one, and the `/resume` picker |
 | `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs`, `motion.rs` (text pulse and reduced-motion prompt) |

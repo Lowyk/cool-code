@@ -434,6 +434,26 @@ mod tests {
     }
 
     #[test]
+    fn general_save_sessions_row_is_off_by_default_and_toggles() {
+        let mut app = app();
+        assert!(!app.settings.sessions_enabled);
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..6 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("on");
+        assert!(app.settings.sessions_enabled && app.settings.sessions_prompt_answered);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("off");
+        assert!(!app.settings.sessions_enabled);
+        assert!(screen(&app, 100, 30).contains("Save sessions"));
+    }
+
+    #[test]
     fn general_rows_open_the_matching_pickers() {
         let mut app = app();
         app.open_settings(Section::General);

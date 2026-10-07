@@ -11,7 +11,7 @@ use crate::tui::render::dialogs::{
     draw_mode_picker, draw_model_provider_picker, draw_privacy_confirmation, draw_tool_approval,
     draw_ultimate_confirmation, draw_workspace_trust_prompt,
 };
-use crate::tui::render::motion::{draw_motion_prompt, draw_stats_prompt, pulse_spans};
+use crate::tui::render::motion::pulse_spans;
 use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::stats_view::draw_stats;
@@ -459,11 +459,10 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if let Some(picker) = app.model_picker.as_ref() {
         draw_model_picker(frame, area, picker, &app.settings);
     }
-    if app.motion_prompt && !app.trust_prompt {
-        draw_motion_prompt(frame, area, app.motion_choice);
-    }
-    if app.stats_prompt && !app.motion_prompt && !app.trust_prompt {
-        draw_stats_prompt(frame, area, app.stats_choice);
+    if let Some(wizard) = app.wizard.as_ref()
+        && !app.trust_prompt
+    {
+        crate::tui::setup::draw_setup(frame, area, wizard);
     }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);

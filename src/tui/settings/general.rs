@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 6;
+pub(super) const ROWS: usize = 7;
 
 pub(super) fn draw_general(
     frame: &mut ratatui::Frame<'_>,
@@ -70,6 +70,11 @@ pub(super) fn draw_general(
         } else {
             Span::styled("off", Style::default().fg(Color::Gray))
         }],
+        vec![if app.settings.sessions_enabled {
+            Span::styled("on", Style::default().fg(Color::Rgb(110, 220, 130)))
+        } else {
+            Span::styled("off", Style::default().fg(Color::Gray))
+        }],
     ];
     let labels = [
         "Model",
@@ -78,6 +83,7 @@ pub(super) fn draw_general(
         "Workspace trust",
         "Pulse",
         "Usage stats",
+        "Save sessions",
     ];
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
@@ -138,6 +144,11 @@ impl App {
                 5 => {
                     self.settings.stats_enabled = !self.settings.stats_enabled;
                     self.settings.stats_prompt_answered = true;
+                    write_settings(&self.settings)?;
+                }
+                6 => {
+                    self.settings.sessions_enabled = !self.settings.sessions_enabled;
+                    self.settings.sessions_prompt_answered = true;
                     write_settings(&self.settings)?;
                 }
                 _ => {

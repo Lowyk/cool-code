@@ -59,8 +59,7 @@ pub(super) struct App {
     pub(super) privacy_confirmation: Option<PrivacyPrompt>,
     pub(super) pending_privacy_message: Option<provider::ChatMessage>,
     pub(super) trust_prompt: bool,
-    pub(super) motion_prompt: bool,
-    pub(super) motion_choice: usize,
+    pub(super) wizard: Option<crate::tui::setup::SetupWizard>,
     pub(super) workspace_trusted: bool,
     pub(super) trust_choice: usize,
     pub(super) tool_approval: Option<ToolApproval>,
@@ -78,8 +77,6 @@ pub(super) struct App {
     /// Per-provider description of the saved key's shape (never the key itself).
     pub(super) key_shapes: std::collections::HashMap<String, String>,
     pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
-    pub(super) stats_prompt: bool,
-    pub(super) stats_choice: usize,
     #[cfg(test)]
     pub(super) spawned_tasks: usize,
     pub(super) history_scroll: u16,
@@ -333,8 +330,7 @@ impl App {
             privacy_confirmation: None,
             pending_privacy_message: None,
             trust_prompt: !workspace_trusted,
-            motion_prompt: false,
-            motion_choice: 0,
+            wizard: None,
             workspace_trusted,
             trust_choice: 1,
             tool_approval: None,
@@ -349,8 +345,6 @@ impl App {
             models_loading: std::collections::HashSet::new(),
             key_shapes: std::collections::HashMap::new(),
             stats_view: None,
-            stats_prompt: false,
-            stats_choice: 1,
             #[cfg(test)]
             spawned_tasks: 0,
             history_scroll: 0,
@@ -384,7 +378,6 @@ impl App {
     pub(super) fn answer_stats_prompt(&mut self, enable: bool) -> Result<()> {
         self.settings.stats_enabled = enable;
         self.settings.stats_prompt_answered = true;
-        self.stats_prompt = false;
         write_settings(&self.settings)?;
         self.notice = if enable {
             "Usage stats are recorded on this computer. See them with /stats.".to_owned()
@@ -401,7 +394,6 @@ impl App {
             self.settings.backdrop_in_chat = false;
         }
         self.settings.motion_prompt_answered = true;
-        self.motion_prompt = false;
         write_settings(&self.settings)
     }
 
