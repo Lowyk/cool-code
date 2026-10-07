@@ -117,6 +117,8 @@ impl App {
     }
 
     pub(in crate::tui) fn handle_settings_view_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        // A notice describes the last thing that happened; the next key starts afresh.
+        self.notice.clear();
         // Open forms receive every key so shortcut letters can be typed into fields.
         if self.provider_form.is_some() {
             return self.handle_provider_form(key);
@@ -234,6 +236,12 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
             Style::default()
                 .fg(Color::Rgb(235, 80, 80))
                 .add_modifier(Modifier::BOLD),
+        )
+    } else if !app.notice.is_empty() {
+        // The settings screen covers the notice line, so what just happened is shown here.
+        Span::styled(
+            app.notice.clone(),
+            Style::default().fg(Color::Rgb(240, 210, 90)),
         )
     } else {
         Span::styled(footer_hint(view), Style::default().fg(Color::DarkGray))

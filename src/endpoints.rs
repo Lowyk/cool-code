@@ -201,6 +201,55 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
     models
 }
 
+/// Turns the ChatGPT plan's usage report into display lines: one per rate-limit window, named
+/// by its length (`5-hour`, `Weekly`).
+pub(crate) fn summarize_chatgpt_usage(value: &Value) -> Vec<LimitLine> {
+    let mut lines = Vec::new();
+    for key in ["primary_window", "secondary_window"] {
+        let Some(window) = value.pointer(&format!("/rate_limit/{key}")) else {
+            continue;
+        };
+        let Some(used) = window.get("used_percent").and_then(Value::as_f64) else {
+            continue;
+        };
+        let seconds = window
+            .get("limit_window_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let label = match seconds {
+            0 => "Window".to_owned(),
+            604_800 => "Weekly".to_owned(),
+            s if s % 604_800 == 0 => format!("{}-week", s / 604_800),
+            s if s % 86_400 == 0 => format!("{}-day", s / 86_400),
+            s => format!("{}-hour", s.div_ceil(3600)),
+        };
+        let mut text = format!("{}% used", used.round());
+        if let Some(reset) = window.get("reset_after_seconds").and_then(Value::as_u64) {
+            text.push_str(&format!(" · resets in {}", duration_text(reset)));
+        }
+        lines.push(LimitLine {
+            label,
+            value: text,
+            remaining: Some((1.0 - used / 100.0).clamp(0.0, 1.0) as f32),
+            balance_tokens: None,
+        });
+    }
+    lines
+}
+
+fn duration_text(seconds: u64) -> String {
+    let (days, hours, minutes) = (
+        seconds / 86_400,
+        seconds % 86_400 / 3600,
+        seconds % 3600 / 60,
+    );
+    match (days, hours) {
+        (0, 0) => format!("{minutes}m"),
+        (0, _) => format!("{hours}h {minutes}m"),
+        _ => format!("{days}d {hours}h"),
+    }
+}
+
 /// Adds models the provider does not list yet and refreshes metadata; existing names are kept.
 /// Returns how many models were added.
 pub(crate) fn merge_models(profile: &mut ProviderProfile, fetched: &[FetchedModel]) -> usize {
@@ -494,6 +543,22 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chatgpt_usage_windows_become_lines_with_remaining_bars() {
+        let value = serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 27, "limit_window_seconds": 18000, "reset_after_seconds": 13140, "reset_at": 1},
+            "secondary_window": {"used_percent": 80.4, "limit_window_seconds": 604800, "reset_after_seconds": 200000}
+        }});
+        let lines = super::summarize_chatgpt_usage(&value);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].label, "5-hour");
+        assert_eq!(lines[0].value, "27% used · resets in 3h 39m");
+        assert!((lines[0].remaining.unwrap() - 0.73).abs() < 0.001);
+        assert_eq!(lines[1].label, "Weekly");
+        assert_eq!(lines[1].value, "80% used · resets in 2d 7h");
+        assert!(super::summarize_chatgpt_usage(&serde_json::json!({})).is_empty());
+    }
+
     #[test]
     fn chatgpt_style_model_lists_use_slugs_and_skip_hidden_models() {
         let value = serde_json::json!({"models": [

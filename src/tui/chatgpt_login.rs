@@ -203,7 +203,8 @@ impl App {
                 })
                 .collect(),
             base_url: Some(chatgpt_auth::API_BASE.to_owned()),
-            models_url: Some(format!("{}/models", chatgpt_auth::API_BASE)),
+            models_url: Some(chatgpt_auth::MODELS_URL.to_owned()),
+            limits_url: Some(chatgpt_auth::USAGE_URL.to_owned()),
             ..Default::default()
         };
         let previous = self.settings.clone();
@@ -227,6 +228,7 @@ impl App {
         self.provider_form = None;
         self.provider_index = self.settings.providers.len() - 1;
         self.start_models_fetch(self.provider_index, false);
+        self.start_limits_fetch(self.provider_index, true);
         self.notice =
             format!("Signed in to ChatGPT as {who}. It is unofficial and may stop working.");
     }
@@ -558,7 +560,7 @@ mod tests {
         app.apply_task_result(TaskResult::Login {
             result: Ok((account("me@example.com"), session())),
         });
-        assert_eq!(app.spawned_tasks, before + 1);
+        assert_eq!(app.spawned_tasks, before + 2, "models and usage");
         let profile = &app.settings.providers[0];
         let ids: Vec<_> = profile
             .models
@@ -571,6 +573,11 @@ mod tests {
             Some("https://chatgpt.com/backend-api/codex/models")
         );
         assert!(app.models_loading.contains(&profile.id));
+        assert_eq!(
+            profile.limits_url.as_deref(),
+            Some("https://chatgpt.com/backend-api/wham/usage")
+        );
+        assert!(app.limits.contains_key(&profile.id), "usage is loading");
         assert!(app.notice.contains("me@example.com"), "{}", app.notice);
     }
 
