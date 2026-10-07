@@ -3,6 +3,7 @@ mod general;
 mod models;
 mod privacy;
 mod providers;
+pub(super) mod sync;
 
 use crate::tui::settings::auto_switch::draw_auto_switch;
 use crate::tui::settings::general::draw_general;
@@ -130,7 +131,13 @@ impl App {
                     view.section = Section::ALL[next];
                     view.row = 0;
                 }
-                KeyCode::Right | KeyCode::Enter | KeyCode::Tab => view.focus = Focus::Content,
+                KeyCode::Right | KeyCode::Enter | KeyCode::Tab => {
+                    view.focus = Focus::Content;
+                    if view.section == Section::Providers {
+                        let selected = view.row;
+                        self.start_limits_fetch(selected, false);
+                    }
+                }
                 KeyCode::Esc => self.settings_view = None,
                 _ => {}
             },
@@ -296,7 +303,7 @@ fn footer_hint(view: &SettingsView) -> &'static str {
         }
         (Focus::Content, Section::General) => "↑↓ move   Enter change   ← sections   Esc back",
         (Focus::Content, Section::Providers) => {
-            "↑↓ move   Enter edit   n add   d default   a auto   x delete   Esc back"
+            "↑↓ move   Enter edit   n add   d default   a auto   f models   u usage   x delete   Esc back"
         }
         (Focus::Content, Section::AutoSwitch) => {
             "↑↓ move   Enter edit   n new   Space activate   x delete   Esc back"
@@ -503,6 +510,7 @@ mod tiny_terminal_tests {
             draft: false,
             auto_switch: true,
             base_url: None,
+            ..Default::default()
         }];
         for section in Section::ALL {
             for (width, height) in [(20, 5), (12, 4), (40, 8), (69, 12)] {

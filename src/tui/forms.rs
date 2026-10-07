@@ -1,6 +1,7 @@
+use crate::endpoints::resolve_endpoint;
 use crate::tui::models::{available_chain_models, model_name, slug};
 use crate::tui::state::{
-    App, ChainDraft, ModelDraft, PROVIDER_PRESETS, ProviderDraft, edit_string,
+    App, ChainDraft, ModelDraft, PROVIDER_PRESETS, ProviderDraft, ProviderPreset, edit_string,
 };
 use crate::{ModelChain, ModelProfile, ProviderProfile, Settings, secrets, write_settings};
 use anyhow::{Context, Result};
@@ -102,12 +103,78 @@ pub(super) fn remove_provider_profile(settings: &mut Settings, id: &str) -> bool
     true
 }
 
+/// Picks the preset a saved provider was created from, by stable id rather than list position.
+pub(super) fn preset_for_profile(profile: &ProviderProfile) -> usize {
+    let by_id = |id: &str| {
+        PROVIDER_PRESETS
+            .iter()
+            .position(|preset| preset.id == id)
+            .unwrap_or(0)
+    };
+    if let Some(index) = PROVIDER_PRESETS.iter().position(|preset| {
+        preset.base_url.is_some() && preset.base_url == profile.base_url.as_deref()
+    }) {
+        return index;
+    }
+    if profile.name.to_ascii_lowercase().contains("openrouter") {
+        return by_id("openrouter");
+    }
+    match profile.adapter.as_str() {
+        "openai" => by_id("openai"),
+        "anthropic" => by_id("anthropic"),
+        "google" => by_id("google"),
+        "anthropic-compatible" => by_id("anthropic-custom"),
+        _ => by_id("openai-custom"),
+    }
+}
+
+/// Resolves a provider's models and limits endpoints from the preset's built-in paths or the
+/// form's optional fields; both must stay on the provider's own host.
+fn provider_endpoints(
+    preset: &ProviderPreset,
+    draft: &ProviderDraft,
+) -> Result<(Option<String>, Option<String>), String> {
+    let base = if preset.custom {
+        draft.base_url.trim().trim_end_matches('/')
+    } else {
+        preset.base_url.unwrap_or_default()
+    };
+    let resolve = |label: &str, typed: &str, built_in: Option<&str>| {
+        let input = match (typed.trim(), built_in) {
+            ("", None) => return Ok(None),
+            ("", Some(path)) => path,
+            (typed, _) => typed,
+        };
+        resolve_endpoint(base, input)
+            .map(Some)
+            .map_err(|error| format!("{label}: {error}"))
+    };
+    Ok((
+        resolve(
+            "Models endpoint",
+            &draft.models_endpoint,
+            preset.models_path,
+        )?,
+        resolve(
+            "Limits endpoint",
+            &draft.limits_endpoint,
+            preset.limits_path,
+        )?,
+    ))
+}
+
+/// Custom OpenAI-compatible providers can declare their own models and limits endpoints.
+pub(super) fn has_endpoint_fields(form: &ProviderDraft) -> bool {
+    PROVIDER_PRESETS[form.preset].id == "openai-custom"
+}
+
 pub(super) fn provider_focus_layout(
     form: &ProviderDraft,
 ) -> (usize, usize, usize, usize, usize, usize) {
     let custom = PROVIDER_PRESETS[form.preset].custom;
     let key_focus = if custom { 2 } else { 1 };
-    let model_start = key_focus + 1;
+    // Endpoint fields (when shown) sit right after the key: key_focus + 1 and key_focus + 2.
+    let model_start = key_focus + if has_endpoint_fields(form) { 3 } else { 1 };
     let create_focus = model_start + form.models.len() * 3;
     let save_focus = create_focus + 1;
     let draft_focus = save_focus + 1;
@@ -127,18 +194,13 @@ impl App {
         let Some(profile) = self.settings.providers.get(provider_index) else {
             return;
         };
-        let preset = if profile.name.to_ascii_lowercase().contains("openrouter") {
-            3
-        } else {
-            match profile.adapter.as_str() {
-                "openai" => 0,
-                "anthropic" => 1,
-                "google" => 2,
-                "anthropic-compatible" => 4,
-                _ => 5,
-            }
-        };
-        let models = if profile.models.is_empty() && !profile.model.is_empty() {
+        let preset = preset_for_profile(profile);
+        // Providers whose model list comes from an endpoint can hold hundreds of models, so the
+        // form leaves them to Settings → Models instead of listing every one as an editable row.
+        let managed_models = profile.models_url.is_some();
+        let models = if managed_models {
+            Vec::new()
+        } else if profile.models.is_empty() && !profile.model.is_empty() {
             vec![ModelDraft {
                 id: profile.model.clone(),
                 name: model_name(&profile.model),
@@ -153,6 +215,7 @@ impl App {
                 })
                 .collect()
         };
+        let custom_endpoints = PROVIDER_PRESETS[preset].id == "openai-custom";
         self.provider_form = Some(ProviderDraft {
             choosing_preset: false,
             existing_id: Some(profile.id.clone()),
@@ -162,6 +225,15 @@ impl App {
             base_url: profile.base_url.clone().unwrap_or_default(),
             api_key: String::new(),
             models,
+            models_endpoint: custom_endpoints
+                .then(|| profile.models_url.clone())
+                .flatten()
+                .unwrap_or_default(),
+            limits_endpoint: custom_endpoints
+                .then(|| profile.limits_url.clone())
+                .flatten()
+                .unwrap_or_default(),
+            managed_models,
             focus: 0,
         });
     }
@@ -216,6 +288,35 @@ impl App {
                 },
             })
             .collect::<Vec<_>>();
+        let existing_profile = draft
+            .existing_id
+            .as_deref()
+            .and_then(|id| {
+                self.settings
+                    .providers
+                    .iter()
+                    .find(|profile| profile.id == id)
+            })
+            .cloned();
+        let models = if draft.managed_models {
+            existing_profile
+                .as_ref()
+                .map(|profile| profile.models.clone())
+                .unwrap_or_default()
+        } else {
+            models
+        };
+        let (models_url, limits_url) = match provider_endpoints(preset, draft) {
+            Ok(urls) => urls,
+            Err(message) => {
+                self.notice = message;
+                return Ok(());
+            }
+        };
+        // A provider that can list its own models may be saved before it has any; it stays a
+        // draft until they have been fetched.
+        let fetch_after_save = models_url.is_some() && models.is_empty();
+        let as_draft = as_draft || fetch_after_save;
         if name.is_empty() {
             self.notice = "Add an alias for this provider.".to_owned();
             return Ok(());
@@ -282,6 +383,12 @@ impl App {
             draft: as_draft,
             auto_switch: existing_auto_switch,
             base_url: base_url.clone(),
+            models_url,
+            limits_url,
+            model_info: existing_profile
+                .map(|profile| profile.model_info)
+                .unwrap_or_default(),
+            ..Default::default()
         };
 
         if !api_key.is_empty() {
@@ -342,6 +449,9 @@ impl App {
                 preset.label
             )
         };
+        if fetch_after_save {
+            self.start_models_fetch(self.provider_index, true);
+        }
         Ok(())
     }
 
@@ -445,6 +555,10 @@ impl App {
                 edit_string(&mut form.base_url, key);
             } else if focus == key_focus {
                 edit_string(&mut form.api_key, key);
+            } else if has_endpoint_fields(form) && focus == key_focus + 1 {
+                edit_string(&mut form.models_endpoint, key);
+            } else if has_endpoint_fields(form) && focus == key_focus + 2 {
+                edit_string(&mut form.limits_endpoint, key);
             } else if focus >= model_start && focus < create_focus {
                 let row = (focus - model_start) / 3;
                 let column = (focus - model_start) % 3;
@@ -689,6 +803,7 @@ mod tests {
             draft: false,
             auto_switch: false,
             base_url: None,
+            ..Default::default()
         };
         let providers = vec![
             profile("one", "Anthropic (Claude)"),
@@ -712,6 +827,7 @@ mod tests {
             draft: false,
             auto_switch: false,
             base_url: None,
+            ..Default::default()
         };
         let mut settings = Settings::default();
         settings.providers = vec![profile("one", "claude-one"), profile("two", "claude-two")];
@@ -770,6 +886,9 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             models: Vec::new(),
+            models_endpoint: String::new(),
+            limits_endpoint: String::new(),
+            managed_models: false,
             focus: 0,
         };
         form.choosing_preset = true;
@@ -833,6 +952,227 @@ mod tests {
         assert!(!text(&terminal).contains("Custom OpenAI-compatible API"));
     }
 
+    fn preset_index(id: &str) -> usize {
+        PROVIDER_PRESETS
+            .iter()
+            .position(|preset| preset.id == id)
+            .expect("preset")
+    }
+
+    fn chosen_form(preset_id: &str) -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.open_settings(Section::Providers);
+        app.provider_form = Some(ProviderDraft {
+            choosing_preset: true,
+            existing_id: None,
+            preset: preset_index(preset_id),
+            alias: String::new(),
+            suggested_alias: String::new(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: Vec::new(),
+            models_endpoint: String::new(),
+            limits_endpoint: String::new(),
+            managed_models: false,
+            focus: 0,
+        });
+        app.handle_provider_form(key(KeyCode::Enter))
+            .expect("choose preset");
+        app
+    }
+
+    #[test]
+    fn multiai_is_a_preset_with_built_in_endpoints() {
+        let preset = &PROVIDER_PRESETS[preset_index("multiai")];
+        assert_eq!(preset.label, "MultiAI");
+        assert_eq!(preset.adapter, "openai-compatible");
+        assert_eq!(preset.base_url, Some("https://multiai.store/v1"));
+        assert!(!preset.custom);
+        let base = preset.base_url.unwrap();
+        assert_eq!(
+            crate::endpoints::resolve_endpoint(base, preset.models_path.unwrap()).unwrap(),
+            "https://multiai.store/v1/models"
+        );
+        assert_eq!(
+            crate::endpoints::resolve_endpoint(base, preset.limits_path.unwrap()).unwrap(),
+            "https://multiai.store/v1/subscription/limits"
+        );
+    }
+
+    #[test]
+    fn editing_finds_each_provider_s_own_preset_by_id() {
+        let profile = |adapter: &str, name: &str, base_url: Option<&str>| ProviderProfile {
+            id: "p".to_owned(),
+            name: name.to_owned(),
+            adapter: adapter.to_owned(),
+            base_url: base_url.map(str::to_owned),
+            ..Default::default()
+        };
+        let label =
+            |profile: &ProviderProfile| PROVIDER_PRESETS[super::preset_for_profile(profile)].label;
+        assert_eq!(
+            label(&profile(
+                "openai-compatible",
+                "x",
+                Some("https://multiai.store/v1")
+            )),
+            "MultiAI"
+        );
+        assert_eq!(
+            label(&profile("openai-compatible", "My OpenRouter", None)),
+            "OpenRouter"
+        );
+        assert_eq!(
+            label(&profile(
+                "openai-compatible",
+                "mine",
+                Some("https://x.example/v1")
+            )),
+            "Custom OpenAI-compatible API"
+        );
+        assert_eq!(
+            label(&profile("anthropic-compatible", "mine", None)),
+            "Custom Anthropic-compatible API"
+        );
+        assert_eq!(
+            label(&profile("anthropic", "c", None)),
+            "Anthropic (Claude)"
+        );
+        assert_eq!(label(&profile("google", "g", None)), "Google (Gemini)");
+    }
+
+    #[test]
+    fn only_custom_openai_forms_have_endpoint_fields_and_they_take_typing() {
+        let mut app = chosen_form("openai-custom");
+        let (key_focus, model_start, ..) =
+            super::provider_focus_layout(app.provider_form.as_ref().unwrap());
+        assert_eq!((key_focus, model_start), (2, 5));
+        app.provider_form.as_mut().unwrap().focus = 3;
+        for c in "models".chars() {
+            app.handle_provider_form(key(KeyCode::Char(c)))
+                .expect("type");
+        }
+        app.provider_form.as_mut().unwrap().focus = 4;
+        for c in "limits".chars() {
+            app.handle_provider_form(key(KeyCode::Char(c)))
+                .expect("type");
+        }
+        let form = app.provider_form.as_ref().unwrap();
+        assert_eq!(
+            (form.models_endpoint.as_str(), form.limits_endpoint.as_str()),
+            ("models", "limits")
+        );
+        for id in ["multiai", "openai", "anthropic-custom"] {
+            let other = chosen_form(id);
+            let (_, model_start, ..) =
+                super::provider_focus_layout(other.provider_form.as_ref().unwrap());
+            let expected = if id == "anthropic-custom" { 3 } else { 2 };
+            assert_eq!(model_start, expected, "{id}");
+        }
+    }
+
+    #[test]
+    fn saving_resolves_endpoints_onto_the_profile() {
+        let mut app = chosen_form("openai-custom");
+        {
+            let form = app.provider_form.as_mut().unwrap();
+            form.base_url = "https://api.example.com/v1".to_owned();
+            form.models_endpoint = "models".to_owned();
+            form.limits_endpoint = "https://api.example.com/v1/usage".to_owned();
+        }
+        app.save_provider(true).expect("save");
+        let profile = &app.settings.providers[0];
+        assert_eq!(
+            profile.models_url.as_deref(),
+            Some("https://api.example.com/v1/models")
+        );
+        assert_eq!(
+            profile.limits_url.as_deref(),
+            Some("https://api.example.com/v1/usage")
+        );
+    }
+
+    #[test]
+    fn saving_refuses_an_endpoint_on_another_host() {
+        let mut app = chosen_form("openai-custom");
+        {
+            let form = app.provider_form.as_mut().unwrap();
+            form.base_url = "https://api.example.com/v1".to_owned();
+            form.models_endpoint = "https://evil.example/models".to_owned();
+        }
+        app.save_provider(true).expect("save");
+        assert!(app.settings.providers.is_empty());
+        assert!(app.notice.contains("same host"), "{}", app.notice);
+        assert!(app.provider_form.is_some());
+    }
+
+    #[test]
+    fn a_provider_with_a_models_endpoint_and_no_models_saves_as_a_draft() {
+        let mut app = chosen_form("multiai");
+        app.save_provider(false).expect("save");
+        let profile = &app.settings.providers[0];
+        assert_eq!(profile.name, "MultiAI");
+        assert!(profile.draft);
+        assert_eq!(
+            profile.models_url.as_deref(),
+            Some("https://multiai.store/v1/models")
+        );
+        assert_eq!(
+            profile.limits_url.as_deref(),
+            Some("https://multiai.store/v1/subscription/limits")
+        );
+    }
+
+    #[test]
+    fn saving_a_provider_with_a_models_endpoint_starts_loading_its_models() {
+        let mut app = chosen_form("multiai");
+        app.save_provider(false).expect("save");
+        assert_eq!(app.spawned_tasks, 1);
+        assert!(app.models_loading.contains(&app.settings.providers[0].id));
+        let mut custom = chosen_form("openai-custom");
+        custom.provider_form.as_mut().unwrap().base_url = "https://api.example.com/v1".to_owned();
+        custom.save_provider(true).expect("save");
+        assert_eq!(custom.spawned_tasks, 0);
+    }
+
+    #[test]
+    fn editing_a_provider_with_a_models_endpoint_keeps_its_models_and_metadata() {
+        let mut app = App::new(Settings::default());
+        let mut profile = ProviderProfile {
+            id: "p1".to_owned(),
+            name: "MultiAI".to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            base_url: Some("https://multiai.store/v1".to_owned()),
+            models_url: Some("https://multiai.store/v1/models".to_owned()),
+            model: "a".to_owned(),
+            models: ["a", "b", "c"]
+                .iter()
+                .map(|id| crate::ModelProfile {
+                    id: (*id).to_owned(),
+                    name: String::new(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        profile.model_info.insert(
+            "a".to_owned(),
+            crate::ModelInfo {
+                free: Some(true),
+                ..Default::default()
+            },
+        );
+        app.settings.providers = vec![profile];
+        app.edit_provider(0);
+        let form = app.provider_form.as_ref().unwrap();
+        assert!(form.managed_models && form.models.is_empty());
+        app.save_provider(true).expect("save");
+        let saved = &app.settings.providers[0];
+        assert_eq!(saved.models.len(), 3);
+        assert_eq!(saved.model_info["a"].free, Some(true));
+        assert!(saved.models_url.is_some());
+    }
+
     #[test]
     fn editing_an_existing_provider_keeps_its_alias() {
         let mut app = App::new(Settings::default());
@@ -845,6 +1185,7 @@ mod tests {
             draft: false,
             auto_switch: false,
             base_url: Some("https://example.invalid/v1".to_owned()),
+            ..Default::default()
         }];
         app.edit_provider(0);
         let form = app.provider_form.as_ref().expect("form");
@@ -870,6 +1211,9 @@ mod tests {
                 id: "test-model".to_owned(),
                 name: String::new(),
             }],
+            models_endpoint: String::new(),
+            limits_endpoint: String::new(),
+            managed_models: false,
             focus: 1,
         });
 

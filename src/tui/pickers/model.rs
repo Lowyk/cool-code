@@ -1,4 +1,5 @@
 use crate::Settings;
+use crate::endpoints::model_tags;
 use crate::tui::models::model_name;
 use crate::tui::render::centered_rect;
 use crate::tui::state::App;
@@ -46,7 +47,7 @@ impl ModelPicker {
                     } else {
                         name
                     },
-                    detail: id.clone(),
+                    detail: format!("{id}{}", model_tags(profile.model_info.get(&id))),
                     group: Some(profile.name.clone()),
                     dimmed: profile.draft,
                     selectable: !profile.draft,
@@ -160,6 +161,7 @@ mod tests {
             draft,
             auto_switch: true,
             base_url: None,
+            ..Default::default()
         }
     }
 
@@ -218,6 +220,36 @@ mod tests {
             picker.current_target(),
             Some(&(1, "openai/gpt-oss-120b".to_owned()))
         );
+    }
+
+    #[test]
+    fn model_picker_tags_free_and_no_tools_models() {
+        let mut settings = settings();
+        settings.providers[1].model_info.insert(
+            "openai/gpt-oss-120b".to_owned(),
+            crate::ModelInfo {
+                free: Some(true),
+                tools: Some(false),
+                context: None,
+            },
+        );
+        let picker = ModelPicker::new(&settings);
+        let row = picker
+            .items
+            .iter()
+            .find(|item| item.detail.starts_with("openai/gpt-oss-120b"))
+            .expect("model row");
+        assert!(
+            row.detail.contains("free") && row.detail.contains("no tools"),
+            "{}",
+            row.detail
+        );
+        let plain = picker
+            .items
+            .iter()
+            .find(|item| item.detail == "qwen/qwen3.8-27b")
+            .expect("untagged row");
+        assert_eq!(plain.detail, "qwen/qwen3.8-27b");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::endpoints::model_tags;
 use crate::tui::models::model_name;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::App;
@@ -45,7 +46,12 @@ pub(super) fn model_rows(settings: &Settings) -> Vec<(ListItem, (usize, usize))>
                     } else {
                         model.name.clone()
                     },
-                    detail: format!("{} · {}", model.id, profile.name),
+                    detail: format!(
+                        "{} · {}{}",
+                        model.id,
+                        profile.name,
+                        model_tags(profile.model_info.get(&model.id))
+                    ),
                     selectable: true,
                     ..ListItem::default()
                 },
@@ -342,6 +348,7 @@ mod tests {
             draft,
             auto_switch: true,
             base_url: None,
+            ..Default::default()
         }
     }
 

@@ -1,4 +1,5 @@
 use crate::tui::render::forms::draw_open_form;
+use crate::tui::settings::sync::{LimitsEntry, LimitsState};
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::{App, ProviderDraft};
 use crate::tui::widgets::list::{ListItem, ListState, draw_list};
@@ -55,7 +56,7 @@ pub(super) fn draw_providers(
         return;
     }
     let items = provider_items(&app.settings);
-    let list_height = (items.len() as u16).min(area.height.saturating_sub(7).max(3));
+    let list_height = (items.len() as u16).min(area.height.saturating_sub(15).max(3));
     let state = ListState {
         selected: view.row,
         filter: String::new(),
@@ -75,7 +76,7 @@ pub(super) fn draw_providers(
     let lines = match app.settings.providers.get(view.row) {
         Some(profile) => {
             let label = |text: &'static str| Span::styled(text, Style::default().fg(Color::Gray));
-            vec![
+            let mut lines = vec![
                 Line::from(Span::styled(
                     "─".repeat(area.width as usize),
                     Style::default().fg(Color::DarkGray),
@@ -100,11 +101,12 @@ pub(super) fn draw_providers(
                         Style::default().fg(Color::DarkGray),
                     ),
                 ]),
-                Line::from(vec![
-                    label("Models    "),
-                    Span::raw(profile.models.len().max(1).to_string()),
-                ]),
-            ]
+                models_line(app, profile),
+            ];
+            if profile.limits_url.is_some() {
+                lines.extend(usage_lines(app.limits.get(&profile.id)));
+            }
+            lines
         }
         None => vec![Line::from(Span::styled(
             "Add an API connection from a preset or a custom endpoint.",
@@ -112,6 +114,78 @@ pub(super) fn draw_providers(
         ))],
     };
     frame.render_widget(Paragraph::new(lines), details_area);
+}
+
+fn models_line(app: &App, profile: &crate::ProviderProfile) -> Line<'static> {
+    let mut text = profile.models.len().max(1).to_string();
+    if profile.models_url.is_some() {
+        let free = profile
+            .model_info
+            .values()
+            .filter(|info| info.free == Some(true))
+            .count();
+        if free > 0 {
+            text.push_str(&format!(" · {free} free"));
+        }
+        if app.models_loading.contains(&profile.id) {
+            text.push_str(" · loading…");
+        } else {
+            text.push_str(" · f refreshes from the endpoint");
+        }
+    }
+    Line::from(vec![
+        Span::styled("Models    ", Style::default().fg(Color::Gray)),
+        Span::raw(text),
+    ])
+}
+
+fn remaining_bar(fraction: f32) -> Span<'static> {
+    let filled = (fraction.clamp(0.0, 1.0) * 12.0).round() as usize;
+    let color = if fraction > 0.5 {
+        Color::Rgb(110, 220, 130)
+    } else if fraction > 0.2 {
+        Color::Rgb(240, 210, 90)
+    } else {
+        Color::Rgb(235, 80, 80)
+    };
+    Span::styled(
+        format!("{}{}", "█".repeat(filled), "░".repeat(12 - filled)),
+        Style::default().fg(color),
+    )
+}
+
+fn usage_lines(entry: Option<&LimitsEntry>) -> Vec<Line<'static>> {
+    let label = Style::default().fg(Color::Gray);
+    let dim = Style::default().fg(Color::DarkGray);
+    let header = |text: String| {
+        Line::from(vec![
+            Span::styled("Usage     ", label),
+            Span::styled(text, dim),
+        ])
+    };
+    match entry.map(|entry| &entry.state) {
+        None => vec![header("not loaded yet · u loads it".to_owned())],
+        Some(LimitsState::Loading) => vec![header("loading…".to_owned())],
+        Some(LimitsState::Failed(error)) => {
+            let shown: String = error.chars().take(90).collect();
+            vec![header(format!("unavailable: {shown}"))]
+        }
+        Some(LimitsState::Ready(lines)) => {
+            let mut out = vec![header("u refreshes".to_owned())];
+            for line in lines {
+                let mut spans = vec![
+                    Span::styled(format!("  {:<9}", line.label), label),
+                    Span::raw(line.value.clone()),
+                ];
+                if let Some(fraction) = line.remaining {
+                    spans.push(Span::raw("  "));
+                    spans.push(remaining_bar(fraction));
+                }
+                out.push(Line::from(spans));
+            }
+            out
+        }
+    }
 }
 
 impl App {
@@ -144,7 +218,14 @@ impl App {
             KeyCode::Char('x') if row < provider_count => view.confirm_delete = true,
             KeyCode::Char('d') if row < provider_count => self.set_default_provider(row)?,
             KeyCode::Char('a') if row < provider_count => self.toggle_provider_auto_switch(row)?,
+            KeyCode::Char('f') if row < provider_count => self.start_models_fetch(row, false),
+            KeyCode::Char('u') if row < provider_count => self.start_limits_fetch(row, true),
             _ => {}
+        }
+        if matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            // Selecting a provider loads its usage once; fresh results are reused for a minute.
+            let selected = self.settings_view.as_ref().map_or(0, |view| view.row);
+            self.start_limits_fetch(selected, false);
         }
         Ok(())
     }
@@ -159,6 +240,9 @@ impl App {
             base_url: String::new(),
             api_key: String::new(),
             models: Vec::new(),
+            models_endpoint: String::new(),
+            limits_endpoint: String::new(),
+            managed_models: false,
             focus: 0,
         });
     }
@@ -209,7 +293,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::provider_items;
+    use crate::endpoints::LimitLine;
     use crate::tui::settings::Section;
+    use crate::tui::settings::sync::{LimitsEntry, LimitsState};
     use crate::tui::state::App;
     use crate::{ModelProfile, ProviderProfile, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -227,6 +313,7 @@ mod tests {
             draft,
             auto_switch,
             base_url: None,
+            ..Default::default()
         }
     }
 
@@ -311,6 +398,119 @@ mod tests {
         press(&mut app, KeyCode::Char('y'));
         assert!(app.settings.providers.is_empty());
         assert_eq!(app.settings.default_provider_id, None);
+    }
+
+    fn with_endpoints(mut profile: ProviderProfile) -> ProviderProfile {
+        profile.models_url = Some("https://api.example.com/v1/models".to_owned());
+        profile.limits_url = Some("https://api.example.com/v1/limits".to_owned());
+        profile
+    }
+
+    fn screen(app: &App) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(130, 40)).expect("terminal");
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, app, 0))
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn selecting_a_provider_loads_its_usage_once() {
+        let mut app = app_with(
+            vec![
+                with_endpoints(profile("p1", false, false)),
+                with_endpoints(profile("p2", false, false)),
+                profile("p3", false, false),
+            ],
+            None,
+        );
+        assert_eq!(
+            app.spawned_tasks, 1,
+            "entering the section loads the first provider"
+        );
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.spawned_tasks, 2);
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.spawned_tasks, 2, "already loading or fresh");
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(
+            app.spawned_tasks, 2,
+            "a provider without a limits endpoint fetches nothing"
+        );
+    }
+
+    #[test]
+    fn f_loads_models_and_u_refreshes_usage_for_the_selected_provider() {
+        let mut app = app_with(vec![with_endpoints(profile("p1", false, false))], None);
+        let before = app.spawned_tasks;
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.spawned_tasks, before + 1);
+        assert!(app.models_loading.contains("p1"));
+        app.apply_task_result(crate::tui::settings::sync::TaskResult::Limits {
+            provider_id: "p1".to_owned(),
+            result: Ok(Vec::new()),
+        });
+        press(&mut app, KeyCode::Char('u'));
+        assert_eq!(app.spawned_tasks, before + 2);
+        let mut plain = app_with(vec![profile("p2", false, false)], None);
+        press(&mut plain, KeyCode::Char('f'));
+        assert!(
+            plain.notice.contains("no models endpoint"),
+            "{}",
+            plain.notice
+        );
+    }
+
+    #[test]
+    fn the_details_pane_shows_usage_with_a_remaining_bar() {
+        use crate::endpoints::LimitLine;
+        use crate::tui::settings::sync::{LimitsEntry, LimitsState};
+        let mut app = app_with(vec![with_endpoints(profile("p1", false, false))], None);
+        let line = |label: &str, value: &str, remaining| LimitLine {
+            label: label.to_owned(),
+            value: value.to_owned(),
+            remaining,
+        };
+        app.limits.insert(
+            "p1".to_owned(),
+            LimitsEntry {
+                fetched_at: std::time::Instant::now(),
+                state: LimitsState::Ready(vec![
+                    line("Balance", "3,000,000 tokens", None),
+                    line("Weekly", "250,000 / 1,000,000 tokens", Some(0.75)),
+                ]),
+            },
+        );
+        let shown = screen(&app);
+        assert!(shown.contains("3,000,000 tokens"), "{shown}");
+        assert!(shown.contains("Weekly") && shown.contains('█'), "{shown}");
+        app.limits.get_mut("p1").unwrap().state =
+            LimitsState::Failed("provider returned 401".to_owned());
+        assert!(screen(&app).contains("unavailable: provider returned 401"));
+        app.limits.get_mut("p1").unwrap().state = LimitsState::Loading;
+        assert!(screen(&app).contains("loading…"));
+    }
+
+    #[test]
+    fn the_models_line_counts_free_models() {
+        let mut provider = with_endpoints(profile("p1", false, false));
+        provider.model_info.insert(
+            "p1-model".to_owned(),
+            crate::ModelInfo {
+                free: Some(true),
+                ..Default::default()
+            },
+        );
+        let app = app_with(vec![provider], None);
+        assert!(screen(&app).contains("1 free"));
     }
 
     #[test]
