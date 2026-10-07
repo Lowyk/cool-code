@@ -1,7 +1,7 @@
 mod backdrop;
 mod chatgpt_login;
 mod commands;
-mod context;
+pub(crate) mod context;
 mod creators;
 mod effort;
 mod forms;

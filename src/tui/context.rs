@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::path::PathBuf;
 
-pub(super) fn read_cool_file() -> Result<Option<String>> {
+pub(crate) fn read_cool_file() -> Result<Option<String>> {
     let root = std::env::current_dir()?
         .canonicalize()
         .context("resolving workspace root")?;
@@ -28,7 +28,7 @@ pub(super) fn read_cool_file() -> Result<Option<String>> {
     Ok(Some(contents))
 }
 
-pub(super) fn read_user_instructions() -> Result<Option<String>> {
+pub(crate) fn read_user_instructions() -> Result<Option<String>> {
     let Some(home) = dirs::home_dir() else {
         return Ok(None);
     };
@@ -54,13 +54,13 @@ const MAX_INSTRUCTION_BYTES: u64 = 64 * 1024;
 
 /// Which optional instruction files to load.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct InstructionFiles {
+pub(crate) struct InstructionFiles {
     /// `CLAUDE.md` in the project folder.
-    pub(super) project_claude: bool,
+    pub(crate) project_claude: bool,
     /// `AGENTS.md` in the project folder.
-    pub(super) project_agents: bool,
+    pub(crate) project_agents: bool,
     /// The user's own `~/.claude/CLAUDE.md`.
-    pub(super) global_claude: bool,
+    pub(crate) global_claude: bool,
 }
 
 /// Reads `name` from the workspace root. Missing files are fine; files that resolve outside the
@@ -98,7 +98,7 @@ fn read_limited(path: &std::path::Path, label: &str) -> Result<Option<String>> {
 /// The prompt sections for the opted-in instruction files, plus a warning for each file that
 /// had to be skipped. Project files are repository data and are only read in a trusted
 /// workspace; the user's own global file is read regardless.
-pub(super) fn instruction_sections(
+pub(crate) fn instruction_sections(
     root: &std::path::Path,
     home: Option<&std::path::Path>,
     workspace_trusted: bool,
@@ -138,7 +138,7 @@ pub(super) fn instruction_sections(
     (sections, warnings)
 }
 
-pub(super) fn build_user_message(
+pub(crate) fn build_user_message(
     prompt: &str,
     workspace_trusted: bool,
 ) -> Result<provider::ChatMessage> {

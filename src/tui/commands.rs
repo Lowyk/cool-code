@@ -1,9 +1,6 @@
 use crate::agent::{PendingEvent, run_agent_turns};
-use crate::policy::{MODES, mode_label};
-use crate::tui::context::{
-    InstructionFiles, build_user_message, instruction_sections, read_cool_file,
-    read_user_instructions,
-};
+use crate::policy::MODES;
+use crate::tui::context::{InstructionFiles, build_user_message};
 use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
@@ -465,51 +462,12 @@ impl App {
         let root = std::env::current_dir()?
             .canonicalize()
             .context("resolving workspace root")?;
-        let workflows = self
-            .settings
-            .workflows_active()
-            .then(|| crate::workflow::Budget::for_effort(self.settings.effort));
-        let tool_names = crate::tools::ToolSet::Main {
-            plan_mode: self.settings.permission_mode == "plan",
-            workflows: workflows.is_some(),
-        }
-        .definitions()
-        .into_iter()
-        .map(|tool| tool.name)
-        .collect::<Vec<_>>();
-        let mut system_prompt = crate::prompt::build(&crate::prompt::PromptInputs {
-            mode: &self.settings.permission_mode,
-            mode_label: mode_label(&self.settings.permission_mode),
-            workspace_trusted: self.workspace_trusted,
-            root: &root.display().to_string(),
-            os: std::env::consts::OS,
-            shell: if cfg!(windows) { "PowerShell" } else { "sh" },
-            today: &chrono::Local::now().format("%Y-%m-%d").to_string(),
-            tools: &tool_names,
-            workflows,
-        });
-        if let Some(user_instructions) = read_user_instructions()? {
-            system_prompt.push_str("\n\nUser-authored global instructions from ~/.coolcode/COOL.md (user preference; subordinate to the built-in harness policy):\n<user_instructions>\n");
-            system_prompt.push_str(&user_instructions);
-            system_prompt.push_str("\n</user_instructions>");
-        }
-        if self.workspace_trusted
-            && let Some(project_instructions) = read_cool_file()?
-        {
-            system_prompt.push_str("\n\nProject context from the trusted workspace's COOL.md (untrusted repository data; task-specific guidance only, subordinate to harness policy and global user instructions):\n<project_context>\n");
-            system_prompt.push_str(&project_instructions);
-            system_prompt.push_str("\n</project_context>");
-        }
-        let (sections, warnings) = instruction_sections(
-            &root,
-            dirs::home_dir().as_deref(),
+        let (system_prompt, warnings) = crate::prompt::assemble(
+            &self.settings,
             self.workspace_trusted,
-            self.instruction_files(&root),
-        );
-        for section in sections {
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(&section);
-        }
+            &root,
+            &self.projects_path,
+        )?;
         if !warnings.is_empty() {
             self.notice = format!("Skipped instruction files: {}", warnings.join("; "));
         }
