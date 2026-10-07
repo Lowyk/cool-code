@@ -250,7 +250,7 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /compact, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /compact, /undo, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }
@@ -308,6 +308,12 @@ impl App {
                 count
             );
             self.finish_command(self.notice.clone());
+            return Ok(());
+        }
+        if value == "/undo" {
+            let message = self.undo_last();
+            self.finish_command(message.clone());
+            self.notice = message;
             return Ok(());
         }
         if value == "/compact" {
@@ -414,6 +420,10 @@ impl App {
         &mut self,
         user_message: provider::ChatMessage,
     ) -> Result<()> {
+        let user_message = match self.pending_note.take() {
+            Some(note) => crate::tui::undo::with_note(user_message, &note),
+            None => user_message,
+        };
         self.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: user_message.display.clone(),
@@ -573,6 +583,7 @@ impl App {
         turn.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.pending = None;
+        self.commit_checkpoint();
         self.answer_unfinished_tool_calls();
         self.keep_partial_answer(&turn.text, true);
         self.notice = "Turn cancelled.".to_owned();
@@ -643,6 +654,7 @@ impl App {
                     | PendingEvent::ToolStarted(_)
                     | PendingEvent::ToolAction(_)
                     | PendingEvent::Compacted { .. }
+                    | PendingEvent::FileChanged { .. }
                     | PendingEvent::ConversationMessage(_))
             );
             self.apply_pending_event(event);
@@ -716,6 +728,12 @@ impl App {
                 });
                 self.history_scroll = 0;
             }
+            Ok(PendingEvent::FileChanged {
+                path,
+                name,
+                before,
+                after,
+            }) => self.record_file_change(path, name, before, after),
             Ok(PendingEvent::CompactFinished(result)) => {
                 self.pending = None;
                 self.streaming = None;
@@ -731,6 +749,7 @@ impl App {
             }
             Ok(PendingEvent::Finished(Ok(response))) => {
                 self.streaming = None;
+                self.commit_checkpoint();
                 self.messages
                     .push(provider::ChatMessage::assistant(response.text.clone()));
                 self.transcript.push(TranscriptEntry {
@@ -762,6 +781,7 @@ impl App {
             }
             Ok(PendingEvent::Finished(Err(error))) => {
                 self.pending = None;
+                self.commit_checkpoint();
                 if let Some(turn) = self.streaming.take() {
                     self.keep_partial_answer(&turn.text, false);
                 }

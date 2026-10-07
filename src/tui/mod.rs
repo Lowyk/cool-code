@@ -16,6 +16,7 @@ mod setup;
 mod state;
 mod stats_view;
 mod theme;
+mod undo;
 mod usage_view;
 mod usage_warnings;
 mod widgets;

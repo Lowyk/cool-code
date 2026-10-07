@@ -96,6 +96,10 @@ The model has twelve tools. **Reading:** `list_files`, `read_file`, `search_text
 
 With workflows on, the model gets a `spawn_subagents` tool. `explore` subagents read and search in parallel; `implement` subagents can also edit and run commands, one at a time, and every approval they ask for names the subagent. Subagents cannot start more subagents. When a change is finished, a separate reviewer inspects the uncommitted changes and answers `VERDICT: PASS` or `VERDICT: ISSUES`; issues go back for a fix round. Super allows 4 subagents at a time, 8 per turn, 12 steps each and one review; Ultimate allows 6, 20, 25 and two. Esc cancels everything.
 
+### Undo
+
+`/undo` takes back the file changes the model made in its last turn, one turn at a time (up to 20 this session). It restores edited files and removes files the turn created, but only if a file is still exactly as the turn left it: anything you or a command changed since is left alone and reported. The model is told about the undo with your next message. Only changes made through the model's edit tools are tracked, not what `run_command` did, and the history is kept for the current run only.
+
 ### Long conversations
 
 The status line shows how full the model's context is (`ctx 42k/200k`, yellow above 80% and red above 95%; without a reported window just the size). Before a request would fill the window, the older conversation is replaced by a short briefing the model writes, and the recent part stays word for word; if a provider says a request was too large, the same thing happens and the request is retried. `/compact` does it on demand, and **Settings → General → Auto-compact** turns the automatic version off. The window comes from what the provider reports for the model, so a provider that does not report one is only condensed when it complains. The summary is an estimate-driven approximation: sizes are counted at about four characters a token.
@@ -114,6 +118,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/effort [level]`, `/mode [name]` | Effort picker, permission mode |
 | `/usage`, `/stats [clear]` | Provider usage, your own usage history |
 | `/compact` | Condense the older conversation into a summary now |
+| `/undo` | Take back the file changes from the model's last turn |
 | `/files`, `/read <path>`, `/search <text>`, `/git status` | Read-only repository helpers (trusted folders) |
 | `/init` | Create a starter `COOL.md` |
 | `/claudemd`, `/agentsmd` | Toggle those files for this project |
