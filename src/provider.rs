@@ -27,6 +27,8 @@ pub(crate) struct ToolCall {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) arguments: Value,
+    /// Opaque proof Gemini 3 attaches to a function call; it must be returned with the history.
+    pub(crate) thought_signature: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +49,9 @@ pub(crate) struct ChatMessage {
     pub(crate) tool_name: Option<String>,
     #[serde(skip)]
     pub(crate) display: String,
+    /// (tool call id, Gemini thought signature); never serialized into OpenAI/Anthropic bodies.
+    #[serde(skip)]
+    pub(crate) thought_signatures: Vec<(String, String)>,
 }
 
 impl ChatMessage {
@@ -59,6 +64,7 @@ impl ChatMessage {
                 tool_call_id: None,
                 tool_name: None,
                 display,
+                thought_signatures: Vec::new(),
             };
         }
         let mut parts = vec![serde_json::json!({"type":"text", "text":text})];
@@ -70,6 +76,7 @@ impl ChatMessage {
             tool_call_id: None,
             tool_name: None,
             display,
+            thought_signatures: Vec::new(),
         }
     }
 
@@ -81,6 +88,7 @@ impl ChatMessage {
             tool_call_id: None,
             tool_name: None,
             display: content,
+            thought_signatures: Vec::new(),
         }
     }
 
@@ -92,6 +100,7 @@ impl ChatMessage {
             tool_call_id: None,
             tool_name: None,
             display: content,
+            thought_signatures: Vec::new(),
         }
     }
 
@@ -107,7 +116,13 @@ impl ChatMessage {
             tool_call_id: None,
             tool_name: None,
             display: content,
+            thought_signatures: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_thought_signatures(mut self, signatures: Vec<(String, String)>) -> Self {
+        self.thought_signatures = signatures;
+        self
     }
 
     pub(crate) fn tool_result(id: String, name: String, content: String) -> Self {
@@ -118,6 +133,7 @@ impl ChatMessage {
             tool_call_id: Some(id),
             tool_name: Some(name),
             display: String::new(),
+            thought_signatures: Vec::new(),
         }
     }
 }
@@ -816,6 +832,10 @@ fn google_retry_delay(retry_after: Option<&str>, attempt: usize) -> Duration {
         .min(MAX_DELAY)
 }
 
+// Google's documented value for function calls whose original signature is unavailable,
+// such as history produced by another model after a fallback switch.
+const GOOGLE_SIGNATURE_PLACEHOLDER: &str = "skip_thought_signature_validator";
+
 fn google_message(message: &ChatMessage) -> Result<Value> {
     if message.role == "assistant" {
         if let Some(calls) = &message.tool_calls {
@@ -824,7 +844,14 @@ fn google_message(message: &ChatMessage) -> Result<Value> {
                 parts.extend(google_parts(&message.content)?);
             }
             parts.extend(calls.iter().map(|call| {
+                    let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
+                    let signature = message
+                        .thought_signatures
+                        .iter()
+                        .find(|(call_id, _)| call_id == id)
+                        .map_or(GOOGLE_SIGNATURE_PLACEHOLDER, |(_, signature)| signature.as_str());
                     Ok(serde_json::json!({
+                        "thoughtSignature": signature,
                         "functionCall": {
                             "name": call.pointer("/function/name").and_then(Value::as_str).unwrap_or_default(),
                             "args": openai_call_arguments(call)?,
@@ -1119,6 +1146,43 @@ mod tests {
         let google = google_parts(&message).expect("Google parts");
         assert_eq!(google[1]["inlineData"]["mimeType"], "image/png");
         assert_eq!(google[1]["inlineData"]["data"], "aGVsbG8=");
+    }
+
+    fn model_call(id: &str, name: &str) -> Value {
+        json!({"id": id, "type": "function", "function": {"name": name, "arguments": "{}"}})
+    }
+
+    #[test]
+    fn google_requests_return_the_thought_signature_on_function_calls() {
+        let message = ChatMessage::assistant_tool_calls(
+            String::new(),
+            vec![
+                model_call("c1", "list_files"),
+                model_call("c2", "git_status"),
+            ],
+        )
+        .with_thought_signatures(vec![("c1".to_owned(), "sig-abc".to_owned())]);
+        let value = super::google_message(&message).expect("google message");
+        let parts = value["parts"].as_array().expect("parts");
+        assert_eq!(parts[0]["thoughtSignature"], "sig-abc");
+        assert_eq!(parts[0]["functionCall"]["name"], "list_files");
+        // A call from another model has no signature; Google accepts its documented placeholder.
+        assert_eq!(
+            parts[1]["thoughtSignature"],
+            "skip_thought_signature_validator"
+        );
+    }
+
+    #[test]
+    fn thought_signatures_never_reach_openai_style_request_bodies() {
+        let message =
+            ChatMessage::assistant_tool_calls(String::new(), vec![model_call("c1", "list_files")])
+                .with_thought_signatures(vec![("c1".to_owned(), "sig-abc".to_owned())]);
+        let body = serde_json::to_string(&message).expect("serialize");
+        assert!(
+            !body.contains("sig-abc") && !body.to_lowercase().contains("thought"),
+            "{body}"
+        );
     }
 
     #[test]
