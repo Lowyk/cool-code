@@ -696,22 +696,24 @@ fn complete_chatgpt(request: &Request) -> Result<AgentTurn> {
     let sent = add_effort(&mut body, request);
     let session = uuid::Uuid::new_v4().to_string();
     let response = send_with_effort_fallback(body, sent, |body| {
-        let mut builder = client
-            .post(&endpoint)
-            .bearer_auth(api_key)
-            .header("OpenAI-Beta", "responses=experimental")
-            .header("originator", "codex_cli_rs")
-            .header("session_id", &session)
-            .header("Accept", "text/event-stream");
-        if let Some(account) = account_id {
-            builder = builder.header("chatgpt-account-id", account);
-        }
-        successful(
-            builder
-                .json(body)
-                .send()
-                .context("sending request to the ChatGPT backend")?,
-        )
+        with_retries(stream.cancel, || {
+            let mut builder = client
+                .post(&endpoint)
+                .bearer_auth(api_key)
+                .header("OpenAI-Beta", "responses=experimental")
+                .header("originator", "codex_cli_rs")
+                .header("session_id", &session)
+                .header("Accept", "text/event-stream");
+            if let Some(account) = account_id {
+                builder = builder.header("chatgpt-account-id", account);
+            }
+            successful(
+                builder
+                    .json(body)
+                    .send()
+                    .context("sending request to the ChatGPT backend")?,
+            )
+        })
     })?;
     crate::stream::parse_responses_stream(std::io::BufReader::new(response), stream)
 }
@@ -736,15 +738,33 @@ fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
     }
     let sent = add_effort(&mut body, request);
     let response = send_with_effort_fallback(body, sent, |body| {
-        successful(
-            with_bearer(client.post(&endpoint), api_key)
-                .json(body)
-                .send()
-                .context("sending request to the OpenAI-compatible API")?,
-        )
+        with_retries(stream.cancel, || {
+            successful(
+                with_bearer(client.post(&endpoint), api_key)
+                    .json(body)
+                    .send()
+                    .context("sending request to the OpenAI-compatible API")?,
+            )
+        })
     })?;
     parse_openai_stream(std::io::BufReader::new(response), stream)
 }
+
+/// A provider's refusal: its status and error body, and how long it asked us to wait.
+#[derive(Debug)]
+struct ProviderStatus {
+    status: reqwest::StatusCode,
+    body: String,
+    retry_after: Option<u64>,
+}
+
+impl std::fmt::Display for ProviderStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "provider returned {}: {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for ProviderStatus {}
 
 /// Returns the response for streaming, or the provider's error body as an error.
 fn successful(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
@@ -752,11 +772,117 @@ fn successful(response: reqwest::blocking::Response) -> Result<reqwest::blocking
     if status.is_success() {
         return Ok(response);
     }
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
     let body = response.text().unwrap_or_default();
-    bail!(
-        "provider returned {status}: {}",
-        body.chars().take(8 * 1024).collect::<String>()
-    )
+    Err(ProviderStatus {
+        status,
+        body: body.chars().take(8 * 1024).collect(),
+        retry_after,
+    }
+    .into())
+}
+
+/// How many times a request is repeated when the provider is briefly unavailable.
+const RETRY_LIMIT: usize = 3;
+/// A rate limit that names its own wait is retried this many times at most.
+const RATE_LIMIT_RETRIES: usize = 2;
+/// The longest a retry will wait.
+const MAX_WAIT: Duration = Duration::from_secs(30);
+
+/// How long to wait before retry number `tries` (0 is the first): what the provider asked for,
+/// or 1, 2, 4 seconds.
+fn backoff(tries: usize, retry_after: Option<u64>) -> Duration {
+    retry_after
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(1u64 << tries.min(4)))
+        .min(MAX_WAIT)
+}
+
+/// Whether a rate-limit answer is a quota or billing wall (not worth waiting for) rather than a
+/// brief slow-down.
+fn is_hard_limit(body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    [
+        "quota",
+        "usage limit",
+        "insufficient",
+        "billing",
+        "credit",
+        "exceeded your current",
+    ]
+    .iter()
+    .any(|marker| body.contains(marker))
+}
+
+/// How long to wait before repeating a request that failed with `error`, or `None` when
+/// repeating it would not help (a wrong key, a bad request, a quota wall).
+fn retry_wait(error: &anyhow::Error, tries: usize) -> Option<Duration> {
+    if let Some(refusal) = error.downcast_ref::<ProviderStatus>() {
+        return match refusal.status.as_u16() {
+            408 | 500 | 502 | 503 | 504 | 529 if tries < RETRY_LIMIT => {
+                Some(backoff(tries, refusal.retry_after))
+            }
+            429 if tries < RATE_LIMIT_RETRIES
+                && !is_hard_limit(&refusal.body)
+                && refusal
+                    .retry_after
+                    .is_some_and(|seconds| seconds <= MAX_WAIT.as_secs()) =>
+            {
+                Some(backoff(tries, refusal.retry_after))
+            }
+            _ => None,
+        };
+    }
+    let network = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|error| error.is_timeout() || error.is_connect() || error.is_request())
+    });
+    (network && tries < RETRY_LIMIT).then(|| backoff(tries, None))
+}
+
+/// Waits, noticing a cancel within a tenth of a second.
+fn pause(wait: Duration, cancel: &std::sync::atomic::AtomicBool) -> Result<()> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    let until = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < until {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::stream::Interrupted {
+                partial: String::new(),
+                reason: "cancelled".to_owned(),
+            }
+            .into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+/// Repeats a request that failed because the provider was briefly unavailable or the network
+/// hiccuped. Errors that repeating cannot fix are returned at once.
+fn with_retries(
+    cancel: &std::sync::atomic::AtomicBool,
+    attempt: impl Fn() -> Result<reqwest::blocking::Response>,
+) -> Result<reqwest::blocking::Response> {
+    let mut tries = 0;
+    loop {
+        match attempt() {
+            Err(error) => match retry_wait(&error, tries) {
+                Some(wait) => {
+                    tries += 1;
+                    pause(wait, cancel)?;
+                }
+                None => return Err(error),
+            },
+            done => return done,
+        }
+    }
 }
 
 fn openai_tool_specs(tools: ToolSet) -> Value {
@@ -769,6 +895,77 @@ fn openai_tool_specs(tools: ToolSet) -> Value {
             }))
             .collect(),
     )
+}
+
+/// How long an answer may be. Anthropic requires a limit; edits to real files need far more than
+/// the 4096 that older models were capped at, but those older models refuse anything higher.
+fn anthropic_max_tokens(model: &str) -> u32 {
+    const OLDER_MODELS: u32 = 4_096;
+    const RECENT_MODELS: u32 = 16_000;
+    let name = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    // The first number in the name is the generation (claude-opus-4-5, claude-fable-5-1).
+    let generation = name
+        .split(['-', '.', '_'])
+        .find_map(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+    if name.starts_with("claude") && generation >= 4 {
+        RECENT_MODELS
+    } else {
+        OLDER_MODELS
+    }
+}
+
+/// Whether the server is Anthropic's own, which supports marking a prompt prefix for reuse.
+/// Compatible servers are left alone, since an unknown field can make them refuse the request.
+fn caches_prompts(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host == "api.anthropic.com")
+}
+
+/// Asks Anthropic to remember the system prompt and the conversation so far, so the next round
+/// pays the reduced cached price for them instead of the full one.
+fn add_prompt_cache(body: &mut Value) {
+    let marker = serde_json::json!({"type": "ephemeral"});
+    if let Some(system) = body
+        .get("system")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    {
+        body["system"] = serde_json::json!([
+            {"type": "text", "text": system, "cache_control": marker}
+        ]);
+    }
+    let Some(last) = body
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .and_then(|messages| messages.last_mut())
+    else {
+        return;
+    };
+    match last.get("content").cloned() {
+        Some(Value::String(text)) if !text.is_empty() => {
+            last["content"] = serde_json::json!([
+                {"type": "text", "text": text, "cache_control": marker}
+            ]);
+        }
+        Some(Value::Array(_)) => {
+            if let Some(block) = last
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+                .and_then(|blocks| blocks.last_mut())
+                .and_then(Value::as_object_mut)
+            {
+                block.insert("cache_control".to_owned(), marker);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn anthropic_tool_specs(tools: ToolSet) -> Value {
@@ -840,7 +1037,7 @@ fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
         .filter(|message| message.role != "system")
         .map(anthropic_message)
         .collect::<Result<Vec<_>>>()?;
-    let mut body = serde_json::json!({ "model": model, "max_tokens": 4096, "messages": messages, "stream": true });
+    let mut body = serde_json::json!({ "model": model, "max_tokens": anthropic_max_tokens(model), "messages": messages, "stream": true });
     if !system.is_empty() {
         body["system"] = Value::String(system);
     }
@@ -848,17 +1045,22 @@ fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
         body["tools"] = anthropic_tool_specs(tools);
     }
     let endpoint = format!("{}/messages", base_url.trim_end_matches('/'));
+    if caches_prompts(base_url) {
+        add_prompt_cache(&mut body);
+    }
     let sent = add_effort(&mut body, request);
     let response = send_with_effort_fallback(body, sent, |body| {
-        successful(
-            client
-                .post(&endpoint)
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-                .json(body)
-                .send()
-                .context("sending request to the Anthropic Messages API")?,
-        )
+        with_retries(stream.cancel, || {
+            successful(
+                client
+                    .post(&endpoint)
+                    .header("x-api-key", api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .json(body)
+                    .send()
+                    .context("sending request to the Anthropic Messages API")?,
+            )
+        })
     })?;
     parse_anthropic_stream(std::io::BufReader::new(response), stream)
 }
@@ -1720,6 +1922,221 @@ mod tests {
             !requests[1].1.contains("\"reasoning\""),
             "{}",
             requests[1].1
+        );
+    }
+
+    #[test]
+    fn recent_claude_models_may_write_long_answers_and_older_ones_keep_their_old_cap() {
+        for recent in [
+            "claude-opus-5-5",
+            "claude-fable-5-1",
+            "anthropic/claude-sonnet-4-5",
+            "claude-opus-4",
+        ] {
+            assert_eq!(super::anthropic_max_tokens(recent), 16_000, "{recent}");
+        }
+        for older in [
+            "claude-3-haiku-20240307",
+            "claude-3-5-sonnet",
+            "mystery-model",
+            "kimi-k3",
+        ] {
+            assert_eq!(super::anthropic_max_tokens(older), 4_096, "{older}");
+        }
+    }
+
+    #[test]
+    fn only_anthropics_own_servers_are_asked_to_cache_the_prompt() {
+        assert!(super::caches_prompts("https://api.anthropic.com/v1"));
+        for other in [
+            "https://api.kimi.com/coding/",
+            "https://api.anthropic.com.evil.example/v1",
+            "http://localhost:8080",
+            "not a url",
+        ] {
+            assert!(!super::caches_prompts(other), "{other}");
+        }
+    }
+
+    #[test]
+    fn the_system_prompt_and_the_latest_message_are_marked_for_caching() {
+        let mut body = serde_json::json!({
+            "system": "be brief",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+                {"role": "user", "content": "latest"}
+            ]
+        });
+        super::add_prompt_cache(&mut body);
+        assert_eq!(body["system"][0]["text"], "be brief");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["messages"][2]["content"][0]["text"], "latest");
+        assert_eq!(
+            body["messages"][2]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(
+            body["messages"][0]["content"], "first",
+            "older messages are untouched"
+        );
+        // A message that already has blocks gets the mark on its last block.
+        let mut blocks = serde_json::json!({
+            "messages": [{"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t", "content": "x"},
+                {"type": "text", "text": "and then"}
+            ]}]
+        });
+        super::add_prompt_cache(&mut blocks);
+        assert!(
+            blocks["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert_eq!(
+            blocks["messages"][0]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+        // Nothing to mark is not an error.
+        let mut empty = serde_json::json!({"messages": []});
+        super::add_prompt_cache(&mut empty);
+    }
+
+    fn refusal(status: u16, body: &str, retry_after: Option<u64>) -> anyhow::Error {
+        anyhow::Error::new(super::ProviderStatus {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            body: body.to_owned(),
+            retry_after,
+        })
+    }
+
+    fn seconds(wait: Option<std::time::Duration>) -> Option<u64> {
+        wait.map(|wait| wait.as_secs())
+    }
+
+    #[test]
+    fn a_briefly_unavailable_provider_is_retried_with_growing_waits_and_then_given_up_on() {
+        for status in [500, 502, 503, 504, 529, 408] {
+            let error = refusal(status, "overloaded", None);
+            assert_eq!(seconds(super::retry_wait(&error, 0)), Some(1), "{status}");
+            assert_eq!(seconds(super::retry_wait(&error, 1)), Some(2));
+            assert_eq!(seconds(super::retry_wait(&error, 2)), Some(4));
+            assert_eq!(super::retry_wait(&error, 3), None, "three retries at most");
+        }
+        let asked = refusal(503, "busy", Some(7));
+        assert_eq!(
+            seconds(super::retry_wait(&asked, 0)),
+            Some(7),
+            "what the provider asked for"
+        );
+        let too_long = refusal(503, "busy", Some(600));
+        assert_eq!(
+            seconds(super::retry_wait(&too_long, 0)),
+            Some(30),
+            "never longer than half a minute"
+        );
+    }
+
+    #[test]
+    fn mistakes_and_walls_are_not_retried() {
+        for status in [400, 401, 403, 404, 422] {
+            assert_eq!(
+                super::retry_wait(&refusal(status, "no", None), 0),
+                None,
+                "{status}"
+            );
+        }
+        assert_eq!(
+            super::retry_wait(&anyhow::anyhow!("something else"), 0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_is_retried_only_when_it_names_a_short_wait_and_is_not_a_quota() {
+        let brief = refusal(429, "slow down", Some(3));
+        assert_eq!(seconds(super::retry_wait(&brief, 0)), Some(3));
+        assert_eq!(seconds(super::retry_wait(&brief, 1)), Some(3));
+        assert_eq!(super::retry_wait(&brief, 2), None, "two retries at most");
+        assert_eq!(
+            super::retry_wait(&refusal(429, "slow down", None), 0),
+            None,
+            "no stated wait"
+        );
+        assert_eq!(
+            super::retry_wait(&refusal(429, "slow down", Some(300)), 0),
+            None,
+            "too long to wait"
+        );
+        for wall in [
+            "You exceeded your current quota",
+            "usage limit reached",
+            "insufficient credits",
+            "billing hard limit",
+        ] {
+            assert_eq!(
+                super::retry_wait(&refusal(429, wall, Some(3)), 0),
+                None,
+                "{wall}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_request_that_fails_with_a_server_error_succeeds_on_a_later_attempt() {
+        let (base, seen) = crate::testutil::serve_full(vec![
+            (503, "application/json", "{\"error\":\"overloaded\"}"),
+            (502, "text/plain", "bad gateway"),
+            (200, "text/event-stream", CHATGPT_STREAM),
+        ]);
+        let turn =
+            run_chatgpt(&base, "gpt-6-chatgpt-retry", crate::Effort::Low, None).expect("turn");
+        assert_eq!(turn.text, "Hi there");
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_provider_that_stays_down_is_given_up_on_after_the_retries() {
+        let (base, seen) = crate::testutil::serve_full(vec![
+            (500, "text/plain", "down"),
+            (500, "text/plain", "down"),
+            (500, "text/plain", "down"),
+            (500, "text/plain", "down"),
+            (200, "text/event-stream", CHATGPT_STREAM),
+        ]);
+        let error = run_chatgpt(&base, "gpt-6-chatgpt-down", crate::Effort::Low, None).unwrap_err();
+        assert!(format!("{error:#}").contains("500"), "{error:#}");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            4,
+            "one attempt and three retries"
+        );
+    }
+
+    #[test]
+    fn a_rejected_key_is_reported_straight_away() {
+        let (base, seen) = crate::testutil::serve_full(vec![
+            (401, "application/json", "{\"error\":\"bad key\"}"),
+            (200, "text/event-stream", CHATGPT_STREAM),
+        ]);
+        let error = run_chatgpt(&base, "gpt-6-chatgpt-key", crate::Effort::Low, None).unwrap_err();
+        assert!(format!("{error:#}").contains("401"));
+        assert_eq!(seen.lock().unwrap().len(), 1, "no retry");
+    }
+
+    #[test]
+    fn a_connection_that_cannot_be_made_is_retried_then_reported() {
+        // Nothing listens on port 1.
+        let error = run_chatgpt(
+            "http://127.0.0.1:1",
+            "gpt-6-chatgpt-offline",
+            crate::Effort::Low,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("sending request"),
+            "{error:#}"
         );
     }
 

@@ -197,7 +197,7 @@ pub(super) struct ProviderPreset {
     pub(super) key_optional: bool,
 }
 
-pub(super) const PROVIDER_PRESETS: [ProviderPreset; 14] = [
+pub(super) const PROVIDER_PRESETS: [ProviderPreset; 15] = [
     ProviderPreset {
         id: "openai",
         label: "OpenAI (ChatGPT)",
@@ -345,6 +345,18 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 14] = [
         limits_path: None,
         key_prefix: None,
         key_optional: true,
+    },
+    ProviderPreset {
+        id: "groq",
+        label: "Groq",
+        adapter: "openai-compatible",
+        base_url: Some("https://api.groq.com/openai/v1"),
+        custom: false,
+        models: &[],
+        models_path: Some("models"),
+        limits_path: None,
+        key_prefix: Some("gsk_"),
+        key_optional: false,
     },
     ProviderPreset {
         id: "anthropic-custom",

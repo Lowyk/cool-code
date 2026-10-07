@@ -49,7 +49,7 @@ On Linux the credential store needs the Secret Service libraries (`libdbus-1-dev
 | Moonshot (Kimi API) | API key | from the API | dashboard |
 | Z.ai GLM Coding Plan | plan API key | documented starter model | dashboard |
 | DeepSeek | API key | from the API | balance |
-| Mistral, xAI (Grok) | API key | from the API | dashboard |
+| Mistral, xAI (Grok), Groq | API key | from the API | dashboard |
 | Ollama (local) | none | your installed models | nothing to track |
 | Custom OpenAI / Anthropic compatible | API key | you list them, or a models endpoint | optional limits endpoint |
 
@@ -59,7 +59,7 @@ Notes:
 - `/model <id>` picks a model; `/model fable` picks the newest listed model of a series. Both only consider providers with automatic switching on, or models in a preference chain. **`/forcemodel <id>`** sets any model on your default provider exactly as typed, for providers that cannot list their models.
 - Kimi Code and the Z.ai plan are meant for coding tools like this one. Use their own endpoints (the presets do) and do not disguise the client.
 - Gemini/Google and GLM/Z.ai requests ask for acknowledgement first and redact obvious secrets before sending (see [Privacy](#privacy-and-data)).
-- Groq has no preset yet; configure it from the command line with `harness config set --provider groq --model <id>` and `GROQ_API_KEY`.
+- Anthropic's own API gets prompt caching: the system prompt and the conversation so far are marked for reuse, so long sessions pay the cheaper cached price. Compatible servers are not sent the marker. Rate limits and server errors are retried (up to three times, waiting as the provider asks) before a request is reported as failed; a quota or billing limit is not retried and moves on to your fallback chain.
 - Fallback **chains** (Settings → Auto-switch models, `/chain <id>`, `Alt+C`) move to the next model when one hits a rate limit.
 
 ### Unofficial sign-in

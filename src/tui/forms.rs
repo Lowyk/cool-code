@@ -1391,6 +1391,11 @@ mod tests {
         );
         assert_eq!(preset("xai").base_url, Some("https://api.x.ai/v1"));
         assert_eq!(
+            preset("groq").base_url,
+            Some("https://api.groq.com/openai/v1")
+        );
+        assert_eq!(preset("groq").key_prefix, Some("gsk_"));
+        assert_eq!(
             preset("mistral").base_url,
             Some("https://api.mistral.ai/v1")
         );
