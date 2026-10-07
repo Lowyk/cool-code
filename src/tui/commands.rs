@@ -381,7 +381,7 @@ impl App {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.pending = None;
         self.answer_unfinished_tool_calls();
-        self.keep_partial_answer(&turn.text);
+        self.keep_partial_answer(&turn.text, true);
         self.notice = "Turn cancelled.".to_owned();
     }
 
@@ -414,7 +414,7 @@ impl App {
     }
 
     /// Keeps an interrupted answer visible and in context so the model can continue from it.
-    fn keep_partial_answer(&mut self, partial: &str) {
+    fn keep_partial_answer(&mut self, partial: &str, user_cancelled: bool) {
         if !partial.trim().is_empty() {
             self.transcript.push(TranscriptEntry {
                 kind: TranscriptKind::Assistant,
@@ -424,10 +424,13 @@ impl App {
                 "{partial}\n\n[interrupted by the user]"
             )));
         }
-        self.transcript.push(TranscriptEntry {
-            kind: TranscriptKind::CommandOutput,
-            text: "(interrupted)".to_owned(),
-        });
+        // A failure with nothing to keep is just an error, not an interruption.
+        if user_cancelled || !partial.trim().is_empty() {
+            self.transcript.push(TranscriptEntry {
+                kind: TranscriptKind::CommandOutput,
+                text: "(interrupted)".to_owned(),
+            });
+        }
         self.history_scroll = 0;
     }
 
@@ -537,7 +540,7 @@ impl App {
             Ok(PendingEvent::Finished(Err(error))) => {
                 self.pending = None;
                 if let Some(turn) = self.streaming.take() {
-                    self.keep_partial_answer(&turn.text);
+                    self.keep_partial_answer(&turn.text, false);
                 }
                 let (title, details) = format_provider_error(&error);
                 self.transcript.push(TranscriptEntry {
@@ -686,6 +689,37 @@ mod tests {
             app.transcript
                 .iter()
                 .all(|entry| entry.text != "(interrupted)")
+        );
+    }
+
+    #[test]
+    fn a_failure_without_partial_text_is_not_marked_interrupted() {
+        let (mut app, sender) = streaming_app();
+        sender
+            .send(PendingEvent::Finished(Err(
+                "agent tool-call round limit reached".to_owned(),
+            )))
+            .unwrap();
+        app.poll_response();
+        assert!(
+            app.transcript
+                .iter()
+                .all(|entry| entry.text != "(interrupted)")
+        );
+        assert_eq!(
+            app.transcript.last().map(|entry| entry.kind),
+            Some(TranscriptKind::Error)
+        );
+    }
+
+    #[test]
+    fn cancelling_before_any_text_still_says_interrupted() {
+        let (mut app, _sender) = streaming_app();
+        app.cancel_turn();
+        assert!(
+            app.transcript
+                .iter()
+                .any(|entry| entry.text == "(interrupted)")
         );
     }
 
