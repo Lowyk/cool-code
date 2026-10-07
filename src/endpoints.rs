@@ -201,6 +201,49 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
     models
 }
 
+/// OpenRouter's `/credits` reply: `{"data": {"total_credits": 10.0, "total_usage": 3.2}}`.
+fn openrouter_credits(value: &Value) -> Option<LimitLine> {
+    let total = value.pointer("/data/total_credits")?.as_f64()?;
+    let used = value.pointer("/data/total_usage")?.as_f64()?;
+    let left = (total - used).max(0.0);
+    Some(LimitLine {
+        label: "Credits".to_owned(),
+        value: format!("${left:.2} left of ${total:.2}"),
+        remaining: (total > 0.0).then(|| (left / total).clamp(0.0, 1.0) as f32),
+        balance_tokens: None,
+    })
+}
+
+/// Describes the structure of a JSON reply (names and counts, never values), for error messages
+/// about a reply that held nothing usable.
+pub(crate) fn describe_shape(value: &Value) -> String {
+    match value {
+        Value::Object(object) if object.is_empty() => "an empty object".to_owned(),
+        Value::Object(object) => object
+            .iter()
+            .take(8)
+            .map(|(key, inner)| match inner {
+                Value::Array(items) => {
+                    let first = items
+                        .first()
+                        .and_then(Value::as_object)
+                        .map(|entry| {
+                            let keys: Vec<_> = entry.keys().take(6).map(String::as_str).collect();
+                            format!(" of {{{}}}", keys.join(", "))
+                        })
+                        .unwrap_or_default();
+                    format!("{key}: {} entries{first}", items.len())
+                }
+                Value::Object(_) => format!("{key}: an object"),
+                _ => format!("{key}: a value"),
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        Value::Array(items) => format!("a list of {}", items.len()),
+        _ => "a single value".to_owned(),
+    }
+}
+
 /// Turns the ChatGPT plan's usage report into display lines: one per rate-limit window, named
 /// by its length (`5-hour`, `Weekly`).
 pub(crate) fn summarize_chatgpt_usage(value: &Value) -> Vec<LimitLine> {
@@ -352,6 +395,9 @@ pub(crate) fn summarize_limits(value: &Value) -> Vec<LimitLine> {
     let Some(object) = value.as_object() else {
         return Vec::new();
     };
+    if let Some(credits) = openrouter_credits(value) {
+        return vec![credits];
+    }
     let line = |label: &str, value: String, remaining: Option<f32>| LimitLine {
         label: label.to_owned(),
         value,
@@ -543,6 +589,30 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_empty_model_reply_is_described_without_its_values() {
+        let value = serde_json::json!({"models": [], "etag": "secret-looking-value"});
+        let shape = super::describe_shape(&value);
+        assert!(shape.contains("models: 0 entries"), "{shape}");
+        assert!(!shape.contains("secret-looking-value"), "{shape}");
+        let with_entries = serde_json::json!({"models": [{"slug": "a", "visibility": "hide"}]});
+        let shape = super::describe_shape(&with_entries);
+        assert!(
+            shape.contains("models: 1 entries of {slug, visibility}"),
+            "{shape}"
+        );
+    }
+
+    #[test]
+    fn openrouter_credits_become_a_balance_line_with_a_bar() {
+        let value = serde_json::json!({"data": {"total_credits": 110.5, "total_usage": 3.25}});
+        let lines = super::summarize_limits(&value);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].label, "Credits");
+        assert_eq!(lines[0].value, "$107.25 left of $110.50");
+        assert!((lines[0].remaining.unwrap() - 0.9706).abs() < 0.001);
+    }
+
     #[test]
     fn chatgpt_usage_windows_become_lines_with_remaining_bars() {
         let value = serde_json::json!({"rate_limit": {

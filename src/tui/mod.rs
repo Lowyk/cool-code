@@ -16,6 +16,7 @@ mod setup;
 mod state;
 mod stats_view;
 mod theme;
+mod usage_view;
 mod usage_warnings;
 mod widgets;
 mod wordmark;
@@ -267,6 +268,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         }
     } else if app.picker {
         app.handle_effort_picker_key(key)?;
+    } else if app.usage_view.is_some() {
+        app.handle_usage_key(key);
     } else if app.stats_view.is_some() {
         app.handle_stats_key(key)?;
     } else if app.settings_view.is_some() {

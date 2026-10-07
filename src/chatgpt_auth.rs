@@ -467,6 +467,8 @@ fn get_json(
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
+        // The same identity as the `originator` header below.
+        .user_agent(format!("codex_cli_rs/{}", client_version()))
         .build()
         .context("creating HTTP client")?;
     let mut request = client

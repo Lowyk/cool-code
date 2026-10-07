@@ -131,8 +131,18 @@ impl App {
                     &url,
                     crate::chatgpt_auth::TOKEN_URL,
                 )
-                .map(|value| parse_models(&value))
-                .map_err(|error| format!("{error:#}")),
+                .map_err(|error| format!("{error:#}"))
+                .and_then(|value| {
+                    let models = parse_models(&value);
+                    if models.is_empty() {
+                        Err(format!(
+                            "ChatGPT returned no usable models ({})",
+                            crate::endpoints::describe_shape(&value)
+                        ))
+                    } else {
+                        Ok(models)
+                    }
+                }),
             });
             return;
         }
@@ -158,10 +168,21 @@ impl App {
     /// Fetches usage limits in the background; a fresh cached answer is reused unless `force`.
     pub(in crate::tui) fn start_limits_fetch(&mut self, index: usize, force: bool) {
         if let Some(profile) = self.settings.providers.get_mut(index)
-            && profile.adapter == "chatgpt"
             && profile.limits_url.is_none()
         {
-            profile.limits_url = Some(crate::chatgpt_auth::USAGE_URL.to_owned());
+            // Providers saved before their usage endpoint was known get it filled in.
+            if profile.adapter == "chatgpt" {
+                profile.limits_url = Some(crate::chatgpt_auth::USAGE_URL.to_owned());
+            } else {
+                let preset = &crate::tui::state::PROVIDER_PRESETS
+                    [crate::tui::forms::preset_for_profile(profile)];
+                if let (false, Some(base), Some(path)) =
+                    (preset.custom, preset.base_url, preset.limits_path)
+                    && profile.base_url.as_deref() == Some(base)
+                {
+                    profile.limits_url = crate::endpoints::resolve_endpoint(base, path).ok();
+                }
+            }
         }
         let Some(profile) = self.settings.providers.get(index) else {
             return;
@@ -399,6 +420,25 @@ mod tests {
                 context: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn an_openrouter_provider_saved_before_credits_were_tracked_gets_its_endpoint() {
+        let mut app = App::new(crate::Settings::default());
+        app.settings.providers = vec![crate::ProviderProfile {
+            id: "or".to_owned(),
+            name: "OpenRouter".to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            base_url: Some("https://openrouter.ai/api/v1".to_owned()),
+            model: "m".to_owned(),
+            ..Default::default()
+        }];
+        app.start_limits_fetch(0, false);
+        assert_eq!(
+            app.settings.providers[0].limits_url.as_deref(),
+            Some("https://openrouter.ai/api/v1/credits")
+        );
+        assert_eq!(app.spawned_tasks, 1);
     }
 
     #[test]
