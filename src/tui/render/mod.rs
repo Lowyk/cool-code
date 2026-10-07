@@ -432,6 +432,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     if app.stats_view.is_some() {
         draw_stats(frame, area, app);
     }
+    if app.usage_view.is_some() {
+        crate::tui::usage_view::draw_usage(frame, area, app);
+    }
     if app.picker {
         draw_effort_picker(frame, area, app, animation_tick);
     }

@@ -88,6 +88,7 @@ pub(super) struct App {
     /// The largest balance seen per provider, to judge a shrinking balance against.
     pub(super) peak_balances: std::collections::HashMap<String, u64>,
     pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
+    pub(super) usage_view: Option<crate::tui::usage_view::UsageView>,
     #[cfg(test)]
     pub(super) spawned_tasks: usize,
     pub(super) history_scroll: u16,
@@ -231,7 +232,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         custom: false,
         models: &[],
         models_path: None,
-        limits_path: None,
+        limits_path: Some("credits"),
         key_prefix: None,
     },
     ProviderPreset {
@@ -362,6 +363,7 @@ impl App {
             models_loading: std::collections::HashSet::new(),
             key_shapes: std::collections::HashMap::new(),
             stats_view: None,
+            usage_view: None,
             #[cfg(test)]
             spawned_tasks: 0,
             history_scroll: 0,

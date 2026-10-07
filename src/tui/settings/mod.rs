@@ -4,6 +4,7 @@ mod general;
 mod models;
 mod privacy;
 mod providers;
+pub(in crate::tui) use providers::remaining_bar;
 mod reset;
 pub(super) mod sync;
 

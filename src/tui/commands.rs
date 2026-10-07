@@ -95,6 +95,11 @@ impl App {
             self.finish_command("Opened Settings.");
             return Ok(());
         }
+        if value == "/usage" {
+            self.open_usage();
+            self.finish_command("Opened provider usage.");
+            return Ok(());
+        }
         if value == "/stats" {
             self.open_stats(false);
             self.finish_command("Opened usage stats.");
@@ -231,7 +236,7 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }

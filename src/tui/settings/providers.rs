@@ -154,7 +154,7 @@ fn models_line(app: &App, profile: &crate::ProviderProfile) -> Line<'static> {
     ])
 }
 
-fn remaining_bar(fraction: f32) -> Span<'static> {
+pub(in crate::tui) fn remaining_bar(fraction: f32) -> Span<'static> {
     let filled = (fraction.clamp(0.0, 1.0) * 12.0).round() as usize;
     let color = if fraction > 0.5 {
         Color::Rgb(110, 220, 130)
