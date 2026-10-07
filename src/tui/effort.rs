@@ -257,6 +257,67 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
     lines.into_iter().map(Line::from).collect()
 }
 
+/// How far above the void a star can climb, in rows.
+const STAR_CLIMB_ROWS: f32 = 16.0;
+const RISING_STARS: u32 = 18;
+
+/// One star rising out of the void: where it is now and how brightly it shines (0..=1).
+struct RisingStar {
+    x: u16,
+    y: u16,
+    brightness: f32,
+}
+
+/// Stars launched from the top of the void in `origin` that float upward, out of the popup, and
+/// fade as they climb. `ceiling` is the highest row they may reach.
+fn rising_stars(origin: Rect, ceiling: u16, t: f32) -> Vec<RisingStar> {
+    if origin.width == 0 || origin.y <= ceiling {
+        return Vec::new();
+    }
+    let climb = f32::from(origin.y - ceiling).min(STAR_CLIMB_ROWS);
+    (0..RISING_STARS as i32)
+        .filter_map(|index| {
+            let speed = 0.18 + 0.3 * hash(index, 1);
+            let life = (t * speed + hash(index, 2)).fract();
+            let sway = (t * 0.8 + hash(index, 3) * 6.3).sin() * 1.2;
+            let x = f32::from(origin.x) + hash(index, 4) * f32::from(origin.width) + sway;
+            let y = f32::from(origin.y) + 0.5 - life * climb;
+            let brightness = (1.0 - life).powf(0.9);
+            (x >= 0.0 && y >= f32::from(ceiling) && brightness >= 0.1).then_some(RisingStar {
+                x: x as u16,
+                y: y as u16,
+                brightness,
+            })
+        })
+        .collect()
+}
+
+/// Paints the rising stars over empty cells and the popup's plain border, so they appear to
+/// leave the box; text is never covered.
+fn draw_rising_stars(frame: &mut ratatui::Frame<'_>, origin: Rect, t: f32) {
+    let screen = frame.area();
+    let buffer = frame.buffer_mut();
+    for star in rising_stars(origin, screen.y, t) {
+        if star.x >= screen.right() || star.y >= screen.bottom() {
+            continue;
+        }
+        let cell = &mut buffer[(star.x, star.y)];
+        if cell.symbol() != " " && cell.symbol() != "─" {
+            continue;
+        }
+        let glyph = match star.brightness {
+            b if b > 0.75 => "✦",
+            b if b > 0.4 => "✧",
+            _ => "·",
+        };
+        cell.set_symbol(glyph).set_fg(blend_color(
+            Color::Rgb(70, 62, 120),
+            Color::Rgb(255, 255, 255),
+            star.brightness,
+        ));
+    }
+}
+
 fn idle_bar(
     index: usize,
     selected_index: usize,
@@ -374,6 +435,13 @@ pub(super) fn draw_effort_picker(
             };
             frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), cell);
         }
+    }
+
+    // Ultimate is the one tier that escapes its box: stars lift off the void and leave the popup.
+    if LEVELS[app.picker_index] == Effort::Ultimate
+        && let Some(bar_area) = row(4, rows)
+    {
+        draw_rising_stars(frame, column(app.picker_index, bar_area), t);
     }
 
     if let Some(description) = row(5 + rows, 2) {
@@ -800,6 +868,95 @@ mod tests {
             assert_eq!(lines.len(), rows as usize);
             assert!(lines.iter().all(|line| line.spans.len() == width));
         }
+    }
+
+    #[test]
+    fn stars_rise_out_of_the_void_and_fade_with_height() {
+        let origin = ratatui::layout::Rect::new(10, 30, 12, 4);
+        let mut near = Vec::new();
+        let mut far = Vec::new();
+        let mut highest = 30;
+        for step in 0..400 {
+            for star in super::rising_stars(origin, 2, step as f32 * 0.1) {
+                assert!(star.y >= 2 && star.y <= 30 + 1, "row {}", star.y);
+                assert!(
+                    star.x + 2 >= origin.x && star.x <= origin.right() + 2,
+                    "column {}",
+                    star.x
+                );
+                assert!((0.0..=1.0).contains(&star.brightness));
+                highest = highest.min(star.y);
+                match 30 - i32::from(star.y) {
+                    ..=3 => near.push(star.brightness),
+                    9.. => far.push(star.brightness),
+                    _ => {}
+                }
+            }
+        }
+        assert!(highest <= 30 - 12, "stars only reached row {highest}");
+        assert!(!near.is_empty() && !far.is_empty());
+        let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+        assert!(
+            mean(&far) < mean(&near) * 0.6,
+            "{} vs {}",
+            mean(&far),
+            mean(&near)
+        );
+    }
+
+    #[test]
+    fn stars_never_climb_above_the_ceiling_or_off_a_tiny_screen() {
+        for step in 0..100 {
+            for star in
+                super::rising_stars(ratatui::layout::Rect::new(0, 3, 5, 1), 2, step as f32 * 0.3)
+            {
+                assert!(star.y >= 2);
+            }
+        }
+        assert!(
+            super::rising_stars(ratatui::layout::Rect::new(0, 0, 5, 1), 0, 1.0)
+                .iter()
+                .all(|s| s.y == 0)
+        );
+        assert!(super::rising_stars(ratatui::layout::Rect::new(0, 5, 0, 0), 0, 1.0).is_empty());
+    }
+
+    fn star_cells_in_view(effort_index: usize) -> usize {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.settings.background_animation = false;
+        app.transcript.push(crate::tui::state::TranscriptEntry {
+            kind: crate::tui::state::TranscriptKind::Assistant,
+            text: "hello".to_owned(),
+        });
+        app.picker = true;
+        app.picker_index = effort_index;
+        let mut terminal = Terminal::new(TestBackend::new(120, 44)).expect("terminal");
+        let mut best = 0;
+        for step in 0..30 {
+            app.launched_at =
+                std::time::Instant::now() - std::time::Duration::from_millis(step * 250);
+            terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+            let count = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .enumerate()
+                // Only the rows above the popup, where nothing else draws stars.
+                .filter(|(index, _)| *index < 120 * 8)
+                .filter(|(_, cell)| ["✦", "✧", "·"].contains(&cell.symbol()))
+                .count();
+            best = best.max(count);
+        }
+        best
+    }
+
+    #[test]
+    fn only_ultimate_throws_stars_out_of_the_box() {
+        let ultimate = star_cells_in_view(6);
+        let high = star_cells_in_view(2);
+        assert!(ultimate >= high + 3, "ultimate {ultimate}, high {high}");
     }
 
     #[test]
