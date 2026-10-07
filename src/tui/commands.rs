@@ -87,7 +87,11 @@ impl App {
 
         if value == "/effort" {
             self.open_effort_picker();
-            self.finish_command("Opened the effort selector.");
+            self.finish_command(if self.picker {
+                "Opened the effort selector.".to_owned()
+            } else {
+                self.notice.clone()
+            });
             return Ok(());
         }
         if value == "/settings" {
