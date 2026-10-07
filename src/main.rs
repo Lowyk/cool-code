@@ -49,7 +49,7 @@ enum Command {
     },
     /// Show or set the reasoning/workflow effort level.
     Effort {
-        /// Effort to select: low, medium, high, max, xhigh, super, or extreme.
+        /// Effort to select: low, medium, high, max, xhigh, super, or ultimate.
         level: Option<Effort>,
     },
 }
@@ -86,7 +86,9 @@ enum Effort {
     #[serde(rename = "xhigh")]
     XHigh,
     Super,
-    Extreme,
+    #[value(alias = "extreme")]
+    #[serde(alias = "extreme")]
+    Ultimate,
 }
 
 impl Effort {
@@ -98,7 +100,7 @@ impl Effort {
             Self::XHigh => "provider's xhigh effort; no workflow orchestration",
             Self::Max => "provider's maximum normal effort",
             Self::Super => "xhigh effort with dynamic workflows and subagents",
-            Self::Extreme => {
+            Self::Ultimate => {
                 "max effort with dynamic workflows and subagents; potentially expensive"
             }
         }
@@ -119,7 +121,8 @@ struct Settings {
     active_chain_id: Option<String>,
     privacy_acknowledged: Vec<String>,
     privacy_image_acknowledged: Vec<String>,
-    extreme_acknowledged: bool,
+    #[serde(alias = "extreme_acknowledged")]
+    ultimate_acknowledged: bool,
     background_animation: bool,
     pulse: PulseMode,
     motion_prompt_answered: bool,
@@ -212,7 +215,7 @@ impl Default for Settings {
             active_chain_id: None,
             privacy_acknowledged: Vec::new(),
             privacy_image_acknowledged: Vec::new(),
-            extreme_acknowledged: false,
+            ultimate_acknowledged: false,
             background_animation: true,
             pulse: PulseMode::Words,
             motion_prompt_answered: false,
@@ -381,14 +384,14 @@ fn run() -> Result<()> {
         Command::Effort { level } => {
             let mut settings = read_settings()?;
             if let Some(level) = level {
-                if matches!(level, Effort::Extreme) {
+                if matches!(level, Effort::Ultimate) {
                     eprintln!(
-                        "Warning: Extreme may use substantially more tokens and incur higher cost."
+                        "Warning: Ultimate may use substantially more tokens and incur higher cost."
                     );
                     eprintln!(
                         "Dynamic workflows are not implemented yet; this setting is saved for the roadmap."
                     );
-                    eprint!("Set Extreme effort anyway? [y/N] ");
+                    eprint!("Set Ultimate effort anyway? [y/N] ");
                     io::stderr().flush().context("flushing warning")?;
                     let mut answer = String::new();
                     io::stdin()
@@ -412,7 +415,7 @@ fn run() -> Result<()> {
                     Effort::XHigh,
                     Effort::Max,
                     Effort::Super,
-                    Effort::Extreme,
+                    Effort::Ultimate,
                 ] {
                     println!(
                         "  {:<8} {}",
@@ -436,7 +439,32 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{PulseMode, Settings, migrate_settings, settings_path};
+    #[test]
+    fn settings_written_before_the_rename_still_load() {
+        let old: Settings =
+            toml::from_str("effort = \"extreme\"\nextreme_acknowledged = true\n").expect("parse");
+        assert_eq!(old.effort, Effort::Ultimate);
+        assert!(old.ultimate_acknowledged);
+        let current: Settings = toml::from_str("effort = \"ultimate\"\n").expect("parse");
+        assert_eq!(current.effort, Effort::Ultimate);
+        let written = toml::to_string(&old).expect("write");
+        assert!(written.contains("ultimate"), "{written}");
+    }
+
+    #[test]
+    fn the_command_line_accepts_both_names() {
+        use clap::ValueEnum;
+        assert_eq!(
+            Effort::from_str("ultimate", true).ok(),
+            Some(Effort::Ultimate)
+        );
+        assert_eq!(
+            Effort::from_str("extreme", true).ok(),
+            Some(Effort::Ultimate)
+        );
+    }
+
+    use super::{Effort, PulseMode, Settings, migrate_settings, settings_path};
     use std::fs;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

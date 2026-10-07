@@ -54,6 +54,16 @@ pub(super) fn format_provider_error(error: &str) -> (String, String) {
     (status, message)
 }
 
+/// The effort name as typed, lower-cased, with the former name of the top tier mapped over.
+fn canonical_effort_name(requested: &str) -> String {
+    let name = requested.trim().to_ascii_lowercase();
+    if name == "extreme" {
+        "ultimate".to_owned()
+    } else {
+        name
+    }
+}
+
 impl App {
     pub(super) fn submit(&mut self) -> Result<()> {
         let value = self.input.trim().to_owned();
@@ -156,18 +166,19 @@ impl App {
         if let Some(requested) = value.strip_prefix("/effort ") {
             if let Some(index) = LEVELS
                 .iter()
-                .position(|level| effort_name(*level) == requested.trim().to_ascii_lowercase())
+                .position(|level| effort_name(*level) == canonical_effort_name(requested))
             {
                 self.picker_index = index;
                 let selected = LEVELS[index];
-                if selected == Effort::Extreme && !self.settings.extreme_acknowledged {
+                if selected == Effort::Ultimate && !self.settings.ultimate_acknowledged {
                     self.picker = false;
-                    self.confirm_extreme = true;
+                    self.confirm_ultimate = true;
                 } else {
                     self.apply_effort(selected)?;
                 }
             } else {
-                self.notice = "Choose low, medium, high, xhigh, max, super, or extreme.".to_owned();
+                self.notice =
+                    "Choose low, medium, high, xhigh, max, super, or ultimate.".to_owned();
             }
             self.finish_command(self.notice.clone());
             return Ok(());
@@ -698,6 +709,18 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| text.to_lowercase().contains("cancelled"))
         );
+    }
+
+    #[test]
+    fn effort_accepts_ultimate_and_its_old_name() {
+        for name in ["ultimate", "extreme"] {
+            let mut app = App::new(Settings::default());
+            app.trust_prompt = false;
+            app.settings.ultimate_acknowledged = true;
+            app.input = format!("/effort {name}");
+            app.submit().expect("submit");
+            assert_eq!(app.settings.effort, crate::Effort::Ultimate, "{name}");
+        }
     }
 
     #[test]

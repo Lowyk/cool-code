@@ -15,7 +15,7 @@ pub(super) const LEVELS: [Effort; 7] = [
     Effort::XHigh,
     Effort::Max,
     Effort::Super,
-    Effort::Extreme,
+    Effort::Ultimate,
 ];
 
 /// How long newly arrived text keeps glowing; matches the pulse fade in the renderer.
@@ -55,7 +55,7 @@ pub(super) struct App {
     pub(super) input: String,
     pub(super) picker: bool,
     pub(super) picker_index: usize,
-    pub(super) confirm_extreme: bool,
+    pub(super) confirm_ultimate: bool,
     pub(super) privacy_confirmation: Option<PrivacyPrompt>,
     pub(super) pending_privacy_message: Option<provider::ChatMessage>,
     pub(super) trust_prompt: bool,
@@ -327,7 +327,7 @@ impl App {
             input: String::new(),
             picker: false,
             picker_index,
-            confirm_extreme: false,
+            confirm_ultimate: false,
             privacy_confirmation: None,
             pending_privacy_message: None,
             trust_prompt: !workspace_trusted,
@@ -411,8 +411,8 @@ impl App {
 
     pub(super) fn choose_effort(&mut self) -> Result<()> {
         let selected = LEVELS[self.picker_index];
-        if matches!(selected, Effort::Extreme) && !self.settings.extreme_acknowledged {
-            self.confirm_extreme = true;
+        if matches!(selected, Effort::Ultimate) && !self.settings.ultimate_acknowledged {
+            self.confirm_ultimate = true;
             return Ok(());
         }
         self.apply_effort(selected)
@@ -422,7 +422,7 @@ impl App {
         self.settings.effort = effort;
         write_settings(&self.settings)?;
         self.picker = false;
-        self.confirm_extreme = false;
+        self.confirm_ultimate = false;
         self.effort_flash_until = Some(std::time::Instant::now() + Duration::from_secs(1));
         self.notice = format!("Effort set to {}.", effort_name(effort));
         Ok(())

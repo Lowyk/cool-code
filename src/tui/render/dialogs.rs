@@ -285,16 +285,16 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
     );
 }
 
-pub(super) fn draw_extreme_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect) {
+pub(super) fn draw_ultimate_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let popup = centered_rect(58, 34, area);
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" Confirm Extreme effort ")
+        .title(" Confirm Ultimate effort ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red))
         .style(Style::default().bg(Color::Rgb(34, 28, 29)));
     let body = Paragraph::new(vec![
-        Line::from("Extreme can consume substantially more tokens and cost more."),
+        Line::from("Ultimate can consume substantially more tokens and cost more."),
         Line::from("Dynamic workflows are not implemented in this early build."),
         Line::from(""),
         Line::from(vec![
