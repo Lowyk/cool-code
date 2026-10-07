@@ -270,8 +270,6 @@ pub(super) fn model_name(model_id: &str) -> String {
             } else {
                 format!("{name}{suffix}")
             });
-        } else if part.contains('.') {
-            output.push(part.to_owned());
         } else {
             let mut chars = part.chars();
             output.push(
@@ -488,6 +486,15 @@ mod tests {
         assert_eq!(model_name("qwen3.8-max"), "Qwen3.8 Max");
         assert_eq!(model_name("glm-5.3-flash"), "GLM 5.3 Flash");
         assert_eq!(model_name("openai/gpt-6-oss-120b"), "GPT 6 OSS 120b");
+    }
+
+    #[test]
+    fn name_parts_with_a_dot_are_capitalized_too() {
+        assert_eq!(model_name("kimi-k2.7-code"), "Kimi K2.7 Code");
+        assert_eq!(model_name("kimi-k3"), "Kimi K3");
+        // Parts that start with a digit are untouched.
+        assert_eq!(model_name("gemini-3.5-flash"), "Gemini 3.5 Flash");
+        assert_eq!(model_name("some-v1.5-mini"), "Some V1.5 Mini");
     }
 
     #[test]
