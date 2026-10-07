@@ -49,7 +49,8 @@ pub(super) fn effort_level(effort: Effort, x: f32, t: f32) -> f32 {
         // Equalizer: every column bounces on its own smoothed noise.
         Effort::Max => 0.25 + 0.75 * smooth_noise(x * 14.0, t * 2.2),
         Effort::Super => 0.5 + 0.35 * (std::f32::consts::TAU * (x * 2.0 - t * 0.6)).sin(),
-        Effort::Ultimate => 0.5 + 0.84 * (smooth_noise(x * 7.0, t * 2.0) - 0.5),
+        // The void's edge breathes slowly; the noise keeps neighbouring columns from moving in step.
+        Effort::Ultimate => 0.74 + 0.4 * (smooth_noise(x * 4.0, t * 0.5) - 0.5),
     };
     level.clamp(0.0, 1.0)
 }
@@ -74,7 +75,6 @@ fn hsv(hue: f32, saturation: f32, value: f32) -> Color {
     )
 }
 
-pub(super) const WHITE_HOT: Color = Color::Rgb(255, 246, 214);
 const PEAK_FALL_PER_SECOND: f32 = 0.35;
 
 /// Height of the Max equalizer's floating peak cap: the recent maximum, falling slowly.
@@ -110,7 +110,11 @@ fn lit_color(effort: Effort, x: f32, height: f32, t: f32) -> Color {
             Color::Rgb(255, 235, 140),
             wave(std::f32::consts::TAU * (x * 2.0 - t * 0.6)),
         ),
-        Effort::Ultimate => fire_color(1.0 - height),
+        Effort::Ultimate => blend_color(
+            Color::Rgb(150, 110, 235),
+            Color::Rgb(250, 248, 255),
+            wave(x * 6.0 - t * 1.4) * (0.4 + 0.6 * height),
+        ),
         Effort::Low => scale_color(effort_rgb(0, 0, 1.0), 0.9 + 0.12 * wave(t * 1.3)),
         Effort::Medium => glint(effort_rgb(1, 0, 1.0), x, t, 0.35),
         Effort::High => glint(
@@ -133,45 +137,90 @@ fn glint(base: Color, x: f32, t: f32, strength: f32) -> Color {
     blend_color(base, Color::Rgb(255, 255, 255), amount)
 }
 
-/// `heat` runs from 0 (flame tip) to 1 (white-hot base).
-fn fire_color(heat: f32) -> Color {
-    let stops = [
-        (0.0, Color::Rgb(120, 20, 40)),
-        (0.3, Color::Rgb(220, 50, 40)),
-        (0.55, Color::Rgb(255, 120, 40)),
-        (0.78, Color::Rgb(255, 205, 90)),
-        (1.0, WHITE_HOT),
-    ];
-    let heat = heat.clamp(0.0, 1.0);
-    for pair in stops.windows(2) {
-        let ((from_at, from), (to_at, to)) = (pair[0], pair[1]);
-        if heat <= to_at {
-            return blend_color(from, to, (heat - from_at) / (to_at - from_at));
+// The deepest, darkest violet of the void.
+const VOID_BASE: (u8, u8, u8) = (8, 6, 18);
+// Where the dark-matter clouds are thickest.
+const VOID_CLOUD: (u8, u8, u8) = (56, 26, 98);
+
+/// Background of a void cell: near black with slow clouds of dark matter drifting through it.
+fn void_color(column: usize, from_bottom: usize, t: f32) -> Color {
+    let cloud = fbm(
+        column as f32 * 0.22 + t * 0.12,
+        from_bottom as f32 * 0.8 - t * 0.07,
+    );
+    blend_color(
+        Color::Rgb(VOID_BASE.0, VOID_BASE.1, VOID_BASE.2),
+        Color::Rgb(VOID_CLOUD.0, VOID_CLOUD.1, VOID_CLOUD.2),
+        (cloud * cloud * 1.6).min(1.0) * 0.85,
+    )
+}
+
+/// A star inside the void: `None` while it is dark, otherwise its glyph and color.
+fn void_star(column: usize, from_bottom: usize, t: f32) -> Option<(&'static str, Color)> {
+    let (x, y) = (column as i32, from_bottom as i32);
+    if hash(x * 3 + 1, y * 5 + 2) < 0.86 {
+        return None;
+    }
+    let pace = 0.9 + 2.2 * hash(x, y + 40);
+    let phase = hash(x + 90, y) * std::f32::consts::TAU;
+    let brightness = wave(t * pace + phase);
+    if brightness < 0.2 {
+        return None;
+    }
+    let glyph = match brightness {
+        b if b < 0.5 => "·",
+        b if b < 0.85 => "✧",
+        _ => "✦",
+    };
+    let color = blend_color(
+        Color::Rgb(120, 112, 175),
+        Color::Rgb(255, 255, 255),
+        brightness,
+    );
+    Some((glyph, color))
+}
+
+/// Ultimate: a dark-matter void with white stars and a softly glowing edge.
+fn void_bar(width: usize, rows: u16, t: f32) -> Vec<Line<'static>> {
+    let rows = rows as usize;
+    let mut lines = vec![Vec::with_capacity(width); rows];
+    for column in 0..width {
+        let x = column as f32 / (width.saturating_sub(1).max(1)) as f32;
+        let level_eighths =
+            (effort_level(Effort::Ultimate, x, t) * (rows * 8) as f32).round() as usize;
+        let top_row = level_eighths.div_ceil(8).saturating_sub(1);
+        for (row, line) in lines.iter_mut().enumerate() {
+            let from_bottom = rows - 1 - row;
+            let fill = level_eighths.saturating_sub(from_bottom * 8).min(8);
+            let span = if fill == 0 {
+                Span::raw(" ")
+            } else if from_bottom == top_row {
+                // The rim: light bending around the edge of the void.
+                let glow = blend_color(
+                    Color::Rgb(124, 88, 226),
+                    Color::Rgb(255, 255, 255),
+                    0.45 + 0.4 * wave(x * 9.0 - t * 1.6),
+                );
+                Span::styled(GLYPHS[fill], Style::default().fg(glow))
+            } else {
+                let background = void_color(column, from_bottom, t);
+                match void_star(column, from_bottom, t) {
+                    Some((glyph, color)) => {
+                        Span::styled(glyph, Style::default().fg(color).bg(background))
+                    }
+                    None => Span::styled(" ", Style::default().bg(background)),
+                }
+            };
+            line.push(span);
         }
     }
-    WHITE_HOT
-}
-
-/// Rising flame surface: the column's flame height plus tongues of noise scrolling upward.
-fn flame_surface(x: f32, y: f32, t: f32) -> f32 {
-    effort_level(Effort::Ultimate, x, t) + 0.35 * (fbm(x * 5.0, y * 3.0 - t * 2.4) - 0.5)
-}
-
-fn ember_at(column: usize, row_from_bottom: usize, rows: usize, t: f32) -> Option<&'static str> {
-    (0..3).find_map(|k| {
-        let seed = (column * 7 + k * 131) as i32;
-        let life = (t * (0.45 + 0.2 * hash(seed, 3)) + hash(seed, 9)).fract();
-        let y = 0.35 + life * 0.75;
-        let row = (y * rows as f32) as usize;
-        (hash(seed, 1) > 0.82 && row == row_from_bottom && life < 0.85).then_some(if k % 2 == 0 {
-            "·"
-        } else {
-            "'"
-        })
-    })
+    lines.into_iter().map(Line::from).collect()
 }
 
 pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> Vec<Line<'static>> {
+    if effort == Effort::Ultimate {
+        return void_bar(width, rows, t);
+    }
     let rows = rows as usize;
     let mut lines = vec![Vec::with_capacity(width); rows];
     for column in 0..width {
@@ -181,16 +230,7 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
         let level_eighths = (level * (rows * 8) as f32).round() as usize;
         for (row, line) in lines.iter_mut().enumerate() {
             let from_bottom = rows - 1 - row;
-            let cell_bottom = from_bottom as f32 / rows as f32;
-            let cell_mid = (from_bottom as f32 + 0.5) / rows as f32;
-            let fill = if effort == Effort::Ultimate {
-                let surface = flame_surface(x, cell_mid, t);
-                (((surface - cell_bottom) * rows as f32 * 8.0)
-                    .round()
-                    .clamp(0.0, 8.0)) as usize
-            } else {
-                level_eighths.saturating_sub(from_bottom * 8).min(8)
-            };
+            let fill = level_eighths.saturating_sub(from_bottom * 8).min(8);
             let edge = if column == 0 || column + 1 == width {
                 0.9
             } else {
@@ -198,13 +238,7 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
             };
             let span = if fill > 0 {
                 let height = (from_bottom as f32 + fill as f32 / 8.0) / rows as f32;
-                let color = if effort == Effort::Ultimate {
-                    let surface = flame_surface(x, cell_mid, t).max(0.05);
-                    let heat = (1.0 - cell_bottom / surface) * surface.min(1.0) * 1.15;
-                    fire_color(heat)
-                } else {
-                    lit_color(effort, x, height, t)
-                };
+                let color = lit_color(effort, x, height, t);
                 Span::styled(GLYPHS[fill], Style::default().fg(scale_color(color, edge)))
             } else if effort == Effort::Max
                 && peak_eighths > level_eighths
@@ -214,10 +248,6 @@ pub(super) fn selected_bar(effort: Effort, width: usize, rows: u16, t: f32) -> V
                     "▔",
                     Style::default().fg(hsv(x * 0.85 + t * 0.12, 0.25, 1.0)),
                 )
-            } else if effort == Effort::Ultimate
-                && let Some(spark) = ember_at(column, from_bottom, rows, t)
-            {
-                Span::styled(spark, Style::default().fg(fire_color(0.7)))
             } else {
                 Span::raw(" ")
             };
@@ -374,7 +404,7 @@ pub(super) fn effort_style(effort: Effort, selected: bool) -> Style {
         Effort::Max => Color::Magenta,
         Effort::XHigh => Color::LightBlue,
         Effort::Super => Color::Yellow,
-        Effort::Ultimate => Color::Red,
+        Effort::Ultimate => Color::LightMagenta,
         _ => Color::White,
     };
     let style = Style::default().fg(color);
@@ -393,7 +423,7 @@ pub(super) fn effort_rgb(index: usize, _animation_tick: usize, brightness: f32) 
         Effort::Max => (190, 105, 210),
         Effort::XHigh => (155, 125, 240),
         Effort::Super => (241, 184, 63),
-        Effort::Ultimate => (229, 66, 74),
+        Effort::Ultimate => (170, 140, 255),
     };
     scale_rgb(color, brightness)
 }
@@ -462,13 +492,12 @@ pub(super) fn gradient_name(
             Color::Rgb(255, 225, 100),
         ],
         Effort::Ultimate => &[
-            Color::Rgb(255, 180, 180),
-            Color::LightRed,
-            Color::Red,
-            Color::Rgb(210, 20, 30),
-            Color::Rgb(145, 0, 20),
-            Color::Rgb(255, 90, 75),
-            Color::Red,
+            Color::Rgb(255, 255, 255),
+            Color::Rgb(205, 190, 255),
+            Color::Rgb(150, 120, 235),
+            Color::Rgb(98, 70, 185),
+            Color::Rgb(150, 120, 235),
+            Color::Rgb(205, 190, 255),
         ],
         _ => unreachable!(),
     };
@@ -500,7 +529,7 @@ pub(super) fn effort_label(effort: Effort) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{WHITE_HOT, bar_rows, effort_level, effort_rgb, lit_color, max_peak, selected_bar};
+    use super::{bar_rows, effort_level, effort_rgb, lit_color, max_peak, selected_bar};
     use crate::tui::render::draw;
     use crate::tui::state::App;
     use crate::{Effort, Settings};
@@ -665,30 +694,112 @@ mod tests {
         }
     }
 
-    fn extreme_frames() -> Vec<Vec<ratatui::text::Line<'static>>> {
-        (0..60)
-            .map(|step| selected_bar(Effort::Ultimate, 30, 4, step as f32 * 0.11))
+    fn void_frames() -> Vec<Vec<ratatui::text::Line<'static>>> {
+        (0..80)
+            .map(|step| selected_bar(Effort::Ultimate, 30, 4, step as f32 * 0.13))
             .collect()
     }
 
+    fn spans<'a>(
+        frames: &'a [Vec<ratatui::text::Line<'static>>],
+    ) -> impl Iterator<Item = &'a ratatui::text::Span<'static>> {
+        frames.iter().flatten().flat_map(|line| &line.spans)
+    }
+
+    fn rgb(color: Option<ratatui::style::Color>) -> (u8, u8, u8) {
+        match color {
+            Some(ratatui::style::Color::Rgb(r, g, b)) => (r, g, b),
+            other => panic!("expected an RGB color, got {other:?}"),
+        }
+    }
+
+    const STARS: [&str; 3] = ["·", "✧", "✦"];
+
     #[test]
-    fn extreme_fire_throws_embers_above_the_flames() {
-        let ember = extreme_frames()
-            .iter()
-            .flatten()
-            .flat_map(|line| &line.spans)
-            .any(|span| span.content == "·" || span.content == "'");
-        assert!(ember);
+    fn the_void_is_scattered_with_white_stars() {
+        let frames = void_frames();
+        let bright = spans(&frames)
+            .filter(|span| STARS.contains(&span.content.as_ref()))
+            .filter(|span| {
+                let (r, g, b) = rgb(span.style.fg);
+                r > 215 && g > 215 && b > 225
+            })
+            .count();
+        assert!(bright > 20, "{bright} white stars in 80 frames");
     }
 
     #[test]
-    fn extreme_fire_has_a_white_hot_core() {
-        let hot = extreme_frames()
-            .iter()
-            .flatten()
-            .flat_map(|line| &line.spans)
-            .any(|span| span.style.fg == Some(WHITE_HOT));
-        assert!(hot);
+    fn the_stars_twinkle_instead_of_holding_still() {
+        let frames = void_frames();
+        let at = |frame: usize| {
+            frames[frame]
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let distinct = (0..frames.len())
+            .map(at)
+            .collect::<std::collections::HashSet<_>>();
+        assert!(distinct.len() > 40, "{} distinct frames", distinct.len());
+        let shades = spans(&frames)
+            .filter(|span| STARS.contains(&span.content.as_ref()))
+            .map(|span| rgb(span.style.fg))
+            .collect::<std::collections::HashSet<_>>();
+        assert!(shades.len() > 8, "{} star shades", shades.len());
+    }
+
+    #[test]
+    fn the_void_itself_is_dark_and_has_no_fire() {
+        let frames = void_frames();
+        for span in spans(&frames) {
+            let Some(background) = span.style.bg else {
+                continue;
+            };
+            let (r, g, b) = rgb(Some(background));
+            assert!(r < 80 && g < 50 && b < 130, "void cell {r},{g},{b}");
+            assert!(b >= r, "the void leans violet, not red: {r},{g},{b}");
+        }
+        assert!(
+            !spans(&frames).any(|span| {
+                span.style.fg.is_some_and(|color| {
+                    let (r, g, b) = rgb(Some(color));
+                    r > 200 && g < 140 && b < 90
+                })
+            }),
+            "nothing orange or red remains"
+        );
+    }
+
+    #[test]
+    fn the_edge_of_the_void_glows_brighter_than_its_depths() {
+        let frames = void_frames();
+        let brightness = |color: Option<ratatui::style::Color>| {
+            let (r, g, b) = rgb(color);
+            r as u32 + g as u32 + b as u32
+        };
+        // The topmost lit cell of a column is its rim: a bright, bg-less glyph.
+        let rims = spans(&frames)
+            .filter(|span| span.style.bg.is_none() && span.content.as_ref() != " ")
+            .filter(|span| !STARS.contains(&span.content.as_ref()))
+            .map(|span| brightness(span.style.fg))
+            .collect::<Vec<_>>();
+        assert!(!rims.is_empty());
+        let mean = rims.iter().sum::<u32>() as f32 / rims.len() as f32;
+        assert!(mean > 330.0, "rim brightness {mean}");
+    }
+
+    #[test]
+    fn the_void_bar_has_the_requested_shape() {
+        for (width, rows) in [(1, 1), (3, 1), (30, 4), (60, 2)] {
+            let lines = selected_bar(Effort::Ultimate, width, rows, 1.0);
+            assert_eq!(lines.len(), rows as usize);
+            assert!(lines.iter().all(|line| line.spans.len() == width));
+        }
     }
 
     #[test]
