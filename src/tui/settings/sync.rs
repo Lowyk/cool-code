@@ -133,7 +133,7 @@ impl App {
                 )
                 .map_err(|error| format!("{error:#}"))
                 .and_then(|value| {
-                    let models = parse_models(&value);
+                    let models = crate::endpoints::parse_listed_models(&value);
                     if models.is_empty() {
                         Err(format!(
                             "ChatGPT returned no usable models ({})",

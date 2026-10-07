@@ -195,6 +195,32 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
     models
 }
 
+/// The models a ChatGPT account lists for use: everything except what the backend itself marks
+/// as hidden (`visibility` of `hide` or `none`), such as internal helper models.
+pub(crate) fn parse_listed_models(value: &Value) -> Vec<FetchedModel> {
+    let hidden: std::collections::HashSet<&str> = value
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .get("visibility")
+                .and_then(Value::as_str)
+                .is_some_and(|visibility| matches!(visibility, "hide" | "none"))
+        })
+        .filter_map(|entry| {
+            entry
+                .get("slug")
+                .or_else(|| entry.get("id"))
+                .and_then(Value::as_str)
+        })
+        .collect();
+    let mut models = parse_models(value);
+    models.retain(|model| !hidden.contains(model.id.as_str()));
+    models
+}
+
 /// OpenRouter's `/credits` reply: `{"data": {"total_credits": 10.0, "total_usage": 3.2}}`.
 fn openrouter_credits(value: &Value) -> Option<LimitLine> {
     let total = value.pointer("/data/total_credits")?.as_f64()?;
@@ -583,6 +609,26 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_chatgpt_account_does_not_list_models_the_backend_marks_hidden() {
+        let value = serde_json::json!({"models": [
+            {"slug": "model-a", "visibility": "list"},
+            {"slug": "model-b"},
+            {"slug": "helper-x", "visibility": "hide"},
+            {"slug": "helper-y", "visibility": "none"}
+        ]});
+        let ids: Vec<_> = super::parse_listed_models(&value)
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
+        assert_eq!(ids, ["model-a", "model-b"]);
+        assert_eq!(
+            super::parse_models(&value).len(),
+            4,
+            "other providers keep everything"
+        );
+    }
+
     #[test]
     fn an_empty_model_reply_is_described_without_its_values() {
         let value = serde_json::json!({"models": [], "etag": "secret-looking-value"});
