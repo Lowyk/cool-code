@@ -94,6 +94,13 @@ impl App {
     /// Fetches the provider's model list in the background. With `promote`, a draft provider
     /// that now has models and a key becomes an enabled provider.
     pub(in crate::tui) fn start_models_fetch(&mut self, index: usize, promote: bool) {
+        // A sign-in saved before models could be listed has no endpoint yet; it is always the same.
+        if let Some(profile) = self.settings.providers.get_mut(index)
+            && profile.adapter == "chatgpt"
+            && profile.models_url.is_none()
+        {
+            profile.models_url = Some(format!("{}/models", crate::chatgpt_auth::API_BASE));
+        }
         let Some(profile) = self.settings.providers.get(index) else {
             return;
         };
@@ -369,6 +376,26 @@ mod tests {
                 context: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_chatgpt_sign_in_saved_before_model_listing_can_still_refresh() {
+        let mut app = App::new(crate::Settings::default());
+        app.settings.providers = vec![crate::ProviderProfile {
+            id: "old-chatgpt".to_owned(),
+            name: "ChatGPT Plus/Pro (unofficial)".to_owned(),
+            adapter: "chatgpt".to_owned(),
+            base_url: Some(crate::chatgpt_auth::API_BASE.to_owned()),
+            model: "gpt-5".to_owned(),
+            ..Default::default()
+        }];
+        app.start_models_fetch(0, false);
+        assert_eq!(app.spawned_tasks, 1, "{}", app.notice);
+        assert!(app.models_loading.contains("old-chatgpt"));
+        assert_eq!(
+            app.settings.providers[0].models_url.as_deref(),
+            Some("https://chatgpt.com/backend-api/codex/models")
+        );
     }
 
     #[test]
