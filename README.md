@@ -18,9 +18,13 @@ Cool Code is a terminal UI where an AI model reads your repository, proposes edi
 
 ## Install
 
-You need a recent stable [Rust toolchain](https://rustup.rs) (the 2024 edition, so Rust 1.88 or newer). Windows, macOS and Linux are all tested in CI.
+**From a release.** Each tagged release has archives for Windows, macOS (Apple silicon and Intel) and Linux, with a checksum file. Download the one for your system from the [releases page](https://github.com/Lowyk/cool-code/releases), unpack it and put `harness` somewhere on your `PATH`.
+
+**From source.** You need a recent stable [Rust toolchain](https://rustup.rs) (the 2024 edition, so Rust 1.88 or newer). Windows, macOS and Linux are all tested in CI.
 
 ```sh
+cargo install --git https://github.com/Lowyk/cool-code   # installs `harness`
+# or, to work on it:
 git clone https://github.com/Lowyk/cool-code
 cd cool-code
 cargo build --release
@@ -153,7 +157,7 @@ Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, M
 
 ## Contributing and layout
 
-See [docs/architecture.md](docs/architecture.md) for how the pieces fit together. Before sending a change, run `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test`; CI runs the same on Linux, Windows and macOS.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/architecture.md](docs/architecture.md) for how the pieces fit together, [CHANGELOG.md](CHANGELOG.md) for what changed, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Before sending a change, run `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test`; CI runs the same on Linux, Windows and macOS.
 
 ## License
 
