@@ -79,8 +79,9 @@ impl App {
 
     /// Opens the browser and waits for the sign-in to finish in the background.
     pub(in crate::tui) fn start_chatgpt_login(&mut self, reauth: Option<String>) {
+        let palette = crate::tui::theme::login_palette(self.settings.theme);
         let flow = match new_flow() {
-            Ok(flow) => flow,
+            Ok(flow) => flow.with_palette(palette),
             Err(error) => {
                 self.chatgpt_login = None;
                 self.notice = format!("{error:#}");
