@@ -159,6 +159,8 @@ pub(super) struct ProviderPreset {
     /// Built-in endpoint paths, relative to `base_url`, for listing models and reading limits.
     pub(super) models_path: Option<&'static str>,
     pub(super) limits_path: Option<&'static str>,
+    /// Keys for this provider always start with this; used to catch pasted keys that are mangled.
+    pub(super) key_prefix: Option<&'static str>,
 }
 
 pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
@@ -171,6 +173,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models: &[],
         models_path: None,
         limits_path: None,
+        key_prefix: None,
     },
     ProviderPreset {
         id: "anthropic",
@@ -181,6 +184,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models: &[],
         models_path: None,
         limits_path: None,
+        key_prefix: None,
     },
     ProviderPreset {
         id: "google",
@@ -195,6 +199,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         ],
         models_path: None,
         limits_path: None,
+        key_prefix: None,
     },
     ProviderPreset {
         id: "openrouter",
@@ -205,6 +210,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models: &[],
         models_path: None,
         limits_path: None,
+        key_prefix: None,
     },
     ProviderPreset {
         id: "multiai",
@@ -215,6 +221,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models: &[],
         models_path: Some("models"),
         limits_path: Some("subscription/limits"),
+        key_prefix: Some("ma-live-"),
     },
     ProviderPreset {
         id: "anthropic-custom",
@@ -225,6 +232,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models: &[],
         models_path: None,
         limits_path: None,
+        key_prefix: None,
     },
     ProviderPreset {
         id: "openai-custom",
@@ -235,6 +243,7 @@ pub(super) const PROVIDER_PRESETS: [ProviderPreset; 7] = [
         models: &[],
         models_path: None,
         limits_path: None,
+        key_prefix: None,
     },
 ];
 

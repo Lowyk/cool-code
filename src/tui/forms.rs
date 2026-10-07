@@ -163,6 +163,18 @@ fn provider_endpoints(
     ))
 }
 
+/// Cleans a pasted API key: surrounding whitespace and quotes, a leading "Bearer ", and stray
+/// whitespace inside the key are removed, because providers reject keys carrying them.
+pub(super) fn normalize_api_key(raw: &str) -> String {
+    let mut key = raw.trim();
+    if key.len() >= 7 && key[..7].eq_ignore_ascii_case("bearer ") {
+        key = key[7..].trim();
+    }
+    let quote = |c: char| matches!(c, '"' | '\'' | '`');
+    key = key.trim_matches(quote);
+    key.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 /// Custom OpenAI-compatible providers can declare their own models and limits endpoints.
 pub(super) fn has_endpoint_fields(form: &ProviderDraft) -> bool {
     PROVIDER_PRESETS[form.preset].id == "openai-custom"
@@ -273,7 +285,7 @@ impl App {
         } else {
             draft.alias.trim().to_owned()
         };
-        let api_key = draft.api_key.trim().to_owned();
+        let api_key = normalize_api_key(&draft.api_key);
         let preset = &PROVIDER_PRESETS[draft.preset];
         let models = draft
             .models
@@ -317,6 +329,16 @@ impl App {
         // draft until they have been fetched.
         let fetch_after_save = models_url.is_some() && models.is_empty();
         let as_draft = as_draft || fetch_after_save;
+        if let Some(prefix) = preset.key_prefix
+            && !api_key.is_empty()
+            && !api_key.starts_with(prefix)
+        {
+            self.notice = format!(
+                "{} keys start with {prefix}. Check the pasted key for quotes or a missing first character.",
+                preset.label
+            );
+            return Ok(());
+        }
         if name.is_empty() {
             self.notice = "Add an alias for this provider.".to_owned();
             return Ok(());
@@ -1202,6 +1224,53 @@ mod tests {
         let fresh = chosen_form("openai");
         terminal.draw(|frame| draw(frame, &fresh, 0)).expect("draw");
         assert!(!text(&terminal).contains("leave blank to keep"));
+    }
+
+    #[test]
+    fn pasted_keys_are_cleaned_before_saving() {
+        let clean = super::normalize_api_key;
+        assert_eq!(clean("ma-live-abc123"), "ma-live-abc123");
+        assert_eq!(clean("  ma-live-abc123 \n"), "ma-live-abc123");
+        assert_eq!(clean("\"ma-live-abc123\""), "ma-live-abc123");
+        assert_eq!(clean("'ma-live-abc123'"), "ma-live-abc123");
+        assert_eq!(clean("`ma-live-abc123`"), "ma-live-abc123");
+        assert_eq!(clean("Bearer ma-live-abc123"), "ma-live-abc123");
+        assert_eq!(clean("bearer \"ma-live-abc123\""), "ma-live-abc123");
+        assert_eq!(clean("ma-live-abc 123"), "ma-live-abc123");
+        assert_eq!(clean(""), "");
+        assert_eq!(clean("   "), "");
+    }
+
+    #[test]
+    fn a_multiai_key_without_its_prefix_is_refused_with_a_hint() {
+        let mut app = chosen_form("multiai");
+        app.provider_form.as_mut().unwrap().api_key = "not-a-multiai-key".to_owned();
+        app.save_provider(false).expect("save");
+        assert!(app.settings.providers.is_empty());
+        assert!(app.notice.contains("ma-live-"), "{}", app.notice);
+        assert!(
+            app.provider_form.is_some(),
+            "the form stays open so the key can be fixed"
+        );
+        // Quotes around an otherwise valid key are cleaned, so they never reach the check.
+        app.provider_form.as_mut().unwrap().api_key = "\"wrong-shape\"".to_owned();
+        app.save_provider(false).expect("save");
+        assert!(app.settings.providers.is_empty());
+    }
+
+    #[test]
+    fn the_key_label_shows_the_expected_prefix() {
+        let app = chosen_form("multiai");
+        let mut terminal = Terminal::new(TestBackend::new(110, 40)).expect("terminal");
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        let shown = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(shown.contains("starts with ma-live-"), "{shown}");
     }
 
     #[test]
