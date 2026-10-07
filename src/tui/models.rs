@@ -270,6 +270,8 @@ pub(super) fn model_name(model_id: &str) -> String {
             } else {
                 format!("{name}{suffix}")
             });
+        } else if is_parameter_size(part) {
+            output.push(part.to_ascii_uppercase());
         } else {
             let mut chars = part.chars();
             output.push(
@@ -281,7 +283,38 @@ pub(super) fn model_name(model_id: &str) -> String {
         }
         index += 1;
     }
-    output.join(" ")
+    let mut name = String::new();
+    for (position, token) in output.iter().enumerate() {
+        if position > 0 {
+            let hyphenated = joins_with_hyphen(&output[0], &output[position - 1], token);
+            name.push(if hyphenated { '-' } else { ' ' });
+        }
+        name.push_str(token);
+    }
+    name
+}
+
+/// Whether `token` is a parameter count such as `120b`, `70B` or `1.5b`.
+fn is_parameter_size(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    let Some(number) = lower.strip_suffix(['b', 'k', 'm']) else {
+        return false;
+    };
+    let mut halves = number.split('.');
+    let digits = |half: Option<&str>| {
+        half.is_some_and(|text| !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()))
+    };
+    digits(halves.next())
+        && (halves.clone().next().is_none() || digits(halves.next()))
+        && halves.next().is_none()
+}
+
+/// Series whose display names keep a hyphen between words (`GPT-6 Astra`, `Flash-Lite`).
+fn joins_with_hyphen(first: &str, previous: &str, next: &str) -> bool {
+    first.starts_with("Qwen")
+        || (previous == "GPT" && (next == "OSS" || next.starts_with(|c: char| c.is_ascii_digit())))
+        || (previous == "OSS" && is_parameter_size(next))
+        || (previous == "Flash" && next == "Lite")
 }
 
 impl App {
@@ -483,9 +516,18 @@ mod tests {
     fn model_names_apply_series_styling_and_number_runs() {
         assert_eq!(model_name("claude-opus-5-5"), "Claude Opus 5.5");
         assert_eq!(model_name("gemini-3.8-flash"), "Gemini 3.8 Flash");
-        assert_eq!(model_name("qwen3.8-max"), "Qwen3.8 Max");
+        assert_eq!(model_name("qwen3.8-max"), "Qwen3.8-Max");
         assert_eq!(model_name("glm-5.3-flash"), "GLM 5.3 Flash");
-        assert_eq!(model_name("openai/gpt-6-oss-120b"), "GPT 6 OSS 120b");
+        assert_eq!(model_name("openai/gpt-oss-120b"), "GPT-OSS-120B");
+        assert_eq!(model_name("gpt-6-astra"), "GPT-6 Astra");
+        assert_eq!(model_name("gpt-6.1-sol"), "GPT-6.1 Sol");
+        assert_eq!(model_name("gpt-6-1-sol"), "GPT-6.1 Sol");
+        assert_eq!(
+            model_name("gemini-flash-lite-latest"),
+            "Gemini Flash-Lite Latest"
+        );
+        assert_eq!(model_name("gemini-flash-latest"), "Gemini Flash Latest");
+        assert_eq!(model_name("llama-3-70b-instruct"), "Llama 3 70B Instruct");
     }
 
     #[test]
