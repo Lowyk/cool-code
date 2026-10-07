@@ -20,7 +20,7 @@ mod wordmark;
 
 use crate::policy::MODES;
 use crate::tui::render::draw;
-use crate::tui::state::{App, LEVELS, TranscriptEntry, TranscriptKind};
+use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
 use crate::{Effort, provider, read_settings, write_settings};
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -76,11 +76,20 @@ fn run_app(
             || app.cursor.get(),
         )?;
         // Redraw faster while the effort picker animates or a response is streaming.
-        let frame_interval = Duration::from_millis(if app.picker || app.pending.is_some() {
-            40
-        } else {
-            100
-        });
+        let flashing = app
+            .effort_flash_until
+            .is_some_and(|until| std::time::Instant::now() < until);
+        let frame_interval = Duration::from_millis(
+            if app.picker
+                || app.pending.is_some()
+                || flashing
+                || app.settings.effort_always_animated
+            {
+                40
+            } else {
+                100
+            },
+        );
         if !event::poll(frame_interval).context("waiting for terminal input")? {
             continue;
         }
@@ -253,16 +262,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             _ => {}
         }
     } else if app.picker {
-        match key.code {
-            KeyCode::Left => app.picker_index = app.picker_index.saturating_sub(1),
-            KeyCode::Right => app.picker_index = (app.picker_index + 1).min(LEVELS.len() - 1),
-            KeyCode::Enter => app.choose_effort()?,
-            KeyCode::Esc => {
-                app.picker = false;
-                app.notice = "Effort unchanged.".to_owned();
-            }
-            _ => {}
-        }
+        app.handle_effort_picker_key(key)?;
     } else if app.stats_view.is_some() {
         app.handle_stats_key(key)?;
     } else if app.settings_view.is_some() {

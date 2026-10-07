@@ -11,11 +11,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-/// One row per theme, then the three backdrop switches.
-pub(super) const ROWS: usize = THEMES.len() + 3;
+/// One row per theme, then the three backdrop switches and the effort-name switch.
+pub(super) const ROWS: usize = THEMES.len() + 4;
 const WELCOME_BACKDROP: usize = THEMES.len();
 const CHAT_BACKDROP: usize = THEMES.len() + 1;
 const DIM_IN_CHAT: usize = THEMES.len() + 2;
+const ANIMATE_EFFORT: usize = THEMES.len() + 3;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -105,6 +106,18 @@ pub(super) fn draw_appearance(
             switch(value),
         ]));
     }
+    lines.push(Line::from(""));
+    lines.push(heading("Effort"));
+    lines.push(Line::from(vec![
+        marker(ANIMATE_EFFORT),
+        Span::raw("  "),
+        Span::styled(
+            "Animate effort name".to_string(),
+            label_style(ANIMATE_EFFORT),
+        ),
+        Span::raw("  "),
+        switch(app.settings.effort_always_animated),
+    ]));
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -125,8 +138,12 @@ impl App {
                     CHAT_BACKDROP => {
                         self.settings.backdrop_in_chat = !self.settings.backdrop_in_chat;
                     }
-                    _ => {
+                    DIM_IN_CHAT => {
                         self.settings.dim_backdrop_in_chat = !self.settings.dim_backdrop_in_chat;
+                    }
+                    _ => {
+                        self.settings.effort_always_animated =
+                            !self.settings.effort_always_animated;
                     }
                 }
                 write_settings(&self.settings)?;
@@ -196,6 +213,17 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.settings.dim_backdrop_in_chat, !dim);
         assert_eq!(app.settings.background_animation, !welcome);
+    }
+
+    #[test]
+    fn the_effort_name_animation_switch_is_off_by_default_and_toggles() {
+        let mut app = app();
+        assert!(!app.settings.effort_always_animated);
+        down(&mut app, crate::tui::theme::THEMES.len() + 3);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings.effort_always_animated);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.settings.effort_always_animated);
     }
 
     #[test]

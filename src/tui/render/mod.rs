@@ -4,7 +4,7 @@ mod motion;
 
 use crate::policy::mode_label;
 use crate::tui::backdrop::{backdrop_enabled, draw_backdrop};
-use crate::tui::effort::{draw_effort_picker, effort_name, effort_style, gradient_name};
+use crate::tui::effort::draw_effort_picker;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::draw_model_picker;
 use crate::tui::render::dialogs::{
@@ -16,7 +16,7 @@ use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::stats_view::draw_stats;
 use crate::tui::wordmark::{cool_code_wordmark, tagline_lines, wordmark_height};
-use crate::{Effort, PulseMode, provider};
+use crate::{PulseMode, provider};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -388,21 +388,8 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         .as_deref()
         .map(|id| selected_model_name(&app.settings, id))
         .unwrap_or_else(|| "no model selected".to_owned());
-    let effort_is_flashing = app
-        .effort_flash_until
-        .is_some_and(|until| std::time::Instant::now() < until);
-    let effort_spans = if effort_is_flashing
-        && matches!(
-            app.settings.effort,
-            Effort::Max | Effort::XHigh | Effort::Super | Effort::Ultimate
-        ) {
-        gradient_name(app.settings.effort, true, animation_tick)
-    } else {
-        vec![Span::styled(
-            effort_name(app.settings.effort),
-            effort_style(app.settings.effort, effort_is_flashing),
-        )]
-    };
+    let effort_spans =
+        crate::tui::effort::status_effort_spans(app, animation_tick, std::time::Instant::now());
     let mut status_spans = vec![
         mode_span(&app.settings.permission_mode, true),
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),

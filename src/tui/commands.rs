@@ -87,7 +87,7 @@ impl App {
         }
 
         if value == "/effort" {
-            self.picker = true;
+            self.open_effort_picker();
             self.finish_command("Opened the effort selector.");
             return Ok(());
         }

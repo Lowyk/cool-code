@@ -54,6 +54,10 @@ pub(super) struct App {
     pub(super) input: String,
     pub(super) picker: bool,
     pub(super) picker_index: usize,
+    /// The workflows checkbox in the effort picker, before it is confirmed.
+    pub(super) picker_workflows: bool,
+    /// Whether the picker cursor is on the workflows checkbox instead of a column.
+    pub(super) picker_focus_workflows: bool,
     pub(super) confirm_ultimate: bool,
     pub(super) privacy_confirmation: Option<PrivacyPrompt>,
     pub(super) pending_privacy_message: Option<provider::ChatMessage>,
@@ -334,6 +338,8 @@ impl App {
             input: String::new(),
             picker: false,
             picker_index,
+            picker_workflows: false,
+            picker_focus_workflows: false,
             confirm_ultimate: false,
             privacy_confirmation: None,
             pending_privacy_message: None,
@@ -415,7 +421,8 @@ impl App {
     }
 
     pub(super) fn choose_effort(&mut self) -> Result<()> {
-        let selected = LEVELS[self.picker_index];
+        let levels = self.picker_levels();
+        let selected = levels[self.picker_index.min(levels.len() - 1)];
         if self.workflow_tier_is_locked(selected) {
             return Ok(());
         }
@@ -423,6 +430,10 @@ impl App {
             self.confirm_ultimate = true;
             return Ok(());
         }
+        // The checkbox only belongs to the plain levels; the tiers are workflows by definition.
+        self.settings.workflows = self.picker_workflows
+            && self.settings.dynamic_workflows
+            && matches!(selected, Effort::Low | Effort::Medium | Effort::High);
         self.apply_effort(selected)
     }
 
@@ -447,7 +458,9 @@ impl App {
         write_settings(&self.settings)?;
         self.picker = false;
         self.confirm_ultimate = false;
-        self.effort_flash_until = Some(std::time::Instant::now() + Duration::from_secs(1));
+        self.effort_flash_until = Some(
+            std::time::Instant::now() + Duration::from_secs_f32(crate::tui::effort::FLASH_SECONDS),
+        );
         self.notice = format!("Effort set to {}.", effort_name(effort));
         Ok(())
     }

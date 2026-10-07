@@ -5,7 +5,7 @@ use crate::tui::pickers::model::ModelPicker;
 use crate::tui::render::mode_span;
 use crate::tui::settings::reset::ResetStage;
 use crate::tui::settings::{Focus, SettingsView};
-use crate::tui::state::{App, LEVELS};
+use crate::tui::state::App;
 use crate::{PulseMode, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
@@ -146,11 +146,7 @@ impl App {
             KeyCode::Enter => match view.row {
                 0 => self.model_picker = Some(ModelPicker::new(&self.settings)),
                 1 => {
-                    self.picker_index = LEVELS
-                        .iter()
-                        .position(|level| *level == self.settings.effort)
-                        .unwrap_or(0);
-                    self.picker = true;
+                    self.open_effort_picker();
                 }
                 2 => {
                     self.mode_index = MODES
