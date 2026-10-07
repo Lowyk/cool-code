@@ -12,11 +12,14 @@ const LIMITS_FRESH_FOR: Duration = Duration::from_secs(60);
 pub(in crate::tui) enum TaskResult {
     Models {
         provider_id: String,
+        /// The endpoint that was fetched; the result is dropped if it has since changed.
+        url: String,
         promote: bool,
         result: Result<Vec<FetchedModel>, String>,
     },
     Limits {
         provider_id: String,
+        url: String,
         result: Result<Vec<LimitLine>, String>,
     },
 }
@@ -33,20 +36,38 @@ pub(in crate::tui) struct LimitsEntry {
     pub(in crate::tui) state: LimitsState,
 }
 
-/// The key a provider's requests use: its credential-store entry, then `HARNESS_API_KEY`.
+/// The key a fetch sends: the provider's credential-store entry, and only when the user
+/// explicitly asked (`allow_env`) the global `HARNESS_API_KEY`. Automatic fetches never use the
+/// environment key, which may belong to a different vendor.
 #[cfg(not(test))]
-fn load_key(provider_id: &str) -> Option<String> {
+fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
     crate::secrets::load(provider_id)
         .ok()
         .flatten()
-        .or_else(|| std::env::var("HARNESS_API_KEY").ok())
+        .or_else(|| {
+            allow_env
+                .then(|| std::env::var("HARNESS_API_KEY").ok())
+                .flatten()
+        })
         .filter(|key| !key.trim().is_empty())
 }
 
-// Tests must never read the real credential store; a provider named `no-key` has none.
+// Tests must never read the real credential store. A provider named `no-key` has no key, and
+// one named `env-only` has only the environment key.
 #[cfg(test)]
-fn load_key(provider_id: &str) -> Option<String> {
-    (provider_id != "no-key").then(|| "test-key".to_owned())
+fn load_key(provider_id: &str, allow_env: bool) -> Option<String> {
+    match provider_id {
+        "no-key" => None,
+        "env-only" => allow_env.then(|| "env-key".to_owned()),
+        _ => Some("test-key".to_owned()),
+    }
+}
+
+/// Stored endpoints are re-checked before every request: a hand-edited or imported config must
+/// not be able to send the API key to another host.
+fn endpoint_is_trusted(profile: &crate::ProviderProfile, url: &str) -> bool {
+    let base = profile.base_url.as_deref().unwrap_or_default();
+    crate::endpoints::resolve_endpoint(base, url).is_ok_and(|resolved| resolved == url)
 }
 
 impl App {
@@ -77,7 +98,14 @@ impl App {
         };
         let id = profile.id.clone();
         let name = profile.name.clone();
-        let Some(key) = load_key(&id) else {
+        if !endpoint_is_trusted(profile, &url) {
+            self.notice = format!(
+                "{name}: the models endpoint is not on this provider's host, so it was not contacted."
+            );
+            return;
+        }
+        // A save-triggered fetch (promote) is automatic; only a manual refresh may use the env key.
+        let Some(key) = load_key(&id, !promote) else {
             self.notice = format!("Add an API key for {name} to load its models.");
             return;
         };
@@ -87,6 +115,7 @@ impl App {
         self.notice = format!("Loading models for {name}…");
         self.spawn_task(move || TaskResult::Models {
             provider_id: id,
+            url: url.clone(),
             promote,
             result: fetch_json(&url, &key)
                 .map(|value| parse_models(&value))
@@ -109,7 +138,21 @@ impl App {
                 return;
             }
         }
-        let Some(key) = load_key(&id) else {
+        if !endpoint_is_trusted(profile, &url) {
+            self.limits.insert(
+                id,
+                LimitsEntry {
+                    fetched_at: Instant::now(),
+                    state: LimitsState::Failed(
+                        "the limits endpoint is not on this provider's host".to_owned(),
+                    ),
+                },
+            );
+            return;
+        }
+        // Loading usage when a provider is selected is automatic; only a forced refresh (u) may
+        // use the env key.
+        let Some(key) = load_key(&id, force) else {
             self.limits.insert(
                 id,
                 LimitsEntry {
@@ -128,6 +171,7 @@ impl App {
         );
         self.spawn_task(move || TaskResult::Limits {
             provider_id: id,
+            url: url.clone(),
             result: fetch_json(&url, &key)
                 .map(|value| summarize_limits(&value))
                 .map_err(|error| format!("{error:#}")),
@@ -145,8 +189,18 @@ impl App {
         match result {
             TaskResult::Limits {
                 provider_id,
+                url,
                 result,
             } => {
+                let current = self
+                    .settings
+                    .providers
+                    .iter()
+                    .find(|profile| profile.id == provider_id)
+                    .and_then(|profile| profile.limits_url.as_deref());
+                if current != Some(url.as_str()) {
+                    return;
+                }
                 let state = match result {
                     Ok(lines) if lines.is_empty() => {
                         LimitsState::Failed("the endpoint returned nothing to show".to_owned())
@@ -164,11 +218,22 @@ impl App {
             }
             TaskResult::Models {
                 provider_id,
+                url,
                 promote,
                 result,
             } => {
                 self.models_loading.remove(&provider_id);
-                let has_key = load_key(&provider_id).is_some();
+                let current = self
+                    .settings
+                    .providers
+                    .iter()
+                    .find(|profile| profile.id == provider_id)
+                    .and_then(|profile| profile.models_url.as_deref());
+                if current != Some(url.as_str()) {
+                    return;
+                }
+                // Only a stored key counts: the env key must never enable a provider.
+                let has_key = load_key(&provider_id, false).is_some();
                 self.apply_models_result(&provider_id, promote, has_key, result);
             }
         }
@@ -338,6 +403,7 @@ mod tests {
         assert_eq!(app.limits["p1"].state, LimitsState::Loading);
         app.apply_task_result(TaskResult::Limits {
             provider_id: "p1".to_owned(),
+            url: "https://api.example.com/v1/limits".to_owned(),
             result: Ok(vec![LimitLine {
                 label: "Balance".to_owned(),
                 value: "5 tokens".to_owned(),
@@ -361,10 +427,56 @@ mod tests {
     }
 
     #[test]
+    fn stored_endpoints_on_another_host_are_never_fetched() {
+        let mut bad = provider("p1", false);
+        bad.models_url = Some("http://evil.example/models".to_owned());
+        bad.limits_url = Some("https://evil.example/limits".to_owned());
+        let mut app = app_with(vec![bad]);
+        app.start_models_fetch(0, false);
+        assert!(
+            app.notice.contains("not on this provider's host"),
+            "{}",
+            app.notice
+        );
+        app.start_limits_fetch(0, true);
+        assert_eq!(app.spawned_tasks, 0);
+        assert!(matches!(app.limits["p1"].state, LimitsState::Failed(_)));
+    }
+
+    #[test]
+    fn automatic_fetches_never_use_the_environment_key() {
+        let mut app = app_with(vec![provider("env-only", true)]);
+        // A save-triggered (promoting) fetch and the on-select usage load are automatic.
+        app.start_models_fetch(0, true);
+        app.start_limits_fetch(0, false);
+        assert_eq!(app.spawned_tasks, 0);
+        assert!(app.notice.contains("Add an API key"), "{}", app.notice);
+        // The user explicitly pressing f or u may use it.
+        app.start_models_fetch(0, false);
+        app.limits.clear();
+        app.start_limits_fetch(0, true);
+        assert_eq!(app.spawned_tasks, 2);
+    }
+
+    #[test]
+    fn a_result_for_an_endpoint_that_changed_mid_fetch_is_ignored() {
+        let mut app = app_with(vec![provider("p1", true)]);
+        app.apply_task_result(TaskResult::Models {
+            provider_id: "p1".to_owned(),
+            url: "https://old.example.com/v1/models".to_owned(),
+            promote: true,
+            result: Ok(fetched(&["a"])),
+        });
+        assert!(app.settings.providers[0].models.is_empty());
+        assert!(app.settings.providers[0].draft);
+    }
+
+    #[test]
     fn limits_errors_are_kept_for_display() {
         let mut app = app_with(vec![provider("p1", false)]);
         app.apply_task_result(TaskResult::Limits {
             provider_id: "p1".to_owned(),
+            url: "https://api.example.com/v1/limits".to_owned(),
             result: Err("provider returned 401".to_owned()),
         });
         assert_eq!(

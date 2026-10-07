@@ -388,7 +388,6 @@ impl App {
             model_info: existing_profile
                 .map(|profile| profile.model_info)
                 .unwrap_or_default(),
-            ..Default::default()
         };
 
         if !api_key.is_empty() {

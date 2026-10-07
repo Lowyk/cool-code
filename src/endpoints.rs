@@ -58,6 +58,9 @@ pub(crate) fn resolve_endpoint(base_url: &str, input: &str) -> Result<String> {
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     });
+    if url.scheme() != base.scheme() {
+        bail!("the endpoint must use the same scheme as the base URL");
+    }
     match url.scheme() {
         "https" => {}
         "http" if loopback => {}
@@ -74,6 +77,16 @@ pub(crate) fn resolve_endpoint(base_url: &str, input: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+/// Replaces control characters (escape sequences and line breaks) with spaces so
+/// text from a provider cannot move the cursor or inject lines into the terminal.
+pub(crate) fn clean(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 /// Reads a models list in the common shapes: `{"data": [...]}`, `{"models": [...]}`, or a bare
 /// array of objects or strings. Entries that declare a non-text `model_kind` are skipped.
 pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
@@ -88,6 +101,7 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
         _ => &[],
     };
     let mut models: Vec<FetchedModel> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for entry in entries {
         let (id, object) = match entry {
             Value::String(id) => (id.as_str(), None),
@@ -103,8 +117,9 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
             }
             _ => continue,
         };
-        let id = id.trim();
-        if id.is_empty() || models.iter().any(|model| model.id == id) {
+        let id = clean(id);
+        let id = id.as_str();
+        if id.is_empty() || !seen.insert(id.to_owned()) {
             continue;
         }
         let field = |name: &str| object.and_then(|object| object.get(name));
@@ -118,10 +133,9 @@ pub(crate) fn parse_models(value: &Value) -> Vec<FetchedModel> {
             id: id.to_owned(),
             name: field("name")
                 .and_then(Value::as_str)
-                .filter(|name| !name.trim().is_empty() && *name != id)
-                .unwrap_or_default()
-                .trim()
-                .to_owned(),
+                .map(clean)
+                .filter(|name| !name.is_empty() && name != id)
+                .unwrap_or_default(),
             free: field("billing_free").and_then(Value::as_bool),
             tools: field("supports_tools").and_then(Value::as_bool),
             context: field("context_window")
@@ -143,12 +157,13 @@ pub(crate) fn merge_models(profile: &mut ProviderProfile, fetched: &[FetchedMode
         });
     }
     let mut added = 0;
+    let mut known: std::collections::HashSet<String> = profile
+        .models
+        .iter()
+        .map(|existing| existing.id.to_ascii_lowercase())
+        .collect();
     for model in fetched {
-        if !profile
-            .models
-            .iter()
-            .any(|existing| existing.id.eq_ignore_ascii_case(&model.id))
-        {
+        if known.insert(model.id.to_ascii_lowercase()) {
             profile.models.push(ModelProfile {
                 id: model.id.clone(),
                 name: model.name.clone(),
@@ -164,10 +179,10 @@ pub(crate) fn merge_models(profile: &mut ProviderProfile, fetched: &[FetchedMode
             profile.model_info.insert(model.id.clone(), info);
         }
     }
-    if profile.model.is_empty() {
-        if let Some(first) = profile.models.first() {
-            profile.model = first.id.clone();
-        }
+    if profile.model.is_empty()
+        && let Some(first) = profile.models.first()
+    {
+        profile.model = first.id.clone();
     }
     added
 }
@@ -206,7 +221,7 @@ pub(crate) fn group_digits(n: u64) -> String {
     let digits = n.to_string();
     let mut grouped = String::new();
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(digit);
@@ -247,7 +262,7 @@ pub(crate) fn summarize_limits(value: &Value) -> Vec<LimitLine> {
         lines.truncate(14);
         return lines
             .into_iter()
-            .map(|(path, text)| line(&path, text, None))
+            .map(|(path, text)| line(&clean(&path), text, None))
             .collect();
     }
     let mut lines = Vec::new();
@@ -337,6 +352,16 @@ pub(crate) fn summarize_limits(value: &Value) -> Vec<LimitLine> {
     lines
 }
 
+/// Generic limit values come from an arbitrary endpoint, so they are kept short.
+fn capped(text: &str) -> String {
+    const MAX: usize = 80;
+    if text.chars().count() <= MAX {
+        text.to_owned()
+    } else {
+        format!("{}…", text.chars().take(MAX - 1).collect::<String>())
+    }
+}
+
 fn flatten_scalars(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
     match value {
         Value::Object(object) => {
@@ -349,7 +374,7 @@ fn flatten_scalars(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
                 flatten_scalars(&child_path, child, out);
             }
         }
-        Value::String(text) => out.push((path.to_owned(), text.clone())),
+        Value::String(text) => out.push((path.to_owned(), capped(&clean(text)))),
         Value::Number(number) => out.push((path.to_owned(), number.to_string())),
         Value::Bool(flag) => {
             out.push((path.to_owned(), if *flag { "yes" } else { "no" }.to_owned()))
@@ -360,6 +385,12 @@ fn flatten_scalars(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
 
 /// GETs `url` with the API key as a bearer token. Redirects are refused so the key can never be
 /// forwarded to another host.
+// A models catalog is a few hundred KB; anything far larger is not a legitimate response.
+#[cfg(not(test))]
+const MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
+#[cfg(test)]
+const MAX_BODY_BYTES: u64 = 64 * 1024;
+
 pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -372,14 +403,28 @@ pub(crate) fn fetch_json(url: &str, api_key: &str) -> Result<Value> {
         .bearer_auth(api_key)
         .header("Accept", "application/json")
         .send()
+        // reqwest errors print the request URL, which could carry a secret in its query.
+        .map_err(reqwest::Error::without_url)
         .context("sending request to the provider")?;
     let status = response.status();
     if status.is_redirection() {
         bail!("the provider redirected the request; update the endpoint to its final address");
     }
-    let body = response.text().context("reading the provider response")?;
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| anyhow!("reading the provider response: {error}"))?;
+    if bytes.len() as u64 > MAX_BODY_BYTES {
+        bail!("the provider response is too large");
+    }
+    let body = String::from_utf8_lossy(&bytes);
     if !status.is_success() {
-        let shown: String = body.replace(api_key, "<key>").chars().take(300).collect();
+        let shown: String = clean(&body.replace(api_key, "<key>"))
+            .chars()
+            .take(300)
+            .collect();
         bail!("provider returned {status}: {shown}");
     }
     serde_json::from_str(&body).context("the provider did not return JSON")
@@ -529,6 +574,69 @@ mod tests {
         let mut profile = ProviderProfile::default();
         merge_models(&mut profile, &parse_models(&real_models_fixture()));
         assert_eq!(profile.model, "amazon/nova-lite-v1");
+    }
+
+    #[test]
+    fn an_endpoint_must_use_the_same_scheme_as_the_base_url() {
+        assert!(
+            resolve_endpoint("https://localhost:8080/v1", "http://localhost:8080/models").is_err()
+        );
+        assert!(
+            resolve_endpoint("http://localhost:8080/v1", "https://localhost:8080/models").is_err()
+        );
+        assert!(resolve_endpoint("http://localhost:8080/v1", "models").is_ok());
+    }
+
+    #[test]
+    fn untrusted_text_loses_control_characters() {
+        let models = parse_models(&json!({"data": [
+            {"id": "evil\u{1b}[31m-model", "name": "line\nbreak\u{7}"}
+        ]}));
+        assert_eq!(models[0].id, "evil [31m-model");
+        assert_eq!(models[0].name, "line break");
+        let lines = summarize_limits(&json!({"note": "a\u{1b}[2Jb\r\nc"}));
+        assert_eq!(lines[0].value, "a [2Jb  c");
+    }
+
+    #[test]
+    fn generic_limit_values_are_capped() {
+        let long = "x".repeat(500);
+        let lines = summarize_limits(&json!({"note": long}));
+        assert!(
+            lines[0].value.chars().count() <= 80,
+            "{}",
+            lines[0].value.len()
+        );
+    }
+
+    #[test]
+    fn network_errors_never_include_the_url() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let url = format!("http://127.0.0.1:{port}/models?token=SECRET-IN-URL");
+        let error = format!("{:#}", super::fetch_json(&url, "k").expect_err("refused"));
+        assert!(!error.contains("SECRET-IN-URL"), "{error}");
+        assert!(!error.contains("127.0.0.1"), "{error}");
+    }
+
+    #[test]
+    fn oversized_responses_are_refused() {
+        // Test builds use a 64 KiB limit.
+        let body = "a".repeat(100 * 1024);
+        let response: &'static str = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_boxed_str(),
+        );
+        let (url, _) = serve_once(response);
+        let error = super::fetch_json(&url, "k")
+            .expect_err("too large")
+            .to_string();
+        assert!(error.contains("too large"), "{error}");
     }
 
     #[test]
