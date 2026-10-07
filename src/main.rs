@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 mod agent;
 mod endpoints;
 mod policy;
+mod projects;
 mod provider;
 mod secrets;
 mod session;
@@ -139,6 +140,13 @@ struct Settings {
     sessions_enabled: bool,
     sessions_prompt_answered: bool,
     theme_prompt_answered: bool,
+    /// Load `CLAUDE.md` from project folders (each project can override this).
+    default_load_claude_md: bool,
+    /// Load `AGENTS.md` from project folders (each project can override this).
+    default_load_agents_md: bool,
+    /// Load the user's own `~/.claude/CLAUDE.md` in every project.
+    load_global_claude_md: bool,
+    instructions_prompt_answered: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -252,6 +260,10 @@ impl Default for Settings {
             sessions_enabled: false,
             sessions_prompt_answered: false,
             theme_prompt_answered: false,
+            default_load_claude_md: false,
+            default_load_agents_md: false,
+            load_global_claude_md: false,
+            instructions_prompt_answered: false,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

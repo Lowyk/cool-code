@@ -1,6 +1,5 @@
 use crate::agent::{PendingEvent, ToolApproval};
 use crate::policy::{MODES, mode_label};
-use crate::tui::context::workspace_is_trusted;
 use crate::tui::effort::effort_name;
 use crate::{ChainModel, Effort, PulseMode, Settings, provider, write_settings};
 use anyhow::Result;
@@ -61,6 +60,8 @@ pub(super) struct App {
     pub(super) trust_prompt: bool,
     pub(super) wizard: Option<crate::tui::setup::SetupWizard>,
     pub(super) workspace_trusted: bool,
+    /// Where the per-project choices (trust, CLAUDE.md / AGENTS.md loading) are kept.
+    pub(super) projects_path: std::path::PathBuf,
     pub(super) trust_choice: usize,
     pub(super) tool_approval: Option<ToolApproval>,
     pub(super) approval_scroll: u16,
@@ -317,9 +318,10 @@ impl App {
             .iter()
             .position(|(_, mode)| *mode == settings.permission_mode)
             .unwrap_or(4);
+        let projects_path = crate::projects::default_path();
         let workspace_trusted = std::env::current_dir()
             .ok()
-            .is_some_and(|root| workspace_is_trusted(&root));
+            .is_some_and(|root| crate::projects::is_trusted_at(&projects_path, &root));
         let session_created = chrono::Utc::now().timestamp();
         Self {
             settings,
@@ -332,6 +334,7 @@ impl App {
             trust_prompt: !workspace_trusted,
             wizard: None,
             workspace_trusted,
+            projects_path,
             trust_choice: 1,
             tool_approval: None,
             approval_scroll: 0,

@@ -20,12 +20,16 @@ pub(in crate::tui) enum SetupStep {
     Motion,
     Stats,
     Sessions,
+    Instructions,
 }
 
 pub(in crate::tui) struct SetupWizard {
     steps: Vec<SetupStep>,
     position: usize,
     choice: usize,
+    /// The ticked boxes of the instruction-files step: project CLAUDE.md, project AGENTS.md,
+    /// global CLAUDE.md.
+    checks: [bool; 3],
     /// The theme in effect before the Theme step started previewing others.
     original_theme: ThemeId,
 }
@@ -46,9 +50,17 @@ impl SetupWizard {
         if !settings.sessions_prompt_answered {
             steps.push(SetupStep::Sessions);
         }
+        if !settings.instructions_prompt_answered {
+            steps.push(SetupStep::Instructions);
+        }
         let first = *steps.first()?;
         Some(SetupWizard {
             choice: default_choice(first, settings),
+            checks: [
+                settings.default_load_claude_md,
+                settings.default_load_agents_md,
+                settings.load_global_claude_md,
+            ],
             steps,
             position: 0,
             original_theme: settings.theme,
@@ -62,6 +74,7 @@ impl SetupWizard {
     fn option_count(&self) -> usize {
         match self.step() {
             SetupStep::Theme => THEMES.len(),
+            SetupStep::Instructions => 3,
             _ => 2,
         }
     }
@@ -92,6 +105,9 @@ impl App {
         match key.code {
             KeyCode::Up | KeyCode::Left => wizard.choice = wizard.choice.saturating_sub(1),
             KeyCode::Down | KeyCode::Right => wizard.choice = (wizard.choice + 1).min(last),
+            KeyCode::Char(' ') if step == SetupStep::Instructions => {
+                wizard.checks[wizard.choice] = !wizard.checks[wizard.choice];
+            }
             KeyCode::Enter => return self.confirm_setup_step(),
             KeyCode::Esc => return self.skip_setup(),
             KeyCode::Char('y' | 'Y') if matches!(step, SetupStep::Stats | SetupStep::Sessions) => {
@@ -123,7 +139,7 @@ impl App {
         let Some(wizard) = self.wizard.as_ref() else {
             return Ok(());
         };
-        let (step, choice) = (wizard.step(), wizard.choice);
+        let (step, choice, checks) = (wizard.step(), wizard.choice, wizard.checks);
         match step {
             SetupStep::Theme => {
                 self.settings.theme = THEMES[choice].id;
@@ -135,6 +151,13 @@ impl App {
             SetupStep::Sessions => {
                 self.settings.sessions_enabled = choice == 1;
                 self.settings.sessions_prompt_answered = true;
+                write_settings(&self.settings)?;
+            }
+            SetupStep::Instructions => {
+                self.settings.default_load_claude_md = checks[0];
+                self.settings.default_load_agents_md = checks[1];
+                self.settings.load_global_claude_md = checks[2];
+                self.settings.instructions_prompt_answered = true;
                 write_settings(&self.settings)?;
             }
         }
@@ -161,9 +184,10 @@ impl App {
         self.settings.motion_prompt_answered = true;
         self.settings.stats_prompt_answered = true;
         self.settings.sessions_prompt_answered = true;
+        self.settings.instructions_prompt_answered = true;
         write_settings(&self.settings)?;
         self.notice =
-            "Setup skipped: animations on, stats and saved sessions off. See Settings to change that."
+            "Setup skipped: animations on; stats, saved sessions and CLAUDE.md/AGENTS.md loading off. See Settings to change that."
                 .to_owned();
         Ok(())
     }
@@ -197,6 +221,15 @@ fn prompt(step: SetupStep) -> Prompt {
             heading: "Save conversations so you can resume them?",
             detail: "Sessions are saved as files in ~/.coolcode/sessions, on this computer only, so `harness --resume` and /resume can continue them. They contain the full conversation, including tool output and anything you typed, exactly as typed (before privacy redaction).",
             options: vec!["No thanks".to_owned(), "Yes, save sessions".to_owned()],
+        },
+        SetupStep::Instructions => Prompt {
+            heading: "Load instruction files?",
+            detail: "Some projects keep guidance for AI assistants in CLAUDE.md or AGENTS.md. If ticked, that text is sent to the model with every request. Project files are only read in folders you trust; your own global file is always yours. Change it per project later with /claudemd and /agentsmd.",
+            options: vec![
+                "Load project CLAUDE.md".to_owned(),
+                "Load project AGENTS.md".to_owned(),
+                "Load my global CLAUDE.md (~/.claude/CLAUDE.md)".to_owned(),
+            ],
         },
     }
 }
@@ -246,6 +279,28 @@ pub(in crate::tui) fn draw_setup(frame: &mut ratatui::Frame<'_>, area: Rect, wiz
     ];
     for (index, label) in prompt.options.iter().enumerate() {
         let chosen = index == wizard.choice;
+        if step == SetupStep::Instructions {
+            let ticked = wizard.checks[index];
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if chosen { "▸ " } else { "  " },
+                    Style::default().fg(accent),
+                ),
+                Span::styled(
+                    if ticked { "[x] " } else { "[ ] " },
+                    Style::default().fg(if ticked { accent } else { Color::DarkGray }),
+                ),
+                Span::styled(
+                    label.clone(),
+                    if chosen {
+                        Style::default().fg(accent).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
+                ),
+            ]));
+            continue;
+        }
         let mut spans = vec![
             Span::styled(
                 if chosen { "▸ " } else { "  " },
@@ -277,7 +332,11 @@ pub(in crate::tui) fn draw_setup(frame: &mut ratatui::Frame<'_>, area: Rect, wiz
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "↑/↓ choose   Enter confirm   Esc skip setup",
+        if step == SetupStep::Instructions {
+            "↑/↓ move   Space tick   Enter confirm   Esc skip setup"
+        } else {
+            "↑/↓ choose   Enter confirm   Esc skip setup"
+        },
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(
@@ -339,7 +398,8 @@ mod tests {
                 SetupStep::Theme,
                 SetupStep::Motion,
                 SetupStep::Stats,
-                SetupStep::Sessions
+                SetupStep::Sessions,
+                SetupStep::Instructions
             ]
         );
     }
@@ -349,16 +409,24 @@ mod tests {
         let mut settings = Settings::default();
         settings.motion_prompt_answered = true;
         settings.stats_prompt_answered = true;
-        assert_eq!(steps(&settings), [SetupStep::Theme, SetupStep::Sessions]);
+        assert_eq!(
+            steps(&settings),
+            [
+                SetupStep::Theme,
+                SetupStep::Sessions,
+                SetupStep::Instructions
+            ]
+        );
         settings.theme_prompt_answered = true;
         settings.sessions_prompt_answered = true;
+        settings.instructions_prompt_answered = true;
         assert!(SetupWizard::new(&settings).is_none(), "nothing left to ask");
     }
 
     #[test]
     fn pressing_enter_all_the_way_takes_the_safe_answers() {
         let mut app = fresh();
-        for _ in 0..4 {
+        for _ in 0..5 {
             press(&mut app, KeyCode::Enter);
         }
         assert!(app.wizard.is_none());
@@ -369,10 +437,17 @@ mod tests {
         assert!(!settings.stats_enabled, "stats stay opt-in");
         assert!(!settings.sessions_enabled, "sessions stay opt-in");
         assert!(
+            !settings.default_load_claude_md
+                && !settings.default_load_agents_md
+                && !settings.load_global_claude_md,
+            "instruction files stay opt-in"
+        );
+        assert!(
             settings.theme_prompt_answered
                 && settings.motion_prompt_answered
                 && settings.stats_prompt_answered
                 && settings.sessions_prompt_answered
+                && settings.instructions_prompt_answered
         );
         assert!(app.notice.contains("Setup finished"), "{}", app.notice);
     }
@@ -387,6 +462,11 @@ mod tests {
         assert!(app.settings.stats_enabled);
         press(&mut app, KeyCode::Char('y')); // sessions: yes
         assert!(app.settings.sessions_enabled && app.settings.sessions_prompt_answered);
+        assert!(
+            app.wizard.is_some(),
+            "the instruction files are still to come"
+        );
+        press(&mut app, KeyCode::Enter);
         assert!(app.wizard.is_none());
     }
 
@@ -464,7 +544,7 @@ mod tests {
     fn each_step_explains_what_it_does_and_counts_the_steps() {
         let mut app = fresh();
         let theme = screen(&app, 100, 34);
-        assert!(theme.contains("Setup · 1 of 4"), "{theme}");
+        assert!(theme.contains("Setup · 1 of 5"), "{theme}");
         assert!(
             theme.contains("Pick a look") && theme.contains("Galaxy (Void)"),
             "{theme}"
@@ -473,13 +553,81 @@ mod tests {
         assert!(screen(&app, 100, 34).contains("reduced motion"));
         press(&mut app, KeyCode::Enter);
         let stats = screen(&app, 100, 34);
-        assert!(stats.contains("Setup · 3 of 4") && stats.contains("Keep local usage stats?"));
+        assert!(stats.contains("Setup · 3 of 5") && stats.contains("Keep local usage stats?"));
         assert!(stats.contains("never your prompts or answers"), "{stats}");
         press(&mut app, KeyCode::Enter);
         let sessions = screen(&app, 100, 34);
         assert!(sessions.contains("Save conversations"), "{sessions}");
         assert!(sessions.contains("before privacy redaction"), "{sessions}");
         assert!(sessions.contains("~/.coolcode/sessions"), "{sessions}");
+        press(&mut app, KeyCode::Enter);
+        let files = screen(&app, 100, 34);
+        assert!(files.contains("Setup · 5 of 5"), "{files}");
+        for label in [
+            "Load project CLAUDE.md",
+            "Load project AGENTS.md",
+            "Load my global CLAUDE.md",
+            "/claudemd and /agentsmd",
+        ] {
+            assert!(files.contains(label), "{label} missing:\n{files}");
+        }
+        assert!(files.contains("[ ]"), "unticked by default: {files}");
+    }
+
+    fn at_the_instructions_step() -> App {
+        let mut app = fresh();
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Enter);
+        }
+        app
+    }
+
+    #[test]
+    fn space_ticks_the_boxes_and_enter_saves_them_as_the_defaults() {
+        let mut app = at_the_instructions_step();
+        press(&mut app, KeyCode::Char(' ')); // project CLAUDE.md
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char(' ')); // global CLAUDE.md
+        let shown = screen(&app, 100, 34);
+        assert_eq!(shown.matches("[x]").count(), 2, "{shown}");
+        press(&mut app, KeyCode::Enter);
+        let settings = &app.settings;
+        assert!(settings.default_load_claude_md);
+        assert!(!settings.default_load_agents_md);
+        assert!(settings.load_global_claude_md);
+        assert!(settings.instructions_prompt_answered);
+        assert!(app.wizard.is_none());
+    }
+
+    #[test]
+    fn a_box_can_be_unticked_again_and_space_does_nothing_elsewhere() {
+        let mut app = at_the_instructions_step();
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.settings.default_load_claude_md);
+        let mut other = fresh();
+        press(&mut other, KeyCode::Char(' '));
+        assert!(
+            other.wizard.is_some(),
+            "space does not answer a normal step"
+        );
+    }
+
+    #[test]
+    fn the_ticks_start_from_what_is_already_chosen() {
+        let mut settings = Settings::default();
+        settings.default_load_agents_md = true;
+        settings.theme_prompt_answered = true;
+        settings.motion_prompt_answered = true;
+        settings.stats_prompt_answered = true;
+        settings.sessions_prompt_answered = true;
+        let mut app = App::new(settings);
+        app.trust_prompt = false;
+        app.start_setup();
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings.default_load_agents_md, "kept as it was");
     }
 
     #[test]

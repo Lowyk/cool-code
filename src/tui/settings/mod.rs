@@ -4,6 +4,7 @@ mod general;
 mod models;
 mod privacy;
 mod providers;
+mod reset;
 pub(super) mod sync;
 
 use crate::tui::settings::appearance::draw_appearance;
@@ -14,6 +15,7 @@ use crate::tui::settings::privacy::{
     draw_privacy, draw_privacy_sub, privacy_confirm_question, privacy_sub_hint,
 };
 use crate::tui::settings::providers::draw_providers;
+use crate::tui::settings::reset::{ResetStage, draw_reset, reset_hint};
 use crate::tui::state::App;
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
@@ -77,6 +79,8 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) row: usize,
     pub(in crate::tui) confirm_delete: bool,
     pub(in crate::tui) model_edit: Option<ModelEdit>,
+    /// The Reset menu, while it is open (it replaces the General rows).
+    pub(in crate::tui) reset: Option<ResetStage>,
     pub(in crate::tui) tree: crate::tui::widgets::tree::TreeState,
     pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
 }
@@ -89,6 +93,7 @@ impl SettingsView {
             row: 0,
             confirm_delete: false,
             model_edit: None,
+            reset: None,
             tree: crate::tui::widgets::tree::TreeState::default(),
             privacy_sub: None,
         }
@@ -122,6 +127,9 @@ impl App {
         let Some(view) = self.settings_view.as_mut() else {
             return Ok(());
         };
+        if view.reset.is_some() {
+            return self.handle_reset_key(key);
+        }
         if view.confirm_delete || view.model_edit.is_some() || view.privacy_sub.is_some() {
             let section = view.section;
             return self.handle_section_key(section, key);
@@ -208,6 +216,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
     };
 
     match view.section {
+        Section::General if view.reset.is_some() => draw_reset(frame, content, app, view),
         Section::General => draw_general(frame, content, app, view),
         Section::Appearance => draw_appearance(frame, content, app, view),
         Section::Providers => draw_providers(frame, content, app, view),
@@ -303,6 +312,9 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
 }
 
 fn footer_hint(view: &SettingsView) -> &'static str {
+    if let Some(stage) = &view.reset {
+        return reset_hint(stage);
+    }
     if view.model_edit.is_some() {
         return "Enter confirm   Esc cancel";
     }
@@ -431,6 +443,30 @@ mod tests {
         app.handle_settings_view_key(key(KeyCode::Enter))
             .expect("off");
         assert!(!app.settings.stats_enabled);
+    }
+
+    #[test]
+    fn every_general_row_is_visible_on_an_ordinary_terminal() {
+        let mut app = app();
+        app.open_settings(Section::General);
+        let shown = screen(&app, 80, 24);
+        for label in [
+            "Model",
+            "Effort",
+            "Workspace trust",
+            "Usage stats",
+            "Save sessions",
+            "Load CLAUDE.md",
+            "Load AGENTS.md",
+            "Global CLAUDE.md",
+            "Reset",
+        ] {
+            assert!(
+                shown.contains(label),
+                "{label} is cut off:
+{shown}"
+            );
+        }
     }
 
     #[test]

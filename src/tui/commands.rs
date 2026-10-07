@@ -1,6 +1,9 @@
 use crate::agent::{PendingEvent, run_agent_turns};
 use crate::policy::{MODES, mode_label};
-use crate::tui::context::{build_user_message, read_cool_file, read_user_instructions};
+use crate::tui::context::{
+    InstructionFiles, build_user_message, instruction_sections, read_cool_file,
+    read_user_instructions,
+};
 use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
@@ -202,6 +205,14 @@ impl App {
             });
             return Ok(());
         }
+        for (command, claude) in [("/claudemd", true), ("/agentsmd", false)] {
+            if value == command || value.starts_with(&format!("{command} ")) {
+                let argument = value[command.len()..].trim().to_ascii_lowercase();
+                self.toggle_project_instructions(claude, &argument)?;
+                self.finish_command(self.notice.clone());
+                return Ok(());
+            }
+        }
         if value == "/resume" || value == "/resume all" {
             self.open_session_picker(value == "/resume all");
             let notice = if self.session_picker.is_some() {
@@ -219,7 +230,7 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
+            self.notice = "Commands: /help, /settings, /stats, /model <id|author/id>, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
             self.finish_command(self.notice.clone());
             return Ok(());
         }
@@ -346,6 +357,37 @@ impl App {
         self.messages.push(user_message);
         self.save_session();
         self.history_scroll = 0;
+        let system_prompt = self.build_system_prompt()?;
+        let mut request_messages = vec![provider::ChatMessage::system(system_prompt)];
+        request_messages.extend(self.messages.iter().cloned());
+        let settings = self.settings.clone();
+        let workspace_root = std::env::current_dir()?
+            .canonicalize()
+            .context("resolving workspace root")?;
+        let workspace_trusted = self.workspace_trusted;
+        let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.streaming = Some(StreamingTurn::new(cancel.clone()));
+        thread::spawn(move || {
+            let result = run_agent_turns(
+                settings,
+                request_messages,
+                workspace_root,
+                workspace_trusted,
+                &sender,
+                cancel,
+            )
+            .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(PendingEvent::Finished(result));
+        });
+        self.pending = Some(receiver);
+        self.notice = "Thinking…".to_owned();
+        Ok(())
+    }
+
+    /// Everything the model is told before the conversation: the built-in policy, the active
+    /// permission mode, and the instruction files the user opted into.
+    pub(super) fn build_system_prompt(&mut self) -> Result<String> {
         let mut system_prompt = format!(
             "[Built-in harness policy · v{}]\n{}",
             CORE_SYSTEM_PROMPT_VERSION, CORE_SYSTEM_PROMPT
@@ -384,30 +426,78 @@ impl App {
             system_prompt.push_str(&project_instructions);
             system_prompt.push_str("\n</project_context>");
         }
-        let mut request_messages = vec![provider::ChatMessage::system(system_prompt)];
-        request_messages.extend(self.messages.iter().cloned());
-        let settings = self.settings.clone();
-        let workspace_root = std::env::current_dir()?
+        let root = std::env::current_dir()?
             .canonicalize()
             .context("resolving workspace root")?;
-        let workspace_trusted = self.workspace_trusted;
-        let (sender, receiver) = mpsc::channel();
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.streaming = Some(StreamingTurn::new(cancel.clone()));
-        thread::spawn(move || {
-            let result = run_agent_turns(
-                settings,
-                request_messages,
-                workspace_root,
-                workspace_trusted,
-                &sender,
-                cancel,
-            )
-            .map_err(|error| format!("{error:#}"));
-            let _ = sender.send(PendingEvent::Finished(result));
-        });
-        self.pending = Some(receiver);
-        self.notice = "Thinking…".to_owned();
+        let (sections, warnings) = instruction_sections(
+            &root,
+            dirs::home_dir().as_deref(),
+            self.workspace_trusted,
+            self.instruction_files(&root),
+        );
+        for section in sections {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&section);
+        }
+        if !warnings.is_empty() {
+            self.notice = format!("Skipped instruction files: {}", warnings.join("; "));
+        }
+        Ok(system_prompt)
+    }
+
+    /// The optional instruction files in effect for `root`: the global defaults, overridden by
+    /// anything this project chose with /claudemd or /agentsmd.
+    fn instruction_files(&self, root: &std::path::Path) -> InstructionFiles {
+        let registry = crate::projects::Registry::load_from(&self.projects_path);
+        InstructionFiles {
+            project_claude: registry.loads_claude_md(root, self.settings.default_load_claude_md),
+            project_agents: registry.loads_agents_md(root, self.settings.default_load_agents_md),
+            global_claude: self.settings.load_global_claude_md,
+        }
+    }
+
+    /// `/claudemd` and `/agentsmd`: switch loading of that file for the current project.
+    fn toggle_project_instructions(&mut self, claude: bool, argument: &str) -> Result<()> {
+        let name = if claude { "CLAUDE.md" } else { "AGENTS.md" };
+        let command = if claude { "/claudemd" } else { "/agentsmd" };
+        let root = std::env::current_dir()?
+            .canonicalize()
+            .context("resolving workspace root")?;
+        let current = {
+            let files = self.instruction_files(&root);
+            if claude {
+                files.project_claude
+            } else {
+                files.project_agents
+            }
+        };
+        let next = match argument {
+            "" => !current,
+            "on" => true,
+            "off" => false,
+            _ => {
+                self.notice = format!("Usage: {command} [on|off]");
+                return Ok(());
+            }
+        };
+        crate::projects::update(&self.projects_path, |registry| {
+            if claude {
+                registry.set_claude_md(&root, next);
+            } else {
+                registry.set_agents_md(&root, next);
+            }
+        })?;
+        let mut notice = format!(
+            "{name} loading is {} for this project.",
+            if next { "ON" } else { "OFF" }
+        );
+        if next && !root.join(name).is_file() {
+            notice.push_str(&format!(" (There is no {name} in this folder yet.)"));
+        }
+        if next && !self.workspace_trusted {
+            notice.push_str(" It takes effect once the folder is trusted.");
+        }
+        self.notice = notice;
         Ok(())
     }
 
@@ -709,6 +799,100 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| text.to_lowercase().contains("cancelled"))
         );
+    }
+
+    fn here() -> std::path::PathBuf {
+        std::env::current_dir().unwrap().canonicalize().unwrap()
+    }
+
+    #[test]
+    fn claudemd_toggles_loading_for_this_project_only() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.workspace_trusted = true;
+        assert!(!app.instruction_files(&here()).project_claude);
+        app.input = "/claudemd".to_owned();
+        app.submit().expect("on");
+        assert!(
+            app.notice.contains("CLAUDE.md loading is ON"),
+            "{}",
+            app.notice
+        );
+        assert!(app.instruction_files(&here()).project_claude);
+        assert!(
+            !app.instruction_files(&here()).project_agents,
+            "AGENTS.md is separate"
+        );
+        app.input = "/claudemd".to_owned();
+        app.submit().expect("off");
+        assert!(app.notice.contains("OFF"), "{}", app.notice);
+        assert!(!app.instruction_files(&here()).project_claude);
+    }
+
+    #[test]
+    fn agentsmd_and_explicit_on_off_arguments_work() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.workspace_trusted = true;
+        for (input, expected) in [
+            ("/agentsmd on", true),
+            ("/agentsmd on", true),
+            ("/agentsmd off", false),
+        ] {
+            app.input = input.to_owned();
+            app.submit().expect("submit");
+            assert_eq!(
+                app.instruction_files(&here()).project_agents,
+                expected,
+                "{input}"
+            );
+        }
+        app.input = "/agentsmd maybe".to_owned();
+        app.submit().expect("usage");
+        assert!(
+            app.notice.contains("Usage: /agentsmd [on|off]"),
+            "{}",
+            app.notice
+        );
+    }
+
+    #[test]
+    fn the_toggle_says_when_it_cannot_take_effect_yet() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.workspace_trusted = false;
+        app.input = "/agentsmd on".to_owned();
+        app.submit().expect("on");
+        assert!(
+            app.notice.contains("once the folder is trusted"),
+            "{}",
+            app.notice
+        );
+        assert!(app.notice.contains("no AGENTS.md") || here().join("AGENTS.md").is_file());
+    }
+
+    #[test]
+    fn a_projects_own_choice_beats_the_global_default() {
+        let mut settings = Settings::default();
+        settings.default_load_claude_md = true;
+        settings.load_global_claude_md = true;
+        let mut app = App::new(settings);
+        let files = app.instruction_files(&here());
+        assert!(files.project_claude && files.global_claude && !files.project_agents);
+        app.input = "/claudemd off".to_owned();
+        app.submit().expect("off");
+        let files = app.instruction_files(&here());
+        assert!(!files.project_claude, "this project opted out");
+        assert!(files.global_claude, "the global file is unaffected");
+    }
+
+    #[test]
+    fn the_system_prompt_names_the_policy_and_the_permission_mode() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        let prompt = app.build_system_prompt().expect("prompt");
+        assert!(prompt.contains("Built-in harness policy"), "{prompt}");
+        assert!(prompt.contains("ACTIVE PERMISSION MODE"), "{prompt}");
     }
 
     #[test]
