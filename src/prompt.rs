@@ -20,6 +20,8 @@ pub(crate) struct PromptInputs<'a> {
     pub(crate) today: &'a str,
     /// The tools offered this turn.
     pub(crate) tools: &'a [&'a str],
+    /// The delegation limits, when workflows are on.
+    pub(crate) workflows: Option<crate::workflow::Budget>,
 }
 
 const IDENTITY: &str = "You are Cool Code, an AI coding assistant running in the user's terminal. You help them understand, change, build and test the software project in their current folder. Be direct, practical and honest about what you did and did not do.";
@@ -61,6 +63,16 @@ Plan mode is active. Investigate with the read-only tools first. Then call `requ
 
 const OTHER_MODES: &str = "The harness, not you, enforces the permission mode: edits and commands may need the user's approval or be declined.";
 
+fn workflows_section(budget: &crate::workflow::Budget) -> String {
+    format!(
+        "Workflows are on. You can call `spawn_subagents` to delegate independent work: use `explore` subagents to investigate several areas in parallel, and `implement` subagents for clearly separate changes (they run one after another and ask for approval like you do). Subagents do not see this conversation, so write complete instructions: the goal, where to look, constraints, and what to report. Do small tasks yourself. You may start at most {} subagents at once and {} in all this turn. When you finish a change, a separate reviewer checks it (up to {} time{}); fix the real problems it reports, and say so if you disagree with one.",
+        budget.per_call,
+        budget.total_runs,
+        budget.review_cycles,
+        if budget.review_cycles == 1 { "" } else { "s" }
+    )
+}
+
 const UNTRUSTED: &str = "This folder is not trusted yet, so no workspace tools are available: you cannot read, search, edit or run anything here. Do not claim to have looked at repository files unless the user attached them to the message. If the user wants you to work on the project, tell them to trust the folder.";
 
 /// The complete built-in prompt for one turn.
@@ -74,6 +86,11 @@ pub(crate) fn build(inputs: &PromptInputs<'_>) -> String {
             "Tools available this turn: {}.\n{TOOL_RULES}",
             inputs.tools.join(", ")
         ));
+    }
+    if inputs.workspace_trusted
+        && let Some(budget) = inputs.workflows.as_ref()
+    {
+        sections.push(workflows_section(budget));
     }
     sections.push(SAFETY.to_owned());
     sections.push(STYLE.to_owned());
@@ -103,7 +120,18 @@ mod tests {
     }
 
     fn prompt(mode: &'static str, trusted: bool) -> String {
-        let names = tools(mode);
+        prompt_with(mode, trusted, None)
+    }
+
+    fn prompt_with(
+        mode: &'static str,
+        trusted: bool,
+        workflows: Option<crate::workflow::Budget>,
+    ) -> String {
+        let mut names = tools(mode);
+        if workflows.is_some() {
+            names.push("spawn_subagents");
+        }
         build(&PromptInputs {
             mode,
             mode_label: "Test Mode",
@@ -113,6 +141,7 @@ mod tests {
             shell: "sh",
             today: "2026-10-07",
             tools: &names,
+            workflows,
         })
     }
 
@@ -218,6 +247,39 @@ mod tests {
         ] {
             assert!(text.contains(rule), "missing guidance: {rule}");
         }
+    }
+
+    #[test]
+    fn the_workflow_section_appears_only_when_workflows_are_on() {
+        use crate::workflow::Budget;
+        let off = prompt("auto", true);
+        assert!(!off.contains("Workflows are on") && !off.contains("spawn_subagents"));
+        let super_tier = prompt_with("auto", true, Some(Budget::for_effort(crate::Effort::Super)));
+        assert!(super_tier.contains("Workflows are on"), "{super_tier}");
+        assert!(
+            super_tier.contains("at most 4 subagents at once and 8 in all"),
+            "{super_tier}"
+        );
+        assert!(super_tier.contains("(up to 1 time)"), "{super_tier}");
+        let ultimate = prompt_with(
+            "auto",
+            true,
+            Some(Budget::for_effort(crate::Effort::Ultimate)),
+        );
+        assert!(
+            ultimate.contains("at most 6 subagents at once and 20 in all"),
+            "{ultimate}"
+        );
+        assert!(ultimate.contains("(up to 2 times)"), "{ultimate}");
+        let untrusted = prompt_with(
+            "auto",
+            false,
+            Some(Budget::for_effort(crate::Effort::Super)),
+        );
+        assert!(
+            !untrusted.contains("Workflows are on"),
+            "no workflows without tools"
+        );
     }
 
     #[test]

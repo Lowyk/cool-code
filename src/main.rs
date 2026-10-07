@@ -24,6 +24,7 @@ mod stats;
 mod stream;
 mod tools;
 mod tui;
+mod workflow;
 
 #[derive(Debug, Parser)]
 #[command(name = "harness", version, about = "A coding-focused AI harness")]
@@ -462,7 +463,7 @@ fn run() -> Result<()> {
                         "Warning: Ultimate may use substantially more tokens and incur higher cost."
                     );
                     eprintln!(
-                        "Dynamic workflows are not implemented yet; this setting is saved for the roadmap."
+                        "It also runs subagents and reviews, which can use many times more tokens."
                     );
                     eprint!("Set Ultimate effort anyway? [y/N] ");
                     io::stderr().flush().context("flushing warning")?;

@@ -34,6 +34,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
 | `src/endpoints.rs` | Provider models and limits endpoints: same-host URL validation, tolerant model-list parsing and merging, usage summaries, and the redirect-refusing fetch |
 | `src/stats.rs` | Opt-in usage recording to `~/.coolcode/stats.jsonl` (metadata only), the pure summary engine (totals, favorite model, streaks, peak hour, heatmap grid), and the fun size comparison |
+| `src/workflow.rs` | Workflows: the `Completer` seam (real providers or scripted replies in tests), per-tier budgets, the subagent tool loop, the parallel-explore / sequential-implement spawner, and the reviewer with its verdict parsing |
 | `src/prompt.rs` | The built-in system prompt, assembled from the live tool registry, the permission mode and the environment (working folder, platform, date) |
 | `src/tools/readtools.rs` | The read-only exploration tools: glob-scoped listing, numbered ranged reads, scoped regex search with context, `git_diff` and `git_log` |
 | `src/effort_support.rs` | Which effort levels each model has, how a level becomes a request parameter per API (with a remembered fallback when a provider rejects it), and the lock on the workflow tiers |

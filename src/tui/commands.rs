@@ -392,10 +392,18 @@ impl App {
         let root = std::env::current_dir()?
             .canonicalize()
             .context("resolving workspace root")?;
-        let tool_names = crate::tools::definitions_for_mode(&self.settings.permission_mode)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
+        let workflows = self
+            .settings
+            .workflows_active()
+            .then(|| crate::workflow::Budget::for_effort(self.settings.effort));
+        let tool_names = crate::tools::ToolSet::Main {
+            plan_mode: self.settings.permission_mode == "plan",
+            workflows: workflows.is_some(),
+        }
+        .definitions()
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
         let mut system_prompt = crate::prompt::build(&crate::prompt::PromptInputs {
             mode: &self.settings.permission_mode,
             mode_label: mode_label(&self.settings.permission_mode),
@@ -405,6 +413,7 @@ impl App {
             shell: if cfg!(windows) { "PowerShell" } else { "sh" },
             today: &chrono::Local::now().format("%Y-%m-%d").to_string(),
             tools: &tool_names,
+            workflows,
         });
         if let Some(user_instructions) = read_user_instructions()? {
             system_prompt.push_str("\n\nUser-authored global instructions from ~/.coolcode/COOL.md (user preference; subordinate to the built-in harness policy):\n<user_instructions>\n");
