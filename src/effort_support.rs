@@ -124,7 +124,19 @@ pub(crate) fn supported_levels(model_id: &str, overrides: &[Effort]) -> Vec<Effo
         return vec![Low, Medium, High];
     }
     if name.starts_with("gpt-5") || name.starts_with("gpt-6") || name.starts_with("gpt-7") {
-        return vec![Low, Medium, High, XHigh];
+        // xhigh arrived with GPT-5.4 (and the Codex max models), max with GPT-5.6 and GPT-6.
+        let minor = version.get(1).copied().unwrap_or(0);
+        let from = |major_needed: u32, minor_needed: u32| {
+            major > major_needed || (major == major_needed && minor >= minor_needed)
+        };
+        let mut levels = vec![Low, Medium, High];
+        if from(5, 4) || name.contains("codex-max") {
+            levels.push(XHigh);
+        }
+        if from(5, 6) {
+            levels.push(Max);
+        }
+        return levels;
     }
     if name.starts_with("o1") || name.starts_with("o3") || name.starts_with("o4") {
         return vec![Low, Medium, High];
@@ -213,12 +225,8 @@ pub(crate) fn apply_effort(
             body["reasoning_effort"] = json!(text);
         }
         Api::ChatGpt => {
-            let text = if level.model_level() == Effort::Max {
-                "xhigh"
-            } else {
-                name_of(level)
-            };
-            body["reasoning"] = json!({ "effort": text, "summary": "auto" });
+            // The Responses format takes "max" itself; chat completions stops at "xhigh".
+            body["reasoning"] = json!({ "effort": name_of(level), "summary": "auto" });
         }
         Api::OpenRouter => {
             let text = if level.model_level() == Effort::Max {
@@ -372,10 +380,20 @@ mod tests {
             supported_levels("anthropic/claude-sonnet-4-5", &[]),
             [Low, Medium, High]
         );
+        // xhigh came with GPT-5.4 and max with GPT-5.6 / GPT-6.
+        assert_eq!(supported_levels("gpt-5", &[]), [Low, Medium, High]);
         assert_eq!(
-            supported_levels("gpt-6-astra", &[]),
+            supported_levels("gpt-5.1-codex-max", &[]),
             [Low, Medium, High, XHigh]
         );
+        assert_eq!(supported_levels("gpt-5.5", &[]), [Low, Medium, High, XHigh]);
+        for model in ["gpt-5.6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-6.1-sol"] {
+            assert_eq!(
+                supported_levels(model, &[]),
+                [Low, Medium, High, XHigh, Max],
+                "{model}"
+            );
+        }
         assert_eq!(
             supported_levels("openai/gpt-oss-120b", &[]),
             [Low, Medium, High]
@@ -435,7 +453,7 @@ mod tests {
             "capped at the model's best"
         );
         let (_, body) = apply(Api::ChatGpt, "gpt-6-astra", Max);
-        assert_eq!(body["reasoning"]["effort"], "xhigh");
+        assert_eq!(body["reasoning"]["effort"], "max");
         assert_eq!(body["reasoning"]["summary"], "auto");
         let (_, body) = apply(Api::OpenRouter, "openai/gpt-6-astra", Medium);
         assert_eq!(body["reasoning"]["effort"], "medium");

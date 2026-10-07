@@ -396,18 +396,27 @@ impl App {
         }
     }
 
-    /// The columns of the effort picker: the model's own levels, then the two workflow tiers
-    /// (shown even while locked, so they can be discovered).
+    /// The columns of the effort picker: the model's own levels, then the workflow tiers it can
+    /// carry (shown even while locked, so they can be discovered). Super is XHigh with workflows
+    /// and Ultimate is Max with workflows, so a model without XHigh or Max has neither.
     pub(super) fn picker_levels(&self) -> Vec<Effort> {
         let mut levels = self.active_model_levels();
-        levels.push(Effort::Super);
-        levels.push(Effort::Ultimate);
+        if levels.contains(&Effort::XHigh) {
+            levels.push(Effort::Super);
+        }
+        if levels.contains(&Effort::Max) {
+            levels.push(Effort::Ultimate);
+        }
         levels
     }
 
     /// Opens the picker on the current effort (or the nearest column the model has).
     pub(super) fn open_effort_picker(&mut self) {
         let levels = self.picker_levels();
+        if levels.is_empty() {
+            self.notice = "This model has no adjustable effort.".to_owned();
+            return;
+        }
         let wanted_rank = rank_of(self.settings.effort);
         self.picker_index = levels
             .iter()
@@ -1307,20 +1316,32 @@ mod tests {
     #[test]
     fn a_model_only_offers_the_levels_it_has() {
         let deepseek = picker_app(Some("deepseek-v4-flash"), false, Effort::High);
-        assert_eq!(deepseek.picker_levels(), [Effort::Super, Effort::Ultimate]);
-        let shown = screen_of(&deepseek);
-        for hidden in ["XHigh", "Medium", "Low "] {
-            assert!(
-                !shown.contains(hidden),
-                "{hidden} should not be offered:\n{shown}"
-            );
-        }
-        assert!(shown.contains("no adjustable effort"), "{shown}");
+        assert!(
+            deepseek.picker_levels().is_empty(),
+            "no effort, so no tiers either"
+        );
+        assert!(!deepseek.picker, "there is nothing to pick");
+        assert_eq!(deepseek.notice, "This model has no adjustable effort.");
         let gemini = picker_app(Some("gemini-3-pro"), false, Effort::High);
         assert_eq!(
             gemini.picker_levels(),
-            [Effort::Low, Effort::High, Effort::Super, Effort::Ultimate]
+            [Effort::Low, Effort::High],
+            "no XHigh means no Super, no Max means no Ultimate"
         );
+        let gpt_5_5 = picker_app(Some("gpt-5.5"), false, Effort::High);
+        assert_eq!(
+            gpt_5_5.picker_levels(),
+            [
+                Effort::Low,
+                Effort::Medium,
+                Effort::High,
+                Effort::XHigh,
+                Effort::Super
+            ],
+            "XHigh without Max gives Super but not Ultimate"
+        );
+        let gpt_6 = picker_app(Some("gpt-6-astra"), false, Effort::High);
+        assert_eq!(gpt_6.picker_levels().len(), 7, "GPT-6 has Max");
         let claude = picker_app(Some("claude-opus-5-5"), false, Effort::Max);
         assert_eq!(claude.picker_levels().len(), 7);
         let nothing_chosen = picker_app(None, false, Effort::High);
@@ -1338,7 +1359,7 @@ mod tests {
             Effort::XHigh
         );
         // Max is not available on this model, so the picker opens on its best level.
-        let capped = picker_app(Some("gpt-6-astra"), false, Effort::Max);
+        let capped = picker_app(Some("gpt-5.5"), false, Effort::Max);
         assert_eq!(current(&capped), Effort::XHigh);
         let low_only = picker_app(Some("gemini-3-pro"), false, Effort::Medium);
         assert_eq!(
@@ -1453,13 +1474,18 @@ mod tests {
     }
 
     #[test]
-    fn a_model_without_levels_can_still_use_the_workflow_tiers() {
-        use crossterm::event::KeyCode;
-        let mut app = picker_app(Some("deepseek-v4-flash"), true, Effort::High);
-        app.handle_effort_picker_key(key(KeyCode::Enter)).unwrap();
-        assert_eq!(app.settings.effort, Effort::Super);
-        let shown = screen_of(&picker_app(Some("deepseek-v4-flash"), true, Effort::High));
-        assert!(shown.contains("default+wf"), "{shown}");
+    fn the_workflow_tiers_need_the_level_they_are_built_on() {
+        let tiers = |model: &str| {
+            picker_app(Some(model), true, Effort::High)
+                .picker_levels()
+                .into_iter()
+                .filter(|level| level.is_workflow_tier())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tiers("claude-opus-5-5"), [Effort::Super, Effort::Ultimate]);
+        assert_eq!(tiers("gpt-5.5"), [Effort::Super]);
+        assert!(tiers("gemini-3-pro").is_empty());
+        assert!(tiers("deepseek-v4-flash").is_empty());
     }
 
     #[test]
