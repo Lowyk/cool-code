@@ -108,6 +108,7 @@ struct Settings {
     background_animation: bool,
     pulse: PulseMode,
     motion_prompt_answered: bool,
+    max_tool_rounds: usize,
     effort: Effort,
     permission_mode: String,
 }
@@ -178,6 +179,7 @@ impl Default for Settings {
             background_animation: true,
             pulse: PulseMode::Words,
             motion_prompt_answered: false,
+            max_tool_rounds: 40,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }
@@ -432,6 +434,7 @@ mod tests {
         let settings: Settings = toml::from_str("permission_mode = \"auto\"\n").expect("parse");
         assert_eq!(settings.pulse, PulseMode::Words);
         assert!(!settings.motion_prompt_answered);
+        assert_eq!(settings.max_tool_rounds, 40);
         assert!(settings.background_animation);
         let round_trip: Settings = toml::from_str(
             &toml::to_string(&Settings {

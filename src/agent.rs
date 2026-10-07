@@ -21,6 +21,19 @@ pub(crate) struct ToolApproval {
     pub(crate) response: SyncSender<bool>,
 }
 
+/// Budget for one turn: (tool rounds, total tool calls), from the `max_tool_rounds` setting.
+/// The budget only bounds runaway cost; permission modes still gate every edit and command.
+pub(crate) fn tool_limits(settings: &Settings) -> (usize, usize) {
+    let rounds = settings.max_tool_rounds.clamp(1, 200);
+    (rounds, rounds * 4)
+}
+
+pub(crate) fn round_limit_message(rounds: usize) -> String {
+    format!(
+        "tool-call limit reached ({rounds} rounds) before a final response; send \"continue\" to keep going, or raise max_tool_rounds in ~/.coolcode/config.toml"
+    )
+}
+
 pub(crate) fn run_agent_turns(
     settings: Settings,
     mut messages: Vec<provider::ChatMessage>,
@@ -29,8 +42,7 @@ pub(crate) fn run_agent_turns(
     events: &mpsc::Sender<PendingEvent>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<provider::Completion> {
-    const MAX_TOOL_ROUNDS: usize = 6;
-    const MAX_TOOL_CALLS: usize = 16;
+    let (max_rounds, max_calls) = tool_limits(&settings);
     let mut calls_run = 0usize;
     let mut approved_plan: Vec<(String, serde_json::Value)> = Vec::new();
     let forward = |event| {
@@ -43,7 +55,7 @@ pub(crate) fn run_agent_turns(
         on_event: &forward,
         cancel: &cancel,
     };
-    for _ in 0..=MAX_TOOL_ROUNDS {
+    for _ in 0..=max_rounds {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             bail!("cancelled");
         }
@@ -61,9 +73,7 @@ pub(crate) fn run_agent_turns(
         if !workspace_trusted {
             bail!("provider requested repository tools, but this workspace is not trusted");
         }
-        if completion.tool_calls.len() > 4
-            || calls_run + completion.tool_calls.len() > MAX_TOOL_CALLS
-        {
+        if completion.tool_calls.len() > 4 || calls_run + completion.tool_calls.len() > max_calls {
             bail!("tool-call budget exceeded; stopping this agent turn safely");
         }
         let wire_calls = completion
@@ -121,7 +131,7 @@ pub(crate) fn run_agent_turns(
             let _ = events.send(PendingEvent::ConversationMessage(tool_message));
         }
     }
-    bail!("agent tool-call round limit reached without a final response")
+    bail!(round_limit_message(max_rounds))
 }
 
 fn execute_agent_tool(
@@ -454,5 +464,33 @@ fn summarize_tool_result(result: &str) -> String {
         format!("{shortened}…")
     } else {
         shortened
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{round_limit_message, tool_limits};
+    use crate::Settings;
+
+    #[test]
+    fn default_budget_fits_building_an_app() {
+        assert_eq!(tool_limits(&Settings::default()), (40, 160));
+    }
+
+    #[test]
+    fn budget_is_clamped_to_a_sane_range() {
+        let mut settings = Settings::default();
+        settings.max_tool_rounds = 0;
+        assert_eq!(tool_limits(&settings), (1, 4));
+        settings.max_tool_rounds = 100_000;
+        assert_eq!(tool_limits(&settings), (200, 800));
+    }
+
+    #[test]
+    fn limit_message_says_how_to_continue() {
+        let message = round_limit_message(40);
+        assert!(message.contains("40"), "{message}");
+        assert!(message.contains("continue"), "{message}");
+        assert!(message.contains("max_tool_rounds"), "{message}");
     }
 }
