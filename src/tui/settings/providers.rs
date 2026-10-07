@@ -1,7 +1,9 @@
+use crate::endpoints::describe_key;
+use crate::tui::forms::preset_for_profile;
 use crate::tui::render::forms::draw_open_form;
-use crate::tui::settings::sync::{LimitsEntry, LimitsState};
+use crate::tui::settings::sync::{LimitsEntry, LimitsState, load_key};
 use crate::tui::settings::{Focus, SettingsView};
-use crate::tui::state::{App, ProviderDraft};
+use crate::tui::state::{App, PROVIDER_PRESETS, ProviderDraft};
 use crate::tui::widgets::list::{ListItem, ListState, draw_list};
 use crate::{Settings, write_settings};
 use anyhow::Result;
@@ -97,7 +99,10 @@ pub(super) fn draw_providers(
                 Line::from(vec![
                     label("API key   "),
                     Span::styled(
-                        "•••••••• (OS credential store)",
+                        match app.key_shapes.get(&profile.id) {
+                            Some(shape) => format!("•••••••• OS credential store · {shape}"),
+                            None => "•••••••• (OS credential store)".to_owned(),
+                        },
                         Style::default().fg(Color::DarkGray),
                     ),
                 ]),
@@ -225,9 +230,28 @@ impl App {
         if matches!(key.code, KeyCode::Up | KeyCode::Down) {
             // Selecting a provider loads its usage once; fresh results are reused for a minute.
             let selected = self.settings_view.as_ref().map_or(0, |view| view.row);
+            self.refresh_key_shape(selected, false);
             self.start_limits_fetch(selected, false);
         }
         Ok(())
+    }
+
+    /// Measures the saved key (length, quotes, spaces, expected prefix) so the details pane can
+    /// show why a provider might reject it, without ever displaying the key.
+    pub(in crate::tui) fn refresh_key_shape(&mut self, index: usize, force: bool) {
+        let Some(profile) = self.settings.providers.get(index) else {
+            return;
+        };
+        if !force && self.key_shapes.contains_key(&profile.id) {
+            return;
+        }
+        let id = profile.id.clone();
+        let prefix = PROVIDER_PRESETS[preset_for_profile(profile)].key_prefix;
+        let shape = match load_key(&id, false) {
+            Some(key) => describe_key(&key, prefix),
+            None => "no key saved".to_owned(),
+        };
+        self.key_shapes.insert(id, shape);
     }
 
     fn open_provider_presets(&mut self) {
@@ -513,6 +537,23 @@ mod tests {
         );
         let app = app_with(vec![provider], None);
         assert!(screen(&app).contains("1 free"));
+    }
+
+    #[test]
+    fn the_details_pane_describes_the_saved_keys_shape_without_showing_it() {
+        let mut multiai = with_endpoints(profile("p1", false, false));
+        multiai.base_url = Some("https://multiai.store/v1".to_owned());
+        multiai.models_url = Some("https://multiai.store/v1/models".to_owned());
+        multiai.limits_url = Some("https://multiai.store/v1/subscription/limits".to_owned());
+        let app = app_with(vec![multiai], None);
+        let shown = screen(&app);
+        // In tests the stored key is the 8-character stand-in "test-key".
+        assert!(shown.contains("8 characters"), "{shown}");
+        assert!(shown.contains("does not start with ma-live-"), "{shown}");
+        assert!(
+            !shown.contains("test-key"),
+            "the key itself must never be shown"
+        );
     }
 
     #[test]

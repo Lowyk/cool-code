@@ -135,6 +135,7 @@ impl App {
                     view.focus = Focus::Content;
                     if view.section == Section::Providers {
                         let selected = view.row;
+                        self.refresh_key_shape(selected, false);
                         self.start_limits_fetch(selected, false);
                     }
                 }
