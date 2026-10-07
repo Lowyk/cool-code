@@ -23,6 +23,8 @@ All notable changes are listed here, newest first. The format follows
 - Auto mode now has a real safety check: fixed rules for dangerous commands and secret files, and a
   second model call that approves only actions that are clearly safe, asking you (with the
   reason) otherwise. `guard_model` picks a cheaper model for it.
+- A `generate_image` tool for placeholder pictures, available only after you set up an image API
+  (Settings → General → Image generation); each image asks first, and `/undo` can remove it.
 - `@` file suggestions while typing, quoted paths with spaces, and (behind a setting, with each
   file confirmed) references to files outside the project.
 - Assistant answers are drawn as Markdown (headings, emphasis, code blocks, lists, quotes, links

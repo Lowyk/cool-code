@@ -5,6 +5,7 @@
 //! as the turn left it, so nothing written since (by you or by a command) is overwritten.
 //! Changes made by `run_command` are not tracked.
 
+use crate::agent::FileContent;
 use crate::provider::ChatMessage;
 use crate::tui::state::App;
 use serde_json::Value;
@@ -21,8 +22,8 @@ pub(in crate::tui) struct FileChange {
     name: String,
     /// The text before the turn's first change; `None` when the turn created the file.
     before: Option<String>,
-    /// The text after the turn's last change.
-    after: String,
+    /// What the file held after the turn's last change.
+    after: FileContent,
 }
 
 pub(in crate::tui) struct Checkpoint {
@@ -55,7 +56,7 @@ impl App {
         path: PathBuf,
         name: String,
         before: Option<String>,
-        after: String,
+        after: FileContent,
     ) {
         match self.journal.iter_mut().find(|file| file.path == path) {
             Some(file) => file.after = after,
@@ -103,8 +104,15 @@ impl App {
         let mut removed = Vec::new();
         let mut left = Vec::new();
         for file in checkpoint.files.iter().rev() {
-            let current = std::fs::read_to_string(&file.path).ok();
-            if current.as_deref() != Some(file.after.as_str()) {
+            let as_left = match &file.after {
+                FileContent::Text(text) => {
+                    std::fs::read_to_string(&file.path).ok().as_deref() == Some(text.as_str())
+                }
+                FileContent::Binary(hash) => std::fs::read(&file.path)
+                    .ok()
+                    .is_some_and(|bytes| crate::imagegen::sha256_hex(&bytes) == *hash),
+            };
+            if !as_left {
                 left.push(file.name.clone());
                 continue;
             }
@@ -190,7 +198,7 @@ mod tests {
             path,
             name.to_owned(),
             before.map(str::to_owned),
-            after.to_owned(),
+            FileContent::Text(after.to_owned()),
         );
     }
 
@@ -308,7 +316,7 @@ mod tests {
                 path: root.join("a.txt"),
                 name: "a.txt".to_owned(),
                 before: Some("v0".to_owned()),
-                after: "v1".to_owned(),
+                after: FileContent::Text("v1".to_owned()),
             })
             .unwrap();
         sender
@@ -370,6 +378,41 @@ mod tests {
             noted.content.as_array().unwrap().len(),
             2,
             "the image is kept"
+        );
+    }
+
+    #[test]
+    fn a_generated_image_is_removed_by_undo_unless_it_was_changed_since() {
+        let root = workspace();
+        let mut app = app_with_a_request("add a hero image");
+        let png = b"\x89PNG\r\n\x1a\nbytes".to_vec();
+        std::fs::write(root.join("hero.png"), &png).unwrap();
+        app.record_file_change(
+            root.join("hero.png"),
+            "hero.png".to_owned(),
+            None,
+            FileContent::Binary(crate::imagegen::sha256_hex(&png)),
+        );
+        app.commit_checkpoint();
+        let message = app.undo_last();
+        assert!(!root.join("hero.png").exists(), "{message}");
+        assert!(message.contains("removed hero.png"), "{message}");
+        // The same image, edited afterwards by the user, is left alone.
+        let mut again = app_with_a_request("add another");
+        std::fs::write(root.join("other.png"), &png).unwrap();
+        again.record_file_change(
+            root.join("other.png"),
+            "other.png".to_owned(),
+            None,
+            FileContent::Binary(crate::imagegen::sha256_hex(&png)),
+        );
+        again.commit_checkpoint();
+        std::fs::write(root.join("other.png"), "retouched by hand").unwrap();
+        let message = again.undo_last();
+        assert!(root.join("other.png").exists(), "{message}");
+        assert!(
+            message.contains("Left alone because they changed since: other.png"),
+            "{message}"
         );
     }
 }

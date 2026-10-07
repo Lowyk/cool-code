@@ -14,7 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 14;
+pub(super) const ROWS: usize = 15;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -90,6 +90,14 @@ pub(super) fn draw_general(
         vec![switch(app.settings.dynamic_workflows)],
         vec![switch(app.settings.usage_warnings)],
         vec![switch(app.settings.auto_compact)],
+        vec![match &app.settings.image_generation {
+            Some(config) if crate::imagegen::available(&app.settings) => Span::styled(
+                config.model.clone(),
+                Style::default().fg(Color::Rgb(110, 220, 130)),
+            ),
+            Some(_) => Span::styled("key missing", Style::default().fg(Color::Rgb(255, 197, 92))),
+            None => Span::styled("off", Style::default().fg(Color::Gray)),
+        }],
         vec![Span::styled("…", Style::default().fg(Color::DarkGray))],
     ];
     let labels = [
@@ -106,6 +114,7 @@ pub(super) fn draw_general(
         "Dynamic workflows",
         "Usage warnings",
         "Auto-compact",
+        "Image generation",
         "Reset",
     ];
     let focused = view.focus == Focus::Content;
@@ -211,7 +220,8 @@ impl App {
                     .to_owned();
                     write_settings(&self.settings)?;
                 }
-                13 => view.reset = Some(ResetStage::Menu { row: 0 }),
+                13 => self.open_image_setup(),
+                14 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;

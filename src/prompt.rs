@@ -38,6 +38,10 @@ fn identity(model: Option<&str>) -> String {
     )
 }
 
+const IMAGE_NOTES: &str = "\
+Images:
+- `generate_image` makes a placeholder picture from a description and saves it as a new file (it never replaces one). It costs the user money and asks for their approval, so use it only when the task needs an image, say what you generated and where, and call it a placeholder.";
+
 const PROJECT_NOTES: &str = "\
 Project notes:
 - A `COOL.md` file in the project's root holds guidance for you: it is loaded at the start of every session in a trusted folder. When you learn something lasting and useful about the project (how to build and test it, conventions, gotchas), or the user asks you to remember something, you may create or update `COOL.md` with the file tools.
@@ -111,6 +115,7 @@ pub(crate) fn assemble(
     let tool_names = crate::tools::ToolSet::Main {
         plan_mode: settings.permission_mode == "plan",
         workflows: workflows.is_some(),
+        images: crate::imagegen::available(settings),
     }
     .definitions()
     .into_iter()
@@ -171,6 +176,9 @@ pub(crate) fn build(inputs: &PromptInputs<'_>) -> String {
             inputs.tools.join(", ")
         ));
         sections.push(PROJECT_NOTES.to_owned());
+        if inputs.tools.contains(&"generate_image") {
+            sections.push(IMAGE_NOTES.to_owned());
+        }
     }
     if inputs.workspace_trusted
         && let Some(budget) = inputs.workflows.as_ref()
@@ -410,6 +418,42 @@ mod tests {
             !untrusted.contains("Project notes:"),
             "no tools, so no notes to write"
         );
+    }
+
+    #[test]
+    fn the_image_tool_is_explained_only_when_it_is_offered() {
+        let mut names = tools("auto");
+        let without = build(&PromptInputs {
+            model: Some("m"),
+            mode: "auto",
+            mode_label: "Auto",
+            workspace_trusted: true,
+            root: "/w",
+            os: "linux",
+            shell: "sh",
+            today: "2026-10-07",
+            tools: &names,
+            workflows: None,
+        });
+        assert!(!without.contains("generate_image"), "{without}");
+        names.push("generate_image");
+        let with = build(&PromptInputs {
+            model: Some("m"),
+            mode: "auto",
+            mode_label: "Auto",
+            workspace_trusted: true,
+            root: "/w",
+            os: "linux",
+            shell: "sh",
+            today: "2026-10-07",
+            tools: &names,
+            workflows: None,
+        });
+        assert!(
+            with.contains("Images:") && with.contains("placeholder"),
+            "{with}"
+        );
+        assert!(with.contains("costs the user money"), "{with}");
     }
 
     #[test]

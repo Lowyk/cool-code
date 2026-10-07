@@ -7,6 +7,14 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender};
 
+/// What a file held after the model wrote it: its text, or (for a binary file such as an
+/// image) a hash that recognizes it later.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FileContent {
+    Text(String),
+    Binary(String),
+}
+
 pub(crate) enum PendingEvent {
     TextDelta(String),
     Usage(u64),
@@ -25,7 +33,7 @@ pub(crate) enum PendingEvent {
         path: std::path::PathBuf,
         name: String,
         before: Option<String>,
-        after: String,
+        after: FileContent,
     },
     /// A `/compact` finished (or failed); there is no answer to show.
     CompactFinished(std::result::Result<(), String>),
@@ -199,6 +207,7 @@ pub(crate) fn run_loop(
         ToolSet::Main {
             plan_mode: settings.permission_mode == "plan",
             workflows: flow.enabled(),
+            images: crate::imagegen::available(settings),
         }
     } else {
         ToolSet::None
@@ -421,7 +430,12 @@ pub(crate) fn execute_agent_tool(
     // Plan mode gates only what changes things; reading and searching are always allowed.
     let changes_things = matches!(
         name,
-        "replace_text" | "replace_in_file" | "write_to_file" | "create_file" | "run_command"
+        "replace_text"
+            | "replace_in_file"
+            | "write_to_file"
+            | "create_file"
+            | "run_command"
+            | "generate_image"
     );
     let planned = if settings.permission_mode == "plan" && changes_things {
         if approved_plan
@@ -489,6 +503,9 @@ pub(crate) fn execute_agent_tool(
         }
         return crate::tools::run_command(root, command, cancel);
     }
+    if name == "generate_image" {
+        return generate_image(settings, root, arguments, events, planned, cancel, actor);
+    }
     if !matches!(
         name,
         "replace_in_file" | "replace_text" | "write_to_file" | "create_file"
@@ -551,7 +568,7 @@ pub(crate) fn execute_agent_tool(
             path: root.join(&proposal.relative_path),
             name: proposal.relative_path.clone(),
             before: None,
-            after: proposal.content.clone(),
+            after: FileContent::Text(proposal.content.clone()),
         });
         return Ok(format!("Created new file {}.", proposal.relative_path));
     }
@@ -654,11 +671,98 @@ pub(crate) fn execute_agent_tool(
         path: root.join(&proposal.relative_path),
         name: proposal.relative_path.clone(),
         before: Some(proposal.original.clone()),
-        after: proposal.updated.clone(),
+        after: FileContent::Text(proposal.updated.clone()),
     });
     Ok(format!(
         "Updated {} ({}).",
         proposal.relative_path, proposal.change_summary
+    ))
+}
+
+/// Makes an image with the user's image API and saves it as a new file. It costs money, so only
+/// Accept Everything (or an approved plan) goes ahead without asking.
+fn generate_image(
+    settings: &Settings,
+    root: &Path,
+    arguments: &serde_json::Value,
+    events: &mpsc::Sender<PendingEvent>,
+    planned: bool,
+    cancel: &std::sync::atomic::AtomicBool,
+    actor: Option<&str>,
+) -> Result<String> {
+    let object = arguments
+        .as_object()
+        .context("tool arguments must be an object")?;
+    if object
+        .keys()
+        .any(|key| !["prompt", "path", "size"].contains(&key.as_str()))
+    {
+        bail!("generate_image received an unknown argument");
+    }
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+    };
+    let prompt = text("prompt")
+        .filter(|prompt| !prompt.is_empty())
+        .context("generate_image requires a `prompt`")?;
+    let path = text("path")
+        .filter(|path| !path.is_empty())
+        .context("generate_image requires a `path`")?;
+    if prompt.chars().count() > crate::imagegen::MAX_PROMPT_CHARS {
+        bail!(
+            "the prompt is longer than {} characters",
+            crate::imagegen::MAX_PROMPT_CHARS
+        );
+    }
+    crate::imagegen::check_extension(path)?;
+    let size = crate::imagegen::resolve_size(text("size"))?;
+    crate::tools::check_new_path(root, path)?;
+    let Some(config) = settings
+        .image_generation
+        .as_ref()
+        .filter(|_| crate::imagegen::available(settings))
+    else {
+        return Ok(
+            "Image generation is not set up. The user can add an image API in Settings → General."
+                .to_owned(),
+        );
+    };
+    if !planned && settings.permission_mode != "accept-everything" {
+        let details = format!(
+            "Permission mode: {}\n\nSave to: {path}\nSize: {size}\nImage model: {} at {}\nThis calls your image API and may cost money.\n\nPrompt:\n{prompt}",
+            mode_label(&settings.permission_mode),
+            config.model,
+            config.base_url,
+        );
+        if !request_tool_approval(
+            events,
+            titled(actor, format!("Generate image {path}")),
+            details,
+        )? {
+            return Ok(
+                "The user declined this image. Do not retry it without new authorization."
+                    .to_owned(),
+            );
+        }
+    }
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        bail!("cancelled");
+    }
+    let key = crate::imagegen::saved_key().context("the image API key is missing")?;
+    let bytes = crate::imagegen::generate(config, &key, prompt, &size)?;
+    let saved = crate::tools::write_new_bytes(root, path, &bytes)?;
+    let _ = events.send(PendingEvent::FileChanged {
+        path: root.join(&saved),
+        name: saved.clone(),
+        before: None,
+        after: FileContent::Binary(crate::imagegen::sha256_hex(&bytes)),
+    });
+    Ok(format!(
+        "Saved {saved} ({} KB, {size}) from the image API.",
+        (bytes.len() / 1024).max(1)
     ))
 }
 
@@ -1311,7 +1415,14 @@ mod file_change_tests {
                     before,
                     after,
                     ..
-                } => Some((name, before, after)),
+                } => Some((
+                    name,
+                    before,
+                    match after {
+                        FileContent::Text(text) => text,
+                        FileContent::Binary(hash) => format!("binary:{hash}"),
+                    },
+                )),
                 _ => None,
             })
             .collect();
@@ -1637,5 +1748,257 @@ mod auto_guard_tests {
         );
         assert!(result.unwrap().contains("Plan mode blocks"));
         assert!(approvals.is_empty() && judge.asked().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod image_tool_tests {
+    use super::*;
+    use crate::guard::NoJudge;
+    use crate::imagegen::{ImageConfig, key_name};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nthe-bytes-of-a-tiny-placeholder";
+
+    /// What running the tool gave: its answer, the approvals asked, and the files reported.
+    type Outcome = (
+        Result<String>,
+        Vec<(String, String)>,
+        Vec<(std::path::PathBuf, FileContent)>,
+    );
+
+    fn workspace() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("harness-image-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    /// A server that answers with the test PNG, and settings pointing at it with a saved key.
+    fn configured(mode: &str, answers: usize) -> (Settings, crate::testutil::Requests) {
+        let body: &'static str = Box::leak(
+            serde_json::json!({"data": [{"b64_json": BASE64.encode(PNG)}]})
+                .to_string()
+                .into_boxed_str(),
+        );
+        let (base, seen) =
+            crate::testutil::serve_full(vec![(200, "application/json", body); answers]);
+        let mut settings = Settings::default();
+        settings.permission_mode = mode.to_owned();
+        settings.image_generation = Some(ImageConfig {
+            base_url: base,
+            model: "test-image-model".to_owned(),
+        });
+        crate::secrets::store(&key_name(), "image-key").unwrap();
+        (settings, seen)
+    }
+
+    /// Runs the tool; approval requests are answered with `user_says` and returned.
+    fn run(
+        settings: &Settings,
+        root: &Path,
+        arguments: serde_json::Value,
+        user_says: bool,
+        approved_plan: &mut Vec<(String, serde_json::Value)>,
+    ) -> Outcome {
+        let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let listener = scope.spawn(move || {
+                let mut approvals = Vec::new();
+                let mut changes = Vec::new();
+                while let Ok(event) = receiver.recv() {
+                    match event {
+                        PendingEvent::ApprovalRequest(request) => {
+                            approvals.push((request.title.clone(), request.details.clone()));
+                            let _ = request.response.send(user_says);
+                        }
+                        PendingEvent::FileChanged { path, after, .. } => {
+                            changes.push((path, after))
+                        }
+                        _ => {}
+                    }
+                }
+                (approvals, changes)
+            });
+            let result = execute_agent_tool(
+                settings,
+                root,
+                "generate_image",
+                &arguments,
+                &sender,
+                approved_plan,
+                &cancel,
+                None,
+                &NoJudge,
+            );
+            drop(sender);
+            let (approvals, changes) = listener.join().unwrap();
+            (result, approvals, changes)
+        })
+    }
+
+    fn args(path: &str) -> serde_json::Value {
+        serde_json::json!({"prompt": "a calm blue gradient", "path": path, "size": "landscape"})
+    }
+
+    #[test]
+    fn in_accept_everything_the_image_is_made_and_saved_without_asking() {
+        let root = workspace();
+        let (settings, seen) = configured("accept-everything", 1);
+        let (result, approvals, changes) = run(
+            &settings,
+            &root,
+            args("assets/hero.png"),
+            false,
+            &mut Vec::new(),
+        );
+        let message = result.unwrap();
+        assert!(
+            message.contains("Saved assets/hero.png") && message.contains("1536x1024"),
+            "{message}"
+        );
+        assert!(approvals.is_empty());
+        assert_eq!(
+            std::fs::read(root.join("assets").join("hero.png")).unwrap(),
+            PNG,
+            "folders were created"
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let sent: serde_json::Value = serde_json::from_str(&requests[0].1).unwrap();
+        assert_eq!(sent["prompt"], "a calm blue gradient");
+        assert_eq!(sent["size"], "1536x1024");
+        assert_eq!(sent["model"], "test-image-model");
+        assert_eq!(changes.len(), 1, "undo is told");
+        assert_eq!(
+            changes[0].1,
+            FileContent::Binary(crate::imagegen::sha256_hex(PNG))
+        );
+        let _ = crate::secrets::delete(&key_name());
+    }
+
+    #[test]
+    fn every_other_mode_asks_first_because_it_costs_money_and_a_no_calls_nothing() {
+        for mode in ["accept-edits", "accept-minimal", "auto"] {
+            let root = workspace();
+            let (settings, seen) = configured(mode, 1);
+            let (result, approvals, changes) =
+                run(&settings, &root, args("a.png"), false, &mut Vec::new());
+            assert!(result.unwrap().contains("declined"), "{mode}");
+            assert_eq!(approvals.len(), 1, "{mode}");
+            assert!(
+                approvals[0].0.contains("Generate image a.png"),
+                "{}",
+                approvals[0].0
+            );
+            assert!(
+                approvals[0].1.contains("may cost money")
+                    && approvals[0].1.contains("a calm blue gradient"),
+                "{}",
+                approvals[0].1
+            );
+            assert!(
+                approvals[0].1.contains("test-image-model"),
+                "{}",
+                approvals[0].1
+            );
+            assert!(
+                seen.lock().unwrap().is_empty(),
+                "{mode}: the API was not called"
+            );
+            assert!(!root.join("a.png").exists() && changes.is_empty(), "{mode}");
+        }
+        let root = workspace();
+        let (settings, seen) = configured("accept-edits", 1);
+        let (result, approvals, _) = run(&settings, &root, args("yes.png"), true, &mut Vec::new());
+        assert!(result.unwrap().contains("Saved yes.png"));
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let _ = crate::secrets::delete(&key_name());
+    }
+
+    #[test]
+    fn nothing_is_overwritten_and_nothing_is_called_for_a_bad_request() {
+        let root = workspace();
+        std::fs::write(root.join("taken.png"), "mine").unwrap();
+        let (settings, seen) = configured("accept-everything", 4);
+        let cases = [
+            (args("taken.png"), "already exists"),
+            (args("notes.txt"), "must end in .png"),
+            (args("../escape.png"), ""),
+            (args("/etc/escape.png"), ""),
+            (
+                serde_json::json!({"prompt": "x", "path": "a.png", "size": "huge"}),
+                "size must be",
+            ),
+            (
+                serde_json::json!({"prompt": "  ", "path": "a.png"}),
+                "requires a `prompt`",
+            ),
+            (serde_json::json!({"prompt": "x"}), "requires a `path`"),
+            (
+                serde_json::json!({"prompt": "x", "path": "a.png", "extra": 1}),
+                "unknown argument",
+            ),
+        ];
+        for (arguments, expected) in cases {
+            let (result, approvals, changes) =
+                run(&settings, &root, arguments.clone(), true, &mut Vec::new());
+            let error = format!("{:#}", result.expect_err(&arguments.to_string()));
+            assert!(error.contains(expected), "{arguments}: {error}");
+            assert!(approvals.is_empty() && changes.is_empty(), "{arguments}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.join("taken.png")).unwrap(),
+            "mine"
+        );
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "no request was made for any of them"
+        );
+        let _ = crate::secrets::delete(&key_name());
+    }
+
+    #[test]
+    fn without_a_setup_the_tool_says_so_and_calls_nothing() {
+        let root = workspace();
+        let mut settings = Settings::default();
+        settings.permission_mode = "accept-everything".to_owned();
+        let (result, approvals, _) = run(&settings, &root, args("a.png"), true, &mut Vec::new());
+        assert!(result.unwrap().contains("not set up"));
+        assert!(approvals.is_empty() && !root.join("a.png").exists());
+    }
+
+    #[test]
+    fn plan_mode_needs_the_image_in_the_approved_plan() {
+        let root = workspace();
+        let (settings, seen) = configured("plan", 1);
+        let (result, approvals, _) = run(&settings, &root, args("p.png"), true, &mut Vec::new());
+        assert!(result.unwrap().contains("Plan mode blocks"));
+        assert!(approvals.is_empty() && seen.lock().unwrap().is_empty());
+        // Once the plan approved exactly this call it goes ahead, and then without asking again.
+        let mut plan = vec![("generate_image".to_owned(), args("p.png"))];
+        let (result, approvals, _) = run(&settings, &root, args("p.png"), false, &mut plan);
+        assert!(result.unwrap().contains("Saved p.png"));
+        assert!(approvals.is_empty() && plan.is_empty());
+        let _ = crate::secrets::delete(&key_name());
+    }
+
+    #[test]
+    fn only_the_main_assistant_is_offered_the_tool_and_only_when_asked_for() {
+        use crate::tools::ToolSet;
+        let main = |images| ToolSet::Main {
+            plan_mode: false,
+            workflows: false,
+            images,
+        };
+        assert!(main(true).allows("generate_image"));
+        assert!(!main(false).allows("generate_image"));
+        assert!(!ToolSet::Explore.allows("generate_image"));
+        assert!(
+            !ToolSet::Implement.allows("generate_image"),
+            "subagents cannot spend money"
+        );
+        assert!(!ToolSet::None.allows("generate_image"));
     }
 }

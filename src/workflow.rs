@@ -888,6 +888,7 @@ mod tests {
         assert_eq!(
             model.tool_sets(),
             [ToolSet::Main {
+                images: false,
                 plan_mode: false,
                 workflows: true
             }]
@@ -899,12 +900,14 @@ mod tests {
         assert_eq!(
             off.tool_sets(),
             [ToolSet::Main {
+                images: false,
                 plan_mode: false,
                 workflows: false
             }]
         );
         assert!(
             !ToolSet::Main {
+                images: false,
                 plan_mode: false,
                 workflows: false
             }
@@ -912,6 +915,7 @@ mod tests {
         );
         assert!(
             ToolSet::Main {
+                images: false,
                 plan_mode: false,
                 workflows: true
             }

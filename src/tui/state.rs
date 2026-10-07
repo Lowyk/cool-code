@@ -104,6 +104,8 @@ pub(super) struct App {
     pub(super) project_files: Option<(std::time::Instant, Vec<String>)>,
     /// A message waiting for files outside the project to be confirmed.
     pub(super) outside_prompt: Option<crate::tui::mentions::OutsidePrompt>,
+    /// The form for the image API.
+    pub(super) image_setup: Option<crate::tui::image_setup::ImageSetup>,
     /// When the outside-files setting was recently switched.
     pub(super) outside_toggles: Vec<std::time::Instant>,
     /// The hidden "skip confirmation" option has been revealed this session.
@@ -496,6 +498,7 @@ impl App {
             mention_dismissed_at: None,
             project_files: None,
             outside_prompt: None,
+            image_setup: None,
             outside_toggles: Vec::new(),
             outside_no_prompt_revealed: false,
             stats_view: None,

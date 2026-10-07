@@ -74,6 +74,7 @@ pub(in crate::tui) fn reset_preferences(settings: &Settings) -> Settings {
         base_url: settings.base_url.clone(),
         api_key_env: settings.api_key_env.clone(),
         providers: settings.providers.clone(),
+        image_generation: settings.image_generation.clone(),
         active_provider_id: settings.active_provider_id.clone(),
         default_provider_id: settings.default_provider_id.clone(),
         model_chains: settings.model_chains.clone(),
@@ -107,7 +108,7 @@ impl App {
             ResetTarget::Providers => {
                 let count = self.settings.providers.len();
                 format!(
-                    "remove {} and delete their API keys from the credential store",
+                    "remove {}, the image API, and delete their API keys from the credential store",
                     plural(count, "provider", "providers")
                 )
             }
@@ -157,6 +158,8 @@ impl App {
             for provider in &self.settings.providers {
                 crate::secrets::delete(&provider.id)?;
             }
+            crate::secrets::delete(&crate::imagegen::key_name())?;
+            self.settings.image_generation = None;
             self.settings.providers.clear();
             self.settings.model_chains.clear();
             self.settings.active_chain_id = None;
