@@ -16,6 +16,7 @@ mod chatgpt_auth;
 mod context;
 mod effort_support;
 mod endpoints;
+mod headless;
 mod login_page;
 mod policy;
 mod projects;
@@ -56,6 +57,30 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// Run one turn without the interface and print the answer (for scripts and CI).
+    ///
+    /// The answer goes to standard output and progress to standard error. Approvals cannot be
+    /// asked for, so they are declined: pick a permission mode that fits the job.
+    Run {
+        /// What to ask. Read from standard input when omitted or `-`.
+        prompt: Vec<String>,
+        /// Use this model on the active provider.
+        #[arg(long)]
+        model: Option<String>,
+        /// Permission mode: plan, auto, accept-edits, accept-minimal or accept-everything.
+        #[arg(long)]
+        mode: Option<String>,
+        /// Effort: low, medium, high, xhigh, max, super or ultimate (the last two need Dynamic
+        /// workflows unlocked).
+        #[arg(long)]
+        effort: Option<Effort>,
+        /// Treat the current folder as trusted for this run only.
+        #[arg(long)]
+        trust: bool,
+        /// Print one JSON object per line instead of text.
+        #[arg(long)]
+        json: bool,
     },
     /// Show or set the reasoning/workflow effort level.
     Effort {
@@ -392,6 +417,21 @@ fn run() -> Result<()> {
         return tui::run(resume);
     };
     match command {
+        Command::Run {
+            prompt,
+            model,
+            mode,
+            effort,
+            trust,
+            json,
+        } => headless::run(headless::Options {
+            prompt: prompt.join(" "),
+            model,
+            mode,
+            effort,
+            trust,
+            json,
+        })?,
         Command::Init => {
             let path = settings_path()?;
             if path.exists() {
@@ -535,6 +575,43 @@ mod tests {
     }
 
     #[test]
+    fn the_run_command_takes_a_prompt_and_its_options() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "harness",
+            "run",
+            "fix",
+            "the",
+            "bug",
+            "--mode",
+            "accept-edits",
+            "--effort",
+            "high",
+            "--trust",
+            "--json",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Run {
+                prompt,
+                mode,
+                effort,
+                trust,
+                json,
+                ..
+            }) => {
+                assert_eq!(prompt.join(" "), "fix the bug");
+                assert_eq!(mode.as_deref(), Some("accept-edits"));
+                assert_eq!(effort, Some(Effort::High));
+                assert!(trust && json);
+            }
+            other => panic!("not the run command: {other:?}"),
+        }
+        let bare = Cli::try_parse_from(["harness", "run"]).expect("parse");
+        assert!(matches!(bare.command, Some(Command::Run { prompt, .. }) if prompt.is_empty()));
+    }
+
+    #[test]
     fn the_command_line_accepts_both_names() {
         use clap::ValueEnum;
         assert_eq!(
@@ -547,7 +624,7 @@ mod tests {
         );
     }
 
-    use super::{Effort, PulseMode, Settings, migrate_settings, settings_path};
+    use super::{Cli, Command, Effort, PulseMode, Settings, migrate_settings, settings_path};
     use std::fs;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

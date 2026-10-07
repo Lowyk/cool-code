@@ -104,6 +104,10 @@ With workflows on, the model gets a `spawn_subagents` tool. `explore` subagents 
 
 The status line shows how full the model's context is (`ctx 42k/200k`, yellow above 80% and red above 95%; without a reported window just the size). Before a request would fill the window, the older conversation is replaced by a short briefing the model writes, and the recent part stays word for word; if a provider says a request was too large, the same thing happens and the request is retried. `/compact` does it on demand, and **Settings → General → Auto-compact** turns the automatic version off. The window comes from what the provider reports for the model, so a provider that does not report one is only condensed when it complains. The summary is an estimate-driven approximation: sizes are counted at about four characters a token.
 
+### Scripts and CI
+
+`harness run "what to do"` runs one turn without the interface (or pipe the prompt in: `git diff | harness run "review this"`). The answer goes to standard output and progress to standard error; `--json` prints one JSON object per line instead (`tool`, `file`, `declined`, `note` and a final `result`). It uses your saved provider and settings, with `--model`, `--mode` and `--effort` to override them for one run. The folder must already be trusted for the model to have tools (or pass `--trust` for that run only; nothing is saved). There is nobody to ask for approval, so anything the permission mode would ask about is declined and reported: pick a mode that fits the job, for example `--mode accept-edits`. Super and Ultimate stay locked unless Dynamic workflows is on, and a provider that needs a one-time privacy acknowledgement refuses until you have given it in the interface. Headless runs are not saved as sessions.
+
 ### Project instructions
 
 `COOL.md` (project guidance), `CLAUDE.md` and `AGENTS.md` can be loaded as context, only in trusted folders. `CLAUDE.md` and `AGENTS.md` are opt-in; `/claudemd` and `/agentsmd` switch each on or off for the current project, and `~/.claude/CLAUDE.md` is your own global file. A global `~/.coolcode/COOL.md` works too. None of these can override the harness's policy.
@@ -125,7 +129,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/privacy [add\|clear\|revoke]` | Local redaction values and acknowledgements |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
-Attach workspace files with `@path`. **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
+Attach workspace files with `@path`. **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness run`, `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
 
 ## Privacy and data
 
