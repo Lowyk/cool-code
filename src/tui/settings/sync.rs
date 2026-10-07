@@ -99,7 +99,7 @@ impl App {
             && profile.adapter == "chatgpt"
             && profile.models_url.is_none()
         {
-            profile.models_url = Some(format!("{}/models", crate::chatgpt_auth::API_BASE));
+            profile.models_url = Some(crate::chatgpt_auth::MODELS_URL.to_owned());
         }
         let Some(profile) = self.settings.providers.get(index) else {
             return;
@@ -157,6 +157,12 @@ impl App {
 
     /// Fetches usage limits in the background; a fresh cached answer is reused unless `force`.
     pub(in crate::tui) fn start_limits_fetch(&mut self, index: usize, force: bool) {
+        if let Some(profile) = self.settings.providers.get_mut(index)
+            && profile.adapter == "chatgpt"
+            && profile.limits_url.is_none()
+        {
+            profile.limits_url = Some(crate::chatgpt_auth::USAGE_URL.to_owned());
+        }
         let Some(profile) = self.settings.providers.get(index) else {
             return;
         };
@@ -180,6 +186,23 @@ impl App {
                     ),
                 },
             );
+            return;
+        }
+        if profile.adapter == "chatgpt" {
+            self.limits.insert(
+                id.clone(),
+                LimitsEntry {
+                    fetched_at: Instant::now(),
+                    state: LimitsState::Loading,
+                },
+            );
+            self.spawn_task(move || TaskResult::Limits {
+                provider_id: id.clone(),
+                url: url.clone(),
+                result: crate::chatgpt_auth::fetch_usage(&id, &url, crate::chatgpt_auth::TOKEN_URL)
+                    .map(|value| crate::endpoints::summarize_chatgpt_usage(&value))
+                    .map_err(|error| format!("{error:#}")),
+            });
             return;
         }
         // Loading usage when a provider is selected is automatic; only a forced refresh (u) may
@@ -376,6 +399,25 @@ mod tests {
                 context: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_chatgpt_sign_in_saved_before_usage_tracking_can_load_its_usage() {
+        let mut app = App::new(crate::Settings::default());
+        app.settings.providers = vec![crate::ProviderProfile {
+            id: "old-chatgpt".to_owned(),
+            name: "ChatGPT".to_owned(),
+            adapter: "chatgpt".to_owned(),
+            base_url: Some(crate::chatgpt_auth::API_BASE.to_owned()),
+            ..Default::default()
+        }];
+        app.start_limits_fetch(0, true);
+        assert_eq!(app.spawned_tasks, 1);
+        assert_eq!(app.limits["old-chatgpt"].state, LimitsState::Loading);
+        assert_eq!(
+            app.settings.providers[0].limits_url.as_deref(),
+            Some("https://chatgpt.com/backend-api/wham/usage")
+        );
     }
 
     #[test]

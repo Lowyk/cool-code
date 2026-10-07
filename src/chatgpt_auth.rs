@@ -438,11 +438,29 @@ pub(crate) fn session_for(provider_id: &str, token_url: &str) -> Result<Session>
     Ok(session)
 }
 
-/// The models the signed-in account can use, as the backend's raw JSON.
-pub(crate) fn fetch_models(
+/// The Codex version the backend is told this client is. It hides models from clients it
+/// considers too old, so this must stay recent; `COOLCODE_CODEX_CLIENT_VERSION` overrides it.
+const CLIENT_VERSION: &str = "0.154.0";
+
+/// Where the plan's usage windows are reported.
+pub(crate) const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+
+/// Where the account's models are listed.
+pub(crate) const MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
+
+fn client_version() -> String {
+    std::env::var("COOLCODE_CODEX_CLIENT_VERSION")
+        .ok()
+        .filter(|version| !version.trim().is_empty())
+        .unwrap_or_else(|| CLIENT_VERSION.to_owned())
+}
+
+/// A signed-in GET, answered as JSON.
+fn get_json(
     provider_id: &str,
-    models_url: &str,
+    url: &str,
     token_url: &str,
+    what: &str,
 ) -> Result<serde_json::Value> {
     let session = session_for(provider_id, token_url)?;
     let client = reqwest::blocking::Client::builder()
@@ -452,8 +470,7 @@ pub(crate) fn fetch_models(
         .build()
         .context("creating HTTP client")?;
     let mut request = client
-        .get(models_url)
-        .query(&[("client_version", env!("CARGO_PKG_VERSION"))])
+        .get(url)
         .bearer_auth(&session.access_token)
         .header("originator", "codex_cli_rs")
         .header("Accept", "application/json");
@@ -463,14 +480,33 @@ pub(crate) fn fetch_models(
     let response = request
         .send()
         .map_err(reqwest::Error::without_url)
-        .context("asking ChatGPT for its models")?;
+        .with_context(|| format!("asking ChatGPT for {what}"))?;
     let status = response.status();
     if !status.is_success() {
-        bail!("ChatGPT returned {status} when listing models");
+        bail!("ChatGPT returned {status} when asked for {what}");
     }
     response
         .json()
-        .context("ChatGPT did not return a model list")
+        .with_context(|| format!("ChatGPT did not return {what} as JSON"))
+}
+
+/// The models the signed-in account can use, as the backend's raw JSON.
+pub(crate) fn fetch_models(
+    provider_id: &str,
+    models_url: &str,
+    token_url: &str,
+) -> Result<serde_json::Value> {
+    let versioned = format!("{models_url}?client_version={}", encode(&client_version()));
+    get_json(provider_id, &versioned, token_url, "its models")
+}
+
+/// The plan's usage windows, as the backend's raw JSON.
+pub(crate) fn fetch_usage(
+    provider_id: &str,
+    usage_url: &str,
+    token_url: &str,
+) -> Result<serde_json::Value> {
+    get_json(provider_id, usage_url, token_url, "its usage")
 }
 
 /// Forgets a sign-in everywhere.

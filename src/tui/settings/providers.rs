@@ -537,6 +537,15 @@ mod tests {
     }
 
     #[test]
+    fn a_notice_raised_inside_settings_is_visible_there_and_clears_on_the_next_key() {
+        let mut app = app_with(vec![profile("p1", false, false)], None);
+        app.notice = "ChatGPT returned 403 when asked for its models".to_owned();
+        assert!(screen(&app).contains("403 when asked for its models"));
+        press(&mut app, KeyCode::Down);
+        assert!(app.notice.is_empty());
+    }
+
+    #[test]
     fn the_models_line_counts_free_models() {
         let mut provider = with_endpoints(profile("p1", false, false));
         provider.model_info.insert(
