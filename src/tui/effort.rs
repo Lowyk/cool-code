@@ -472,8 +472,8 @@ pub(super) fn gradient_name(
         ],
         _ => unreachable!(),
     };
-    let spans = name
-        .chars()
+
+    name.chars()
         .enumerate()
         .map(|(index, character)| {
             Span::styled(
@@ -483,8 +483,7 @@ pub(super) fn gradient_name(
                     .add_modifier(Modifier::BOLD),
             )
         })
-        .collect::<Vec<_>>();
-    spans
+        .collect::<Vec<_>>()
 }
 
 pub(super) fn effort_label(effort: Effort) -> &'static str {

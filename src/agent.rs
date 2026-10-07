@@ -565,9 +565,8 @@ fn summarize_tool_result(result: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tally, message_chars, round_limit_message, tool_limits};
+    use super::{message_chars, round_limit_message, tool_limits};
     use crate::Settings;
-    use crate::stream::StreamEvent;
 
     #[test]
     fn message_chars_counts_text_but_not_images() {

@@ -52,7 +52,7 @@ pub(super) fn cool_code_wordmark(elapsed: f32) -> Vec<Line<'static>> {
                                 if word_index == 0
                                     && elapsed < 0.88
                                     && distance.is_some_and(|distance| distance < 2.3)
-                                    && (column + row) % 2 == 0
+                                    && (column + row).is_multiple_of(2)
                                 {
                                     "✦"
                                 } else {

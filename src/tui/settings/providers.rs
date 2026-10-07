@@ -317,9 +317,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::provider_items;
-    use crate::endpoints::LimitLine;
+
     use crate::tui::settings::Section;
-    use crate::tui::settings::sync::{LimitsEntry, LimitsState};
+
     use crate::tui::state::App;
     use crate::{ModelProfile, ProviderProfile, Settings};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

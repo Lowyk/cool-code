@@ -396,6 +396,54 @@ pub(crate) fn parse_google_stream(reader: impl BufRead, stream: &Stream) -> Resu
     finish(text.into_inner(), tool_calls)
 }
 
+// Placeholders look like `⟦CC-REDACTED-<32 hex>⟧`; anything longer is not one.
+const MAX_PLACEHOLDER_BYTES: usize = 64;
+
+pub(crate) struct Restorer<'a> {
+    mapping: &'a [(String, String)],
+    pending: String,
+}
+
+impl<'a> Restorer<'a> {
+    pub(crate) fn new(mapping: &'a [(String, String)]) -> Self {
+        Self {
+            mapping,
+            pending: String::new(),
+        }
+    }
+
+    /// Returns text that is safe to show; a possibly unfinished placeholder is held back.
+    pub(crate) fn push(&mut self, delta: &str) -> String {
+        if self.mapping.is_empty() {
+            return delta.to_owned();
+        }
+        self.pending.push_str(delta);
+        let hold = self
+            .pending
+            .rfind('⟦')
+            .filter(|start| {
+                !self.pending[*start..].contains('⟧')
+                    && self.pending.len() - start < MAX_PLACEHOLDER_BYTES
+            })
+            .unwrap_or(self.pending.len());
+        let ready = self.pending[..hold].to_owned();
+        self.pending.drain(..hold);
+        self.restore(ready)
+    }
+
+    pub(crate) fn flush(&mut self) -> String {
+        let rest = std::mem::take(&mut self.pending);
+        self.restore(rest)
+    }
+
+    fn restore(&self, mut text: String) -> String {
+        for (token, original) in self.mapping {
+            text = text.replace(token, original);
+        }
+        text
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Interrupted, Stream, StreamEvent, parse_openai_stream, sse_data};
@@ -665,53 +713,5 @@ data: {\"error\":{\"message\":\"overloaded\"}}\n\n";
         let interrupted = error.downcast_ref::<Interrupted>().expect("interrupted");
         assert_eq!(interrupted.partial, "half");
         assert!(interrupted.reason.contains("overloaded"));
-    }
-}
-
-// Placeholders look like `⟦CC-REDACTED-<32 hex>⟧`; anything longer is not one.
-const MAX_PLACEHOLDER_BYTES: usize = 64;
-
-pub(crate) struct Restorer<'a> {
-    mapping: &'a [(String, String)],
-    pending: String,
-}
-
-impl<'a> Restorer<'a> {
-    pub(crate) fn new(mapping: &'a [(String, String)]) -> Self {
-        Self {
-            mapping,
-            pending: String::new(),
-        }
-    }
-
-    /// Returns text that is safe to show; a possibly unfinished placeholder is held back.
-    pub(crate) fn push(&mut self, delta: &str) -> String {
-        if self.mapping.is_empty() {
-            return delta.to_owned();
-        }
-        self.pending.push_str(delta);
-        let hold = self
-            .pending
-            .rfind('⟦')
-            .filter(|start| {
-                !self.pending[*start..].contains('⟧')
-                    && self.pending.len() - start < MAX_PLACEHOLDER_BYTES
-            })
-            .unwrap_or(self.pending.len());
-        let ready = self.pending[..hold].to_owned();
-        self.pending.drain(..hold);
-        self.restore(ready)
-    }
-
-    pub(crate) fn flush(&mut self) -> String {
-        let rest = std::mem::take(&mut self.pending);
-        self.restore(rest)
-    }
-
-    fn restore(&self, mut text: String) -> String {
-        for (token, original) in self.mapping {
-            text = text.replace(token, original);
-        }
-        text
     }
 }

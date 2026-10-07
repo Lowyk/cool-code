@@ -116,8 +116,8 @@ impl App {
         if let Some(requested) = value.strip_prefix("/mode ") {
             if let Some((_, mode)) = MODES.iter().find(|(label, mode)| {
                 *mode == requested.trim().to_ascii_lowercase()
-                    || label.to_ascii_lowercase() == requested.trim().to_ascii_lowercase()
-                    || mode_alias(*mode) == requested.trim().to_ascii_lowercase()
+                    || label.eq_ignore_ascii_case(requested.trim())
+                    || mode_alias(mode) == requested.trim().to_ascii_lowercase()
             }) {
                 self.settings.permission_mode = (*mode).to_owned();
                 self.mode_index = MODES

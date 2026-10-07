@@ -806,7 +806,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{remove_provider_profile, unique_provider_alias};
-    use crate::endpoints::clean;
+
     use crate::tui::render::draw;
     use crate::tui::settings::Section;
     use crate::tui::state::{App, ModelDraft, PROVIDER_PRESETS, ProviderDraft};

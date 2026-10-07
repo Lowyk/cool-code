@@ -19,10 +19,13 @@ pub(in crate::tui) struct StatsView {
     pub(in crate::tui) records: Vec<crate::stats::Record>,
     pub(in crate::tui) confirm_clear: bool,
     // Summaries are recomputed only when the range, the data, or the minute changes.
-    summary_cache:
-        std::cell::RefCell<Option<((crate::stats::Range, usize, i64), crate::stats::Summary)>>,
-    grid_cache: std::cell::RefCell<Option<((usize, usize, i64), crate::stats::HeatGrid)>>,
+    summary_cache: std::cell::RefCell<Option<(SummaryKey, crate::stats::Summary)>>,
+    grid_cache: std::cell::RefCell<Option<(GridKey, crate::stats::HeatGrid)>>,
 }
+
+/// Cache keys: what a cached value was computed from.
+type SummaryKey = (crate::stats::Range, usize, i64);
+type GridKey = (usize, usize, i64);
 
 const RANGES: [crate::stats::Range; 3] = [
     crate::stats::Range::All,
