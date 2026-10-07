@@ -49,6 +49,7 @@ pub(in crate::tui) struct MentionState {
 
 /// A message waiting for the user to confirm files outside the project, one at a time.
 pub(in crate::tui) struct OutsidePrompt {
+    root: PathBuf,
     prompt: String,
     files: Vec<OutsideFile>,
     index: usize,
@@ -423,16 +424,27 @@ impl App {
         approved: &HashSet<PathBuf>,
     ) -> Result<()> {
         let root = std::env::current_dir()?.canonicalize()?;
+        self.send_prompt_in(&root, prompt, approved)
+    }
+
+    /// [`send_prompt`] for the project at `root`.
+    pub(in crate::tui) fn send_prompt_in(
+        &mut self,
+        root: &Path,
+        prompt: String,
+        approved: &HashSet<PathBuf>,
+    ) -> Result<()> {
         let policy = OutsidePolicy {
             allowed: self.settings.outside_files,
             no_prompt: self.settings.outside_files_no_prompt,
             approved,
         };
         let user_message =
-            match build_user_message_in(&root, &prompt, self.workspace_trusted, &policy) {
+            match build_user_message_in(root, &prompt, self.workspace_trusted, &policy) {
                 Ok(Built::Message(message)) => message,
                 Ok(Built::NeedsApproval(files)) => {
                     self.outside_prompt = Some(OutsidePrompt {
+                        root: root.to_path_buf(),
                         prompt,
                         files,
                         index: 0,
@@ -461,7 +473,7 @@ impl App {
                 prompt.index += 1;
                 if prompt.index >= prompt.files.len() {
                     let done = self.outside_prompt.take().expect("prompt is open");
-                    self.send_prompt(done.prompt, &done.approved)?;
+                    self.send_prompt_in(&done.root, done.prompt, &done.approved)?;
                 }
             }
             KeyCode::Char('n' | 'N') | KeyCode::Esc => {
@@ -931,5 +943,222 @@ mod tests {
         slow.outside_toggles = vec![long_ago; TOGGLES_TO_REVEAL - 1];
         slow.record_outside_toggle();
         assert!(!slow.outside_no_prompt_revealed, "old toggles do not count");
+    }
+
+    fn key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, event::KeyModifiers::NONE)
+    }
+
+    fn screen(app: &App) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 36)).expect("terminal");
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, app, 0))
+            .expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol().to_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn trusted_app() -> App {
+        let mut app = App::new(crate::Settings::default());
+        app.trust_prompt = false;
+        app.workspace_trusted = true;
+        app
+    }
+
+    #[test]
+    fn an_outside_file_waits_for_a_yes_and_then_the_message_is_sent_with_it() {
+        let (project, outer) = tree();
+        let mut app = trusted_app();
+        app.settings.outside_files = true;
+        app.send_prompt_in(
+            &project,
+            "summarize @../sibling.txt".to_owned(),
+            &HashSet::new(),
+        )
+        .expect("send");
+        assert!(
+            app.pending.is_none(),
+            "nothing is sent before the file is confirmed"
+        );
+        assert!(app.outside_prompt.is_some());
+        let shown = screen(&app);
+        assert!(shown.contains("A file outside the project"), "{shown}");
+        assert!(
+            shown.contains("sibling.txt") && shown.contains("y allow this file"),
+            "{shown}"
+        );
+        app.handle_outside_prompt_key(key(KeyCode::Char('y')))
+            .expect("yes");
+        assert!(app.outside_prompt.is_none());
+        assert!(app.pending.is_some(), "the message went out");
+        let sent = app.messages.last().expect("the message");
+        assert!(
+            sent.display
+                .contains(&format!("[File: @{}]", plain(&outer.join("sibling.txt")))),
+            "{}",
+            sent.display
+        );
+        assert!(
+            sent.content.as_str().unwrap().contains("x"),
+            "its contents are attached"
+        );
+    }
+
+    #[test]
+    fn saying_no_sends_nothing_and_puts_the_text_back_to_edit() {
+        let (project, _) = tree();
+        let mut app = trusted_app();
+        app.settings.outside_files = true;
+        app.send_prompt_in(
+            &project,
+            "summarize @../sibling.txt".to_owned(),
+            &HashSet::new(),
+        )
+        .expect("send");
+        app.handle_outside_prompt_key(key(KeyCode::Char('n')))
+            .expect("no");
+        assert!(app.outside_prompt.is_none() && app.pending.is_none());
+        assert!(app.messages.is_empty(), "nothing was sent");
+        assert_eq!(app.input, "summarize @../sibling.txt");
+        assert!(app.notice.contains("Nothing was sent"), "{}", app.notice);
+    }
+
+    #[test]
+    fn several_outside_files_are_confirmed_one_at_a_time_and_one_no_cancels_everything() {
+        let (project, _) = tree();
+        let mut app = trusted_app();
+        app.settings.outside_files = true;
+        let prompt = "compare @../sibling.txt and @../also.txt";
+        app.send_prompt_in(&project, prompt.to_owned(), &HashSet::new())
+            .expect("send");
+        assert!(screen(&app).contains("file 1 of 2"));
+        app.handle_outside_prompt_key(key(KeyCode::Enter))
+            .expect("first yes");
+        assert!(app.outside_prompt.is_some() && app.pending.is_none());
+        assert!(screen(&app).contains("file 2 of 2"));
+        app.handle_outside_prompt_key(key(KeyCode::Esc))
+            .expect("second no");
+        assert!(app.messages.is_empty());
+        assert_eq!(app.input, prompt);
+    }
+
+    #[test]
+    fn an_outside_file_is_refused_while_the_setting_is_off_and_the_text_is_kept() {
+        let (project, _) = tree();
+        let mut app = trusted_app();
+        app.send_prompt_in(&project, "read @../sibling.txt".to_owned(), &HashSet::new())
+            .expect("send");
+        assert!(app.outside_prompt.is_none() && app.pending.is_none());
+        assert_eq!(
+            app.input, "read @../sibling.txt",
+            "what was typed is not lost"
+        );
+        assert!(app.notice.contains("Settings → Privacy"), "{}", app.notice);
+    }
+
+    #[test]
+    fn typing_an_at_shows_files_and_tab_or_enter_inserts_the_highlighted_one() {
+        let mut app = trusted_app();
+        for character in "look at @Cargo".chars() {
+            crate::tui::handle_key(
+                &mut app,
+                event::KeyEvent::new(KeyCode::Char(character), event::KeyModifiers::NONE),
+            )
+            .expect("type");
+        }
+        let shown = screen(&app);
+        assert!(
+            shown.contains("Files") && shown.contains("Cargo.toml"),
+            "{shown}"
+        );
+        crate::tui::handle_key(&mut app, key(KeyCode::Tab)).expect("tab");
+        assert!(app.input.starts_with("look at @Cargo."), "{}", app.input);
+        assert!(
+            app.input.ends_with(' '),
+            "a file ends with a space: {:?}",
+            app.input
+        );
+        assert!(app.mention.is_none());
+        assert!(
+            app.messages.is_empty(),
+            "choosing a file did not send the message"
+        );
+    }
+
+    #[test]
+    fn escape_closes_the_suggestions_without_leaving_the_program() {
+        let mut app = trusted_app();
+        app.input = "@Cargo".to_owned();
+        app.refresh_mentions();
+        assert!(app.mention.is_some());
+        crate::tui::handle_key(&mut app, key(KeyCode::Esc)).expect("escape");
+        assert!(
+            app.mention.is_none() && app.running,
+            "the program keeps running"
+        );
+        crate::tui::handle_key(&mut app, key(KeyCode::Char('x'))).expect("type");
+        assert!(app.input.ends_with("Cargox"));
+    }
+
+    #[test]
+    fn nothing_is_suggested_in_a_folder_that_is_not_trusted() {
+        let mut app = App::new(crate::Settings::default());
+        app.trust_prompt = false;
+        app.workspace_trusted = false;
+        app.input = "@Cargo".to_owned();
+        app.refresh_mentions();
+        assert!(app.mention.is_none());
+    }
+
+    #[test]
+    fn the_privacy_page_has_the_outside_setting_and_the_hidden_option_appears_after_six_quick_toggles()
+     {
+        use crate::tui::settings::Section;
+        let mut app = trusted_app();
+        app.open_settings(Section::Privacy);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..3 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        let before = screen(&app);
+        assert!(before.contains("Outside files"), "{before}");
+        assert!(
+            !before.contains("Skip confirmation"),
+            "hidden at first: {before}"
+        );
+        // Down past the last row stays on it while the option is hidden.
+        app.handle_settings_view_key(key(KeyCode::Down))
+            .expect("down");
+        for _ in 0..TOGGLES_TO_REVEAL {
+            app.handle_settings_view_key(key(KeyCode::Enter))
+                .expect("toggle");
+        }
+        assert!(
+            !app.settings.outside_files,
+            "an even number of toggles ends where it started"
+        );
+        let after = screen(&app);
+        assert!(after.contains("Skip confirmation"), "{after}");
+        // The hidden option can be reached and switched on, which also allows outside files.
+        app.handle_settings_view_key(key(KeyCode::Down))
+            .expect("down");
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("enable");
+        assert!(app.settings.outside_files_no_prompt && app.settings.outside_files);
+        // Turning the main setting off turns the shortcut off with it.
+        app.handle_settings_view_key(key(KeyCode::Up)).expect("up");
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("disable");
+        assert!(!app.settings.outside_files && !app.settings.outside_files_no_prompt);
     }
 }

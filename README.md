@@ -102,6 +102,12 @@ The model has twelve tools. **Reading:** `list_files`, `read_file`, `search_text
 
 With workflows on, the model gets a `spawn_subagents` tool. `explore` subagents read and search in parallel; `implement` subagents can also edit and run commands, one at a time, and every approval they ask for names the subagent. Subagents cannot start more subagents. When a change is finished, a separate reviewer inspects the uncommitted changes and answers `VERDICT: PASS` or `VERDICT: ISSUES`; issues go back for a fix round. Super allows 4 subagents at a time, 8 per turn, 12 steps each and one review; Ultimate allows 6, 20, 25 and two. Esc cancels everything.
 
+### Referencing files with @
+
+Type `@` to attach a file to your message. A list of the project's files appears as you type (best matches first, build output and anything that looks like a secret left out); **↑/↓** choose, **Tab** or **Enter** insert, **Esc** closes it. A path with a separator browses that folder (`@src/`), and names with spaces are quoted (`@"my notes.txt"`). Images attach too. References inside the project work in a trusted folder as before, and `@./x` or `@src/../x` are fine as long as they stay inside.
+
+Files **outside** the project (`@../x`, `@~/x`, a full path, or a link that leads out) are refused until you turn on **Settings → Privacy → Outside files**. Even then, every such file is shown to you and has to be confirmed with **y** before it is read, one at a time, and answering **n** sends nothing and gives you your text back. A path that looks like it may hold secrets (`.env`, keys, `.ssh`, anything named like credentials) is flagged in red. There is also a hidden second option that stops the confirmations for ordinary files (secret-looking paths always still ask); it appears if you switch the Outside files setting on and off six times in quick succession.
+
 ### Undo
 
 `/undo` takes back the file changes the model made in its last turn, one turn at a time (up to 20 this session). It restores edited files and removes files the turn created, but only if a file is still exactly as the turn left it: anything you or a command changed since is left alone and reported. The model is told about the undo with your next message. Only changes made through the model's edit tools are tracked, not what `run_command` did, and the history is kept for the current run only.
@@ -135,7 +141,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/privacy [add\|clear\|revoke]` | Local redaction values and acknowledgements |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
-Attach workspace files with `@path`. **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness run`, `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
+Attach files with `@path` (see above). **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness run`, `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
 
 ## Privacy and data
 

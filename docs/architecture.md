@@ -36,6 +36,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/guard.rs` | Auto mode's safety check: fixed dangerous-command and secret-file rules, then a strict-JSON second-model review of one action |
 | `src/headless.rs` | `harness run`: one non-interactive turn, with approvals declined, progress on standard error or as JSON lines |
 | `src/context.rs` | Keeping a long conversation inside the context window: token estimates, the model-reported window, where to cut, and the summary that replaces the older messages |
+| `src/tui/mentions.rs` | `@` file suggestions, browsing, and the confirmation of files outside the project |
 | `src/tui/markdown.rs` | Turns the assistant's Markdown into styled terminal lines (headings, emphasis, code blocks, lists, quotes, links, tables) |
 | `src/tui/undo.rs` | `/undo`: per-turn checkpoints of the files the edit tools changed, restored only when a file is still as the turn left it |
 | `src/tui/usage_view.rs` | `/usage`: every provider's usage (live where an endpoint exists, a dashboard pointer otherwise) |
