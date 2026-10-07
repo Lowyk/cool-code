@@ -16,6 +16,7 @@ mod chatgpt_auth;
 mod context;
 mod effort_support;
 mod endpoints;
+mod guard;
 mod headless;
 mod login_page;
 mod policy;
@@ -192,6 +193,10 @@ struct Settings {
     usage_warnings: bool,
     /// Condense the older conversation into a summary before it fills the model's context window.
     auto_compact: bool,
+    /// The model Auto mode asks whether an action is safe (on the active provider). Unset uses
+    /// the active model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guard_model: Option<String>,
     effort: Effort,
     permission_mode: String,
 }
@@ -314,6 +319,7 @@ impl Default for Settings {
             effort_always_animated: false,
             usage_warnings: true,
             auto_compact: true,
+            guard_model: None,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

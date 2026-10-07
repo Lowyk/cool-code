@@ -20,6 +20,9 @@ All notable changes are listed here, newest first. The format follows
   line.
 - `/undo` takes back the file changes of the model's last turn without overwriting later work.
 - `harness run` runs one turn without the interface, for scripts and CI (`--json` available).
+- Auto mode now has a real safety check: fixed rules for dangerous commands and secret files, and a
+  second model call that approves only actions that are clearly safe, asking you (with the
+  reason) otherwise. `guard_model` picks a cheaper model for it.
 - Assistant answers are drawn as Markdown (headings, emphasis, code blocks, lists, quotes, links
   and tables) instead of raw text, including while they stream.
 - `/forcemodel <id>` sets a model on the default provider exactly as typed.

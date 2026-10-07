@@ -359,6 +359,10 @@ pub(crate) fn run_loop(
                     &mut approved_plan,
                     cancel,
                     None,
+                    &crate::guard::CompleterJudge {
+                        completer,
+                        request: request_text.clone(),
+                    },
                 )
             };
             // A cancel ends the turn; any other failure is just the tool's answer.
@@ -409,6 +413,7 @@ pub(crate) fn execute_agent_tool(
     approved_plan: &mut Vec<(String, serde_json::Value)>,
     cancel: &std::sync::atomic::AtomicBool,
     actor: Option<&str>,
+    judge: &dyn crate::guard::Judge,
 ) -> Result<String> {
     if name == "request_plan_approval" {
         return request_plan_approval(settings, root, arguments, events, approved_plan);
@@ -446,9 +451,22 @@ pub(crate) fn execute_agent_tool(
             .get("command")
             .and_then(serde_json::Value::as_str)
             .context("run_command requires a string `command`")?;
-        if !planned && !auto_approve_command(&settings.permission_mode, command) {
+        let (reviewed_ok, note) =
+            if !planned && !auto_approve_command(&settings.permission_mode, command) {
+                review(
+                    settings,
+                    root,
+                    judge,
+                    events,
+                    &crate::guard::Action::Command(command),
+                )
+            } else {
+                (false, None)
+            };
+        if !planned && !reviewed_ok && !auto_approve_command(&settings.permission_mode, command) {
             let details = format!(
-                "Permission mode: {}\nWorking directory: {}\nShell: {}\n\nExact command to execute:\n{}",
+                "{}Permission mode: {}\nWorking directory: {}\nShell: {}\n\nExact command to execute:\n{}",
+                review_prefix(&note),
                 mode_label(&settings.permission_mode),
                 root.display(),
                 if cfg!(windows) {
@@ -495,9 +513,25 @@ pub(crate) fn execute_agent_tool(
             bail!("create_file received an unknown argument");
         }
         let proposal = crate::tools::prepare_create_file(root, path, required("content")?)?;
-        if !planned && !auto_approve_create(&settings.permission_mode, &proposal) {
+        let (reviewed_ok, note) =
+            if !planned && !auto_approve_create(&settings.permission_mode, &proposal) {
+                review(
+                    settings,
+                    root,
+                    judge,
+                    events,
+                    &crate::guard::Action::Create {
+                        path: &proposal.relative_path,
+                        preview: &proposal.content,
+                    },
+                )
+            } else {
+                (false, None)
+            };
+        if !planned && !reviewed_ok && !auto_approve_create(&settings.permission_mode, &proposal) {
             let details = format!(
-                "Permission mode: {}\n\nProposed complete new-file contents:\n{}",
+                "{}Permission mode: {}\n\nProposed complete new-file contents:\n{}",
+                review_prefix(&note),
                 mode_label(&settings.permission_mode),
                 proposal.preview(),
             );
@@ -585,9 +619,25 @@ pub(crate) fn execute_agent_tool(
             .context("write_to_file requires a non-negative integer `line_number`")?;
         crate::tools::prepare_write_to_file(root, path, line_number, required("text")?)?
     };
-    if !planned && !auto_approve_edit(&settings.permission_mode, &proposal) {
+    let (reviewed_ok, note) =
+        if !planned && !auto_approve_edit(&settings.permission_mode, &proposal) {
+            review(
+                settings,
+                root,
+                judge,
+                events,
+                &crate::guard::Action::Edit {
+                    path: &proposal.relative_path,
+                    preview: &proposal.preview(),
+                },
+            )
+        } else {
+            (false, None)
+        };
+    if !planned && !reviewed_ok && !auto_approve_edit(&settings.permission_mode, &proposal) {
         let details = format!(
-            "Permission mode: {}\n\nProposed file change:\n{}",
+            "{}Permission mode: {}\n\nProposed file change:\n{}",
+            review_prefix(&note),
             mode_label(&settings.permission_mode),
             proposal.preview(),
         );
@@ -610,6 +660,36 @@ pub(crate) fn execute_agent_tool(
         "Updated {} ({}).",
         proposal.relative_path, proposal.change_summary
     ))
+}
+
+/// In Auto mode, has the safety check look at an action the fixed rules did not approve.
+/// Returns whether it may run without asking, and the reason to show when it must be asked about.
+/// Other modes never use the check.
+fn review(
+    settings: &Settings,
+    root: &Path,
+    judge: &dyn crate::guard::Judge,
+    events: &mpsc::Sender<PendingEvent>,
+    action: &crate::guard::Action<'_>,
+) -> (bool, Option<String>) {
+    if settings.permission_mode != "auto" {
+        return (false, None);
+    }
+    let _ = events.send(PendingEvent::ToolStarted(
+        "checking that it is safe".to_owned(),
+    ));
+    match judge.judge(settings, root, action) {
+        crate::guard::Judgement::Allow => (true, None),
+        crate::guard::Judgement::Ask(reason) => (false, Some(reason)),
+    }
+}
+
+/// The line that tells the user why Auto mode is asking.
+fn review_prefix(note: &Option<String>) -> String {
+    match note {
+        Some(reason) => format!("Auto mode is asking because: {reason}\n\n"),
+        None => String::new(),
+    }
 }
 
 /// A string argument that may be empty (an empty `new_text` deletes the matched text).
@@ -898,6 +978,7 @@ mod tests {
                 &mut Vec::new(),
                 &cancel,
                 None,
+                &crate::guard::NoJudge,
             )
             // A tool error (such as git_status outside a repository) is still an answer.
             .unwrap_or_else(|error| format!("{error:#}"))
@@ -1219,6 +1300,7 @@ mod file_change_tests {
             &mut Vec::new(),
             &cancel,
             None,
+            &crate::guard::NoJudge,
         );
         drop(sender);
         let changes = receiver
@@ -1283,5 +1365,277 @@ mod file_change_tests {
             std::fs::read_to_string(root.join("a.txt")).unwrap(),
             "alpha\nbeta\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_guard_tests {
+    use super::*;
+    use crate::guard::{Action, Judge, Judgement};
+    use std::sync::Mutex;
+
+    /// A reviewer with a fixed answer that remembers what it was asked about.
+    struct Fixed {
+        answer: Option<String>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Fixed {
+        fn allowing() -> Fixed {
+            Fixed {
+                answer: None,
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn asking(reason: &str) -> Fixed {
+            Fixed {
+                answer: Some(reason.to_owned()),
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl Judge for Fixed {
+        fn judge(&self, _: &Settings, _: &Path, action: &Action<'_>) -> Judgement {
+            let described = match action {
+                Action::Command(command) => format!("command: {command}"),
+                Action::Edit { path, .. } => format!("edit: {path}"),
+                Action::Create { path, .. } => format!("create: {path}"),
+            };
+            self.asked.lock().unwrap().push(described);
+            match &self.answer {
+                None => Judgement::Allow,
+                Some(reason) => Judgement::Ask(reason.clone()),
+            }
+        }
+    }
+
+    fn workspace() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("harness-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "alpha\n").unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    /// Runs one tool call in `mode`. Approval requests are answered with `user_says` and
+    /// recorded as (title, details); other events are returned by name.
+    fn run(
+        mode: &str,
+        judge: &dyn Judge,
+        root: &Path,
+        name: &str,
+        arguments: serde_json::Value,
+        user_says: bool,
+    ) -> (Result<String>, Vec<(String, String)>, Vec<String>) {
+        let mut settings = Settings::default();
+        settings.permission_mode = mode.to_owned();
+        let (sender, receiver) = mpsc::channel();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let listener = scope.spawn(move || {
+                let mut approvals = Vec::new();
+                let mut others = Vec::new();
+                while let Ok(event) = receiver.recv() {
+                    match event {
+                        PendingEvent::ApprovalRequest(request) => {
+                            approvals.push((request.title.clone(), request.details.clone()));
+                            let _ = request.response.send(user_says);
+                        }
+                        PendingEvent::ToolStarted(label) => others.push(label),
+                        _ => {}
+                    }
+                }
+                (approvals, others)
+            });
+            let result = execute_agent_tool(
+                &settings,
+                root,
+                name,
+                &arguments,
+                &sender,
+                &mut Vec::new(),
+                &cancel,
+                None,
+                judge,
+            );
+            drop(sender);
+            let (approvals, others) = listener.join().unwrap();
+            (result, approvals, others)
+        })
+    }
+
+    #[test]
+    fn a_command_the_reviewer_allows_runs_without_asking_the_user() {
+        let root = workspace();
+        let judge = Fixed::allowing();
+        let (result, approvals, started) = run(
+            "auto",
+            &judge,
+            &root,
+            "run_command",
+            serde_json::json!({"command": "echo guard-ran"}),
+            false,
+        );
+        assert!(result.unwrap().contains("guard-ran"));
+        assert!(approvals.is_empty(), "{approvals:?}");
+        assert_eq!(judge.asked(), ["command: echo guard-ran"]);
+        assert!(
+            started
+                .iter()
+                .any(|label| label.contains("checking that it is safe")),
+            "{started:?}"
+        );
+    }
+
+    #[test]
+    fn a_command_the_reviewer_doubts_goes_to_the_user_with_the_reason() {
+        let root = workspace();
+        let judge = Fixed::asking("it reaches outside the project");
+        let (result, approvals, _) = run(
+            "auto",
+            &judge,
+            &root,
+            "run_command",
+            serde_json::json!({"command": "echo not-run"}),
+            false,
+        );
+        assert!(result.unwrap().contains("declined"), "the user said no");
+        assert_eq!(approvals.len(), 1);
+        assert!(
+            approvals[0]
+                .1
+                .starts_with("Auto mode is asking because: it reaches outside the project"),
+            "{}",
+            approvals[0].1
+        );
+        assert!(
+            approvals[0].1.contains("echo not-run"),
+            "the command is still shown"
+        );
+        // If the user approves, it runs.
+        let (result, approvals, _) = run(
+            "auto",
+            &Fixed::asking("unsure"),
+            &root,
+            "run_command",
+            serde_json::json!({"command": "echo user-said-yes"}),
+            true,
+        );
+        assert!(result.unwrap().contains("user-said-yes"));
+        assert_eq!(approvals.len(), 1);
+    }
+
+    #[test]
+    fn the_other_modes_never_consult_the_reviewer() {
+        let root = workspace();
+        for mode in ["accept-edits", "accept-minimal"] {
+            let judge = Fixed::allowing();
+            let (result, approvals, started) = run(
+                mode,
+                &judge,
+                &root,
+                "run_command",
+                serde_json::json!({"command": "echo plain"}),
+                true,
+            );
+            assert!(result.unwrap().contains("plain"), "{mode}");
+            assert_eq!(
+                approvals.len(),
+                1,
+                "{mode}: these modes ask the user as before"
+            );
+            assert!(judge.asked().is_empty(), "{mode}");
+            assert!(started.is_empty(), "{mode}: {started:?}");
+        }
+        let judge = Fixed::allowing();
+        let (_, approvals, _) = run(
+            "accept-everything",
+            &judge,
+            &root,
+            "run_command",
+            serde_json::json!({"command": "echo all"}),
+            false,
+        );
+        assert!(approvals.is_empty() && judge.asked().is_empty());
+    }
+
+    #[test]
+    fn small_edits_to_ordinary_files_need_no_reviewer_but_big_or_new_ones_get_one() {
+        let root = workspace();
+        let judge = Fixed::allowing();
+        let (result, approvals, _) = run(
+            "auto",
+            &judge,
+            &root,
+            "replace_text",
+            serde_json::json!({"path": "a.txt", "old_text": "alpha", "new_text": "beta"}),
+            false,
+        );
+        result.unwrap();
+        assert!(approvals.is_empty());
+        assert!(judge.asked().is_empty(), "the fixed rules approved it");
+        let big = "x".repeat(3_000);
+        let (result, approvals, _) = run(
+            "auto",
+            &judge,
+            &root,
+            "create_file",
+            serde_json::json!({"path": "big.txt", "content": big}),
+            false,
+        );
+        result.unwrap();
+        assert!(approvals.is_empty());
+        assert_eq!(judge.asked(), ["create: big.txt"]);
+        assert!(root.join("big.txt").exists());
+        let (result, approvals, _) = run(
+            "auto",
+            &judge,
+            &root,
+            "replace_text",
+            serde_json::json!({"path": "big.txt", "old_text": "x".repeat(2_500), "new_text": "z".repeat(2_500)}),
+            false,
+        );
+        result.unwrap();
+        assert!(approvals.is_empty());
+        assert_eq!(judge.asked(), ["create: big.txt", "edit: big.txt"]);
+    }
+
+    #[test]
+    fn an_edit_the_reviewer_doubts_waits_for_the_user_and_is_not_applied_if_declined() {
+        let root = workspace();
+        let big = "y".repeat(3_000);
+        let judge = Fixed::asking("it rewrites a lot");
+        let (result, approvals, _) = run(
+            "auto",
+            &judge,
+            &root,
+            "create_file",
+            serde_json::json!({"path": "doubted.txt", "content": big}),
+            false,
+        );
+        assert!(result.unwrap().contains("declined"));
+        assert!(!root.join("doubted.txt").exists(), "nothing was written");
+        assert!(approvals[0].1.contains("it rewrites a lot"));
+    }
+
+    #[test]
+    fn plan_mode_still_needs_an_approved_plan_whatever_the_reviewer_says() {
+        let root = workspace();
+        let judge = Fixed::allowing();
+        let (result, approvals, _) = run(
+            "plan",
+            &judge,
+            &root,
+            "run_command",
+            serde_json::json!({"command": "echo sneaky"}),
+            true,
+        );
+        assert!(result.unwrap().contains("Plan mode blocks"));
+        assert!(approvals.is_empty() && judge.asked().is_empty());
     }
 }

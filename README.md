@@ -83,8 +83,10 @@ This is **not an official or supported API.** It uses the same sign-in as OpenAI
 | **Plan** | Read-only while the model inspects, then you approve one exact list of actions. After approval it can do only those. |
 | **Accept Edits** | Applies edits automatically, asks before commands. |
 | **Accept Minimal** | Applies edits and exact allowlisted checks (`cargo fmt --check`, `cargo check`, `cargo test`, `npm test`, `npm run build`, `pytest`); asks for anything else. |
-| **Auto** | Applies small, non-sensitive edits and the same allowlisted checks. |
+| **Auto** | Applies small, non-sensitive edits and the allowlisted checks by fixed rules. For anything else a second model call reviews just that one action and approves it only if it is clearly safe (see below); otherwise it asks you and shows why. |
 | **Accept Everything** | Approves edits and shell commands automatically. |
+
+**How Auto mode decides.** Fixed rules come first and cannot be overruled: commands that delete trees, force-push, run downloaded code, use `sudo`, touch credentials or system settings, or send data over the network, and files that look like secrets (`.env`, keys, anything named like credentials), are never shown to the reviewer and always go to you. For the rest, the reviewer sees the action as quoted data, with your request for context, and must answer `allow` or `ask` in strict JSON; an error, a rambling answer or no answer means ask. It runs at a low effort on the active model, or on `guard_model` from `~/.coolcode/config.toml` if you set one (a cheaper model on the same provider). Every check is one more request to your provider, and only Auto mode makes it.
 
 The mode is enforced by the harness, not by what the model recommends. Edits are checked for stale file contents, workspace boundaries are enforced, commands time out after five minutes, and each turn has a tool-call budget (40 rounds by default; set `max_tool_rounds` in `~/.coolcode/config.toml`, or say "continue").
 
