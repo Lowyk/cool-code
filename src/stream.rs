@@ -10,6 +10,8 @@ use crate::provider::{AgentTurn, ToolCall};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum StreamEvent {
     TextDelta(String),
+    /// A new model attempt begins (a fallback after a failed one); per-request tallies restart.
+    Attempt,
     /// Token counts a provider reported; either may be missing, and later events can refine them.
     Usage {
         input: Option<u64>,

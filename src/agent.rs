@@ -34,6 +34,28 @@ pub(crate) fn round_limit_message(rounds: usize) -> String {
     )
 }
 
+/// Counters for one model attempt, kept for usage stats. A fallback attempt starts them over, so
+/// a failed model's counts never land in the record of the model that finally answered.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Tally {
+    input: Option<u64>,
+    output: Option<u64>,
+    chars: usize,
+}
+
+impl Tally {
+    fn observe(&mut self, event: &StreamEvent) {
+        match event {
+            StreamEvent::TextDelta(text) => self.chars += text.chars().count(),
+            StreamEvent::Usage { input, output } => {
+                self.input = input.or(self.input);
+                self.output = output.or(self.output);
+            }
+            StreamEvent::Attempt => *self = Tally::default(),
+        }
+    }
+}
+
 /// Characters of text in a request, used only to estimate tokens a provider did not report.
 fn message_chars(messages: &[provider::ChatMessage]) -> usize {
     messages
@@ -62,25 +84,16 @@ pub(crate) fn run_agent_turns(
     let mut calls_run = 0usize;
     let mut approved_plan: Vec<(String, serde_json::Value)> = Vec::new();
     let turn_id = uuid::Uuid::new_v4().simple().to_string();
-    let usage = std::cell::Cell::new((None::<u64>, None::<u64>));
-    let streamed_chars = std::cell::Cell::new(0usize);
+    let tally = std::cell::RefCell::new(Tally::default());
     let forward = |event| {
-        match &event {
-            StreamEvent::TextDelta(text) => {
-                streamed_chars.set(streamed_chars.get() + text.chars().count());
-            }
-            StreamEvent::Usage { input, output } => {
-                let (previous_input, previous_output) = usage.get();
-                usage.set((input.or(previous_input), output.or(previous_output)));
-            }
-        }
+        tally.borrow_mut().observe(&event);
         let pending = match event {
             StreamEvent::TextDelta(text) => PendingEvent::TextDelta(text),
             StreamEvent::Usage {
                 output: Some(tokens),
                 ..
             } => PendingEvent::Usage(tokens),
-            StreamEvent::Usage { output: None, .. } => return,
+            StreamEvent::Usage { output: None, .. } | StreamEvent::Attempt => return,
         };
         let _ = events.send(pending);
     };
@@ -92,8 +105,7 @@ pub(crate) fn run_agent_turns(
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             bail!("cancelled");
         }
-        usage.set((None, None));
-        streamed_chars.set(0);
+        *tally.borrow_mut() = Tally::default();
         let started_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs() as i64);
@@ -129,16 +141,16 @@ pub(crate) fn run_agent_turns(
                 .as_deref()
                 .and_then(|id| settings.providers.iter().find(|profile| profile.id == id))
                 .map_or_else(|| "unknown".to_owned(), |profile| profile.name.clone());
-            let (reported_input, reported_output) = usage.get();
+            let observed = *tally.borrow();
             crate::stats::record(&crate::stats::build_record(&crate::stats::Facts {
                 started_ts,
                 turn: &turn_id,
                 provider: &provider_name,
                 model: &model,
-                reported_input,
-                reported_output,
+                reported_input: observed.input,
+                reported_output: observed.output,
                 input_chars: message_chars(&messages),
-                output_chars: streamed_chars.get(),
+                output_chars: observed.chars,
                 duration_ms: timer.elapsed().as_millis() as u64,
                 tool_calls,
                 outcome,
@@ -553,8 +565,9 @@ fn summarize_tool_result(result: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{message_chars, round_limit_message, tool_limits};
+    use super::{Tally, message_chars, round_limit_message, tool_limits};
     use crate::Settings;
+    use crate::stream::StreamEvent;
 
     #[test]
     fn message_chars_counts_text_but_not_images() {
@@ -567,6 +580,51 @@ mod tests {
         ]);
         assert_eq!(message_chars(&[text, with_image]), 9);
         assert_eq!(message_chars(&[]), 0);
+    }
+
+    #[test]
+    fn the_tally_counts_text_and_keeps_the_latest_counts() {
+        use super::Tally;
+        use crate::stream::StreamEvent;
+        let mut tally = Tally::default();
+        tally.observe(&StreamEvent::TextDelta("héllo".to_owned()));
+        tally.observe(&StreamEvent::Usage {
+            input: Some(10),
+            output: Some(1),
+        });
+        tally.observe(&StreamEvent::Usage {
+            input: None,
+            output: Some(8),
+        });
+        assert_eq!(
+            tally,
+            Tally {
+                input: Some(10),
+                output: Some(8),
+                chars: 5
+            }
+        );
+    }
+
+    #[test]
+    fn a_new_attempt_starts_the_tally_over() {
+        use super::Tally;
+        use crate::stream::StreamEvent;
+        let mut tally = Tally::default();
+        tally.observe(&StreamEvent::Usage {
+            input: Some(500),
+            output: None,
+        });
+        tally.observe(&StreamEvent::Attempt);
+        tally.observe(&StreamEvent::Usage {
+            input: None,
+            output: Some(7),
+        });
+        assert_eq!(
+            tally.input, None,
+            "the failed attempt's input must not carry over"
+        );
+        assert_eq!(tally.output, Some(7));
     }
 
     #[test]

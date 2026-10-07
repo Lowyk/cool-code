@@ -332,6 +332,7 @@ pub(crate) fn complete_with_fallback(
         .or_else(|| settings.model.clone())
         .unwrap_or_default();
     let current_provider = settings.active_provider_id.clone();
+    stream.emit(StreamEvent::Attempt);
     match complete_turn(settings, messages, allow_tools, stream) {
         Ok(turn) => {
             return Ok(Completion {
@@ -374,6 +375,7 @@ pub(crate) fn complete_with_fallback(
                 fallback.base_url = profile.base_url.clone();
                 fallback.model = Some(member.model_id.clone());
                 fallback.api_key_env = None;
+                stream.emit(StreamEvent::Attempt);
                 match complete_turn(&fallback, messages, allow_tools, stream) {
                     Ok(turn) => {
                         return Ok(Completion {
