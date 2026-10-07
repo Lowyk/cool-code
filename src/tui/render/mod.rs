@@ -387,6 +387,10 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         app.cursor.set(Some(position));
     }
 
+    if let Some(state) = app.mention.as_ref() {
+        crate::tui::mentions::draw_mentions(frame, prompt_area, state);
+    }
+
     let help = Line::from(vec![
         Span::styled(
             "Enter",
@@ -501,6 +505,9 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     }
     if let Some(login) = app.chatgpt_login.as_ref() {
         crate::tui::chatgpt_login::draw_chatgpt_login(frame, area, login);
+    }
+    if let Some(prompt) = app.outside_prompt.as_ref() {
+        crate::tui::mentions::draw_outside_prompt(frame, area, prompt);
     }
     if let Some(picker) = app.model_picker.as_ref() {
         draw_model_picker(frame, area, picker, &app.settings);

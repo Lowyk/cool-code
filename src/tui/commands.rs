@@ -1,6 +1,6 @@
 use crate::agent::{PendingEvent, run_agent_turns};
 use crate::policy::MODES;
-use crate::tui::context::{InstructionFiles, build_user_message};
+use crate::tui::context::InstructionFiles;
 use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
@@ -339,13 +339,11 @@ impl App {
             self.finish_command(self.notice.clone());
             return Ok(());
         }
-        let user_message = match build_user_message(&value, self.workspace_trusted) {
-            Ok(message) => message,
-            Err(error) => {
-                self.notice = format!("Could not attach reference: {error:#}");
-                return Ok(());
-            }
-        };
+        self.send_prompt(value, &std::collections::HashSet::new())
+    }
+
+    /// Sends a message whose `@` references have been read, after the privacy checks.
+    pub(super) fn send_built_message(&mut self, user_message: provider::ChatMessage) -> Result<()> {
         if let Some(risk) = provider::privacy_risk_for_settings(&self.settings) {
             let needs_warning = !self
                 .settings

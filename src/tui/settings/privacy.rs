@@ -9,7 +9,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 3;
+/// The rows that are always shown; a hidden one can follow.
+pub(super) const BASE_ROWS: usize = 4;
 
 pub(super) fn draw_privacy(
     frame: &mut ratatui::Frame<'_>,
@@ -23,7 +24,14 @@ pub(super) fn draw_privacy(
     } else {
         Span::styled("not trusted", Style::default().fg(Color::Rgb(255, 197, 92)))
     };
-    let rows: [(&str, Span<'static>, &str); ROWS] = [
+    let on_off = |on: bool| {
+        if on {
+            Span::styled("on", Style::default().fg(Color::Rgb(110, 220, 130)))
+        } else {
+            Span::styled("off", Style::default().fg(Color::Gray))
+        }
+    };
+    let mut rows: Vec<(&str, Span<'static>, &str)> = vec![
         (
             "Workspace trust",
             trust,
@@ -50,6 +58,18 @@ pub(super) fn draw_privacy(
             "Revoking makes flagged providers ask for consent again.",
         ),
     ];
+    rows.push((
+        "Outside files",
+        on_off(app.settings.outside_files),
+        "Lets @path reach files outside the project (.., ~ or a full path). Each file is still confirmed before it is read.",
+    ));
+    if app.settings.outside_files_no_prompt || app.outside_no_prompt_revealed {
+        rows.push((
+            "Skip confirmation",
+            on_off(app.settings.outside_files_no_prompt),
+            "Reads outside files without asking, except paths that may hold secrets. Use with care.",
+        ));
+    }
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
     for (index, (label, value, help)) in rows.into_iter().enumerate() {
@@ -86,6 +106,8 @@ pub(super) fn draw_privacy(
 
 impl App {
     pub(super) fn handle_privacy_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let rows = BASE_ROWS
+            + usize::from(self.settings.outside_files_no_prompt || self.outside_no_prompt_revealed);
         let Some(view) = self.settings_view.as_mut() else {
             return Ok(());
         };
@@ -111,7 +133,36 @@ impl App {
         }
         match key.code {
             KeyCode::Up => view.row = view.row.saturating_sub(1),
-            KeyCode::Down => view.row = (view.row + 1).min(ROWS - 1),
+            KeyCode::Down => view.row = (view.row + 1).min(rows - 1),
+            KeyCode::Enter | KeyCode::Char('t') if view.row == 3 => {
+                self.settings.outside_files = !self.settings.outside_files;
+                if !self.settings.outside_files {
+                    self.settings.outside_files_no_prompt = false;
+                }
+                write_settings(&self.settings)?;
+                self.record_outside_toggle();
+                if !self.outside_no_prompt_revealed {
+                    self.notice = if self.settings.outside_files {
+                        "@ can now reach files outside the project; each one is confirmed first."
+                    } else {
+                        "@ is limited to the project again."
+                    }
+                    .to_owned();
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('t') if view.row == 4 && rows > BASE_ROWS => {
+                self.settings.outside_files_no_prompt = !self.settings.outside_files_no_prompt;
+                if self.settings.outside_files_no_prompt {
+                    self.settings.outside_files = true;
+                }
+                write_settings(&self.settings)?;
+                self.notice = if self.settings.outside_files_no_prompt {
+                    "Outside files are now read without asking, except paths that may hold secrets."
+                } else {
+                    "Outside files are confirmed one by one again."
+                }
+                .to_owned();
+            }
             KeyCode::Enter | KeyCode::Char('t') if view.row == 0 => {
                 self.set_workspace_trusted(!self.workspace_trusted)?
             }

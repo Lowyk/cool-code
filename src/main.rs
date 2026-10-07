@@ -197,6 +197,10 @@ struct Settings {
     /// the active model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guard_model: Option<String>,
+    /// Allow `@` references to files outside the project folder (each one is still confirmed).
+    outside_files: bool,
+    /// Skip that confirmation, except for paths that may hold secrets. Hidden until unlocked.
+    outside_files_no_prompt: bool,
     effort: Effort,
     permission_mode: String,
 }
@@ -320,6 +324,8 @@ impl Default for Settings {
             usage_warnings: true,
             auto_compact: true,
             guard_model: None,
+            outside_files: false,
+            outside_files_no_prompt: false,
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

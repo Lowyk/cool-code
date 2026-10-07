@@ -96,6 +96,18 @@ pub(super) struct App {
     pub(super) checkpoints: Vec<crate::tui::undo::Checkpoint>,
     /// Tells the model about an undo, in front of the user's next message.
     pub(super) pending_note: Option<String>,
+    /// The `@` suggestions for the word being typed.
+    pub(super) mention: Option<crate::tui::mentions::MentionState>,
+    /// The input length at which the user closed the suggestions.
+    pub(super) mention_dismissed_at: Option<usize>,
+    /// The project's files for suggestions, and when they were read.
+    pub(super) project_files: Option<(std::time::Instant, Vec<String>)>,
+    /// A message waiting for files outside the project to be confirmed.
+    pub(super) outside_prompt: Option<crate::tui::mentions::OutsidePrompt>,
+    /// When the outside-files setting was recently switched.
+    pub(super) outside_toggles: Vec<std::time::Instant>,
+    /// The hidden "skip confirmation" option has been revealed this session.
+    pub(super) outside_no_prompt_revealed: bool,
     pub(super) stats_view: Option<crate::tui::stats_view::StatsView>,
     pub(super) usage_view: Option<crate::tui::usage_view::UsageView>,
     #[cfg(test)]
@@ -480,6 +492,12 @@ impl App {
             journal: Vec::new(),
             checkpoints: Vec::new(),
             pending_note: None,
+            mention: None,
+            mention_dismissed_at: None,
+            project_files: None,
+            outside_prompt: None,
+            outside_toggles: Vec::new(),
+            outside_no_prompt_revealed: false,
             stats_view: None,
             usage_view: None,
             #[cfg(test)]
