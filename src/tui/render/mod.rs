@@ -138,7 +138,7 @@ pub(super) fn input_prompt_height(input: &str, area: Rect) -> u16 {
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
     let prompt_height = input_prompt_height(&app.input, area);
-    let (logo_area, subtitle_area, history_area, prompt_area, help_area, status_area) =
+    let (logo_area, subtitle_area, history_area, prompt_area, help_area, notice_area, status_area) =
         if app.transcript.is_empty() {
             let layout = Layout::default()
                 .direction(Direction::Vertical)
@@ -150,6 +150,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                     Constraint::Length(1),
                     Constraint::Length(2),
                     Constraint::Fill(1),
+                    Constraint::Length(2),
                     Constraint::Length(1),
                 ])
                 .split(area);
@@ -160,6 +161,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                 layout[3],
                 layout[5],
                 layout[7],
+                layout[8],
             )
         } else {
             let layout = Layout::default()
@@ -170,7 +172,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                     Constraint::Fill(5),
                     Constraint::Length(prompt_height),
                     Constraint::Length(2),
-                    Constraint::Length(1),
+                    Constraint::Length(2),
                     Constraint::Length(1),
                 ])
                 .split(area);
@@ -180,6 +182,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                 layout[1],
                 layout[2],
                 layout[3],
+                layout[4],
                 layout[5],
             )
         };
@@ -375,11 +378,17 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
     ];
     status_spans.extend(effort_spans);
-    status_spans.extend([
-        Span::styled("  ", Style::default()),
-        Span::styled(&app.notice, Style::default().fg(Color::DarkGray)),
-    ]);
     let status = Line::from(status_spans);
+    // The one-line message about what just happened sits above the status line.
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            app.notice.as_str(),
+            Style::default().fg(Color::DarkGray),
+        ))
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true }),
+        notice_area,
+    );
     frame.render_widget(
         Paragraph::new(status)
             .alignment(Alignment::Center)
@@ -581,6 +590,81 @@ mod backdrop_tests {
     #[test]
     fn backdrop_setting_turns_it_off() {
         assert_eq!(particle_count(&app(false)), 0);
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::draw;
+    use crate::Settings;
+    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn rows(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_owned())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn row_of(rows: &[String], needle: &str) -> usize {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{needle:?} not on screen:
+{}",
+                    rows.join(
+                        "
+"
+                    )
+                )
+            })
+    }
+
+    fn app(conversation: bool) -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.notice = "Conversation cleared.".to_owned();
+        if conversation {
+            app.transcript.push(TranscriptEntry {
+                kind: TranscriptKind::User,
+                text: "hello".to_owned(),
+            });
+        }
+        app
+    }
+
+    #[test]
+    fn the_notice_sits_above_the_status_line_not_beside_it() {
+        for conversation in [false, true] {
+            let rows = rows(&app(conversation), 100, 30);
+            let notice = row_of(&rows, "Conversation cleared.");
+            let status = row_of(&rows, "no model selected");
+            assert!(
+                notice < status,
+                "conversation={conversation}: notice row {notice}, status row {status}"
+            );
+            assert!(
+                !rows[status].contains("Conversation cleared."),
+                "the status line no longer carries the notice"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_notice_wraps_instead_of_pushing_the_status_off_screen() {
+        let mut app = app(true);
+        app.notice = "word ".repeat(60);
+        let rows = rows(&app, 80, 24);
+        assert!(rows.iter().any(|row| row.contains("no model selected")));
     }
 }
 
