@@ -6,6 +6,7 @@ mod creators;
 mod effort;
 mod forms;
 mod markdown;
+mod mentions;
 pub(crate) mod models;
 mod pickers;
 mod present;
@@ -124,6 +125,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         }
     } else if app.chatgpt_login.is_some() {
         app.handle_chatgpt_login_key(key);
+    } else if app.outside_prompt.is_some() {
+        app.handle_outside_prompt_key(key)?;
     } else if app.wizard.is_some() {
         app.handle_setup_key(key)?;
     } else if app.tool_approval.is_some() {
@@ -277,7 +280,13 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else if app.settings_view.is_some() {
         app.handle_settings_view_key(key)?;
     } else {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
+            KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
+            KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
+            KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
+            KeyCode::Enter if app.mention_takes_enter() => app.accept_mention(),
+            KeyCode::Esc if app.mention.is_some() => app.dismiss_mention(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.running = false;
             }
@@ -301,6 +310,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             }
             _ => {}
         }
+        app.refresh_mentions();
     }
     Ok(())
 }

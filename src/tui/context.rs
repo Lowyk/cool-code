@@ -138,69 +138,222 @@ pub(crate) fn instruction_sections(
     (sections, warnings)
 }
 
+/// What to do about `@` references that lead outside the project folder.
+pub(crate) struct OutsidePolicy<'a> {
+    /// Outside files may be referenced at all (a setting that is off unless the user turned it on).
+    pub(crate) allowed: bool,
+    /// Skip the per-file confirmation, except for files that may hold secrets.
+    pub(crate) no_prompt: bool,
+    /// Files already confirmed for this message.
+    pub(crate) approved: &'a std::collections::HashSet<PathBuf>,
+}
+
+impl OutsidePolicy<'static> {
+    /// No file outside the project may be referenced.
+    pub(crate) fn forbidden() -> OutsidePolicy<'static> {
+        static NONE: std::sync::OnceLock<std::collections::HashSet<PathBuf>> =
+            std::sync::OnceLock::new();
+        OutsidePolicy {
+            allowed: false,
+            no_prompt: false,
+            approved: NONE.get_or_init(std::collections::HashSet::new),
+        }
+    }
+}
+
+/// A referenced file outside the project that the user still has to confirm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OutsideFile {
+    pub(crate) path: PathBuf,
+    /// As the user typed it.
+    pub(crate) typed: String,
+    pub(crate) size: u64,
+    /// The path looks like somewhere secrets are kept.
+    pub(crate) sensitive: bool,
+}
+
+/// The result of reading a message's `@` references.
+pub(crate) enum Built {
+    Message(provider::ChatMessage),
+    /// Nothing was read: these files outside the project need the user's confirmation first.
+    NeedsApproval(Vec<OutsideFile>),
+}
+
+/// The `@` references in `prompt`, as typed. A reference starts at the beginning of a word and
+/// ends at whitespace; `@"a path with spaces"` ends at its closing quote.
+pub(crate) fn references(prompt: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut resume = 0;
+    for (position, character) in prompt.char_indices() {
+        if position < resume || character != '@' {
+            continue;
+        }
+        let at_word_start = prompt[..position]
+            .chars()
+            .next_back()
+            .is_none_or(char::is_whitespace);
+        if !at_word_start {
+            continue;
+        }
+        let rest = &prompt[position + 1..];
+        if let Some(quoted) = rest.strip_prefix('"') {
+            if let Some(end) = quoted.find('"') {
+                found.push(quoted[..end].to_owned());
+                resume = position + 1 + 1 + end + 1;
+            }
+            continue;
+        }
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let word = rest[..end].trim_end_matches([',', ';', ':', '!', '?', ')', ']', '}']);
+        found.push(word.to_owned());
+        resume = position + 1 + end;
+    }
+    found
+}
+
+/// `~` and `~/x` as the home folder.
+fn expand_home(typed: &str) -> PathBuf {
+    if typed == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(typed));
+    }
+    if let Some(rest) = typed
+        .strip_prefix("~/")
+        .or_else(|| typed.strip_prefix("~\\"))
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    PathBuf::from(typed)
+}
+
+/// A path for showing to the user, without Windows' `\\?\` prefix.
+pub(crate) fn plain(path: &std::path::Path) -> String {
+    path.display()
+        .to_string()
+        .trim_start_matches("\\\\?\\")
+        .to_owned()
+}
+
+/// Reads a message's `@` references (see [`build_user_message_in`]) in the current folder, and
+/// refuses any file outside it.
 pub(crate) fn build_user_message(
     prompt: &str,
     workspace_trusted: bool,
 ) -> Result<provider::ChatMessage> {
-    if !workspace_trusted
-        && prompt
-            .split_whitespace()
-            .any(|token| token.starts_with('@') && token.len() > 1)
-    {
+    let root = std::env::current_dir()?
+        .canonicalize()
+        .context("resolving workspace root")?;
+    match build_user_message_in(
+        &root,
+        prompt,
+        workspace_trusted,
+        &OutsidePolicy::forbidden(),
+    )? {
+        Built::Message(message) => Ok(message),
+        Built::NeedsApproval(_) => bail!("references outside the project folder are not allowed"),
+    }
+}
+
+/// Attaches the files a message names with `@`. A reference that stays inside `root` is attached.
+/// One that leads outside (an absolute path, `~`, `..`, or a link pointing out) is refused unless
+/// the policy allows it, and even then the file is only read once the user has confirmed it.
+pub(crate) fn build_user_message_in(
+    root: &std::path::Path,
+    prompt: &str,
+    workspace_trusted: bool,
+    policy: &OutsidePolicy<'_>,
+) -> Result<Built> {
+    let typed_references = references(prompt)
+        .into_iter()
+        .filter(|typed| !typed.is_empty() && !typed.contains('@'))
+        .collect::<Vec<_>>();
+    if !workspace_trusted && !typed_references.is_empty() {
         bail!(
             "this workspace has not been trusted; @file references are disabled. Trust it from Settings → Privacy or restart and accept the workspace prompt"
         );
     }
-    let root = std::env::current_dir()?
-        .canonicalize()
-        .context("resolving workspace root")?;
-    let mut text = prompt.to_owned();
-    let mut display = prompt.to_owned();
-    let mut images = Vec::new();
-    let mut attached = std::collections::HashSet::new();
+    let root = root.canonicalize().context("resolving workspace root")?;
 
-    for token in prompt.split_whitespace() {
-        let Some(raw_path) = token
-            .strip_prefix('@')
-            .map(|path| path.trim_end_matches([',', ';', ':', '!', '?', ')', ']', '}']))
-        else {
-            continue;
+    // First decide what every reference is, reading nothing.
+    struct Reference {
+        typed: String,
+        canonical: PathBuf,
+        inside: bool,
+    }
+    let mut resolved: Vec<Reference> = Vec::new();
+    let mut needs_approval = Vec::new();
+    for typed in typed_references {
+        let path = expand_home(&typed);
+        let joined = if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
         };
-        if raw_path.is_empty() || raw_path.contains('@') {
-            continue;
-        }
-        let relative = PathBuf::from(raw_path);
-        if relative.is_absolute()
-            || relative
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            bail!("file references must stay inside the current workspace: @{raw_path}");
-        }
-        let joined = root.join(&relative);
         if !joined.exists() {
-            if raw_path.contains('/') || raw_path.contains('\\') {
-                bail!("referenced file does not exist: @{raw_path}");
+            if typed.contains('/') || typed.contains('\\') {
+                bail!("referenced file does not exist: @{typed}");
             }
             continue;
         }
         let canonical = joined
             .canonicalize()
-            .with_context(|| format!("resolving referenced file @{raw_path}"))?;
-        if !canonical.starts_with(&root) {
-            bail!("file references must stay inside the current workspace: @{raw_path}");
-        }
-        let relative_display = canonical
-            .strip_prefix(&root)
-            .unwrap_or(&canonical)
-            .display()
-            .to_string();
-        if !attached.insert(relative_display.clone()) {
+            .with_context(|| format!("resolving referenced file @{typed}"))?;
+        if resolved.iter().any(|known| known.canonical == canonical) {
             continue;
         }
-        let metadata = std::fs::metadata(&canonical)
-            .with_context(|| format!("reading @{relative_display} metadata"))?;
-        let extension = canonical
+        if canonical.is_dir() {
+            bail!("@{typed} is a folder; name a file inside it");
+        }
+        let inside = canonical.starts_with(&root);
+        if !inside {
+            if !policy.allowed {
+                bail!(
+                    "@{typed} is outside the project folder. Turn on \"Reference files outside the project\" in Settings → Privacy to allow it; each file is still confirmed first"
+                );
+            }
+            let sensitive = crate::guard::sensitive_path(&plain(&canonical));
+            let confirmed =
+                policy.approved.contains(&canonical) || (policy.no_prompt && !sensitive);
+            if !confirmed {
+                let size = std::fs::metadata(&canonical).map_or(0, |metadata| metadata.len());
+                needs_approval.push(OutsideFile {
+                    path: canonical.clone(),
+                    typed: typed.clone(),
+                    size,
+                    sensitive,
+                });
+            }
+        }
+        resolved.push(Reference {
+            typed,
+            canonical,
+            inside,
+        });
+    }
+    if !needs_approval.is_empty() {
+        return Ok(Built::NeedsApproval(needs_approval));
+    }
+
+    // Then read them.
+    let mut text = prompt.to_owned();
+    let mut display = prompt.to_owned();
+    let mut images = Vec::new();
+    for reference in resolved {
+        let shown = if reference.inside {
+            reference
+                .canonical
+                .strip_prefix(&root)
+                .unwrap_or(&reference.canonical)
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        } else {
+            plain(&reference.canonical)
+        };
+        let metadata = std::fs::metadata(&reference.canonical)
+            .with_context(|| format!("reading @{shown} metadata"))?;
+        let extension = reference
+            .canonical
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or("")
@@ -214,32 +367,33 @@ pub(crate) fn build_user_message(
         };
         if let Some(mime) = image_mime {
             if metadata.len() > 5 * 1024 * 1024 {
-                bail!("image @{relative_display} exceeds the 5 MiB attachment limit");
+                bail!("image @{shown} exceeds the 5 MiB attachment limit");
             }
-            let bytes = std::fs::read(&canonical)
-                .with_context(|| format!("reading image @{relative_display}"))?;
+            let bytes = std::fs::read(&reference.canonical)
+                .with_context(|| format!("reading image @{shown}"))?;
             let data_url = format!("data:{mime};base64,{}", BASE64.encode(bytes));
             images.push(serde_json::json!({
                 "type": "image_url",
                 "image_url": { "url": data_url }
             }));
-            display.push_str(&format!("\n[Image: @{relative_display}]"));
+            display.push_str(&format!("\n[Image: @{shown}]"));
         } else {
             if metadata.len() > 1024 * 1024 {
-                bail!("text file @{relative_display} exceeds the 1 MiB attachment limit");
+                bail!("text file @{shown} exceeds the 1 MiB attachment limit");
             }
-            let contents = std::fs::read_to_string(&canonical)
-                .with_context(|| format!("reading text file @{relative_display}"))?;
+            let contents = std::fs::read_to_string(&reference.canonical)
+                .with_context(|| format!("reading text file @{shown}"))?;
             text.push_str(&format!(
-                "\n\n[Referenced file: @{relative_display}]\n```\n{contents}\n```"
+                "\n\n[Referenced file: @{shown}]\n```\n{contents}\n```"
             ));
-            display.push_str(&format!("\n[File: @{relative_display}]"));
+            display.push_str(&format!("\n[File: @{shown}]"));
         }
+        let _ = &reference.typed;
     }
 
-    Ok(provider::ChatMessage::user_with_images(
+    Ok(Built::Message(provider::ChatMessage::user_with_images(
         display, text, images,
-    ))
+    )))
 }
 
 impl App {
@@ -392,5 +546,269 @@ mod tests {
         app.set_workspace_trusted(false).expect("revoke");
         assert!(!app.workspace_trusted);
         assert!(!crate::projects::is_trusted_at(&app.projects_path, &root));
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn folder(name: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("harness-refs-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("folder");
+        path.canonicalize().expect("canonical")
+    }
+
+    /// A project with files inside it and others in the folder above it.
+    fn setup() -> (PathBuf, PathBuf) {
+        let outer = folder("outer");
+        let project = outer.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(project.join("src").join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(project.join("my notes.txt"), "spaced").unwrap();
+        std::fs::write(outer.join("sibling.txt"), "from the folder above").unwrap();
+        std::fs::write(outer.join(".env"), "TOKEN=abc").unwrap();
+        (project, outer)
+    }
+
+    fn policy(approved: &HashSet<PathBuf>, allowed: bool, no_prompt: bool) -> OutsidePolicy<'_> {
+        OutsidePolicy {
+            allowed,
+            no_prompt,
+            approved,
+        }
+    }
+
+    fn message(built: Built) -> provider::ChatMessage {
+        match built {
+            Built::Message(message) => message,
+            Built::NeedsApproval(files) => panic!("unexpectedly needs approval: {files:?}"),
+        }
+    }
+
+    fn asked(built: Built) -> Vec<OutsideFile> {
+        match built {
+            Built::NeedsApproval(files) => files,
+            Built::Message(message) => panic!("unexpectedly built: {}", message.display),
+        }
+    }
+
+    fn build(project: &std::path::Path, prompt: &str, policy: &OutsidePolicy<'_>) -> Result<Built> {
+        build_user_message_in(project, prompt, true, policy)
+    }
+
+    #[test]
+    fn references_are_found_at_word_starts_and_quotes_allow_spaces() {
+        assert_eq!(
+            references("look at @src/main.rs, and @\"my notes.txt\" please"),
+            ["src/main.rs", "my notes.txt"]
+        );
+        assert_eq!(references("mail me@example.com or @a@b"), ["a@b"]);
+        assert_eq!(references("(@x) then @y!"), ["y"]);
+        assert!(references("@\"unterminated path").is_empty());
+        assert_eq!(
+            references("@../up and @/abs and @~/home and @C:\\x"),
+            ["../up", "/abs", "~/home", "C:\\x"]
+        );
+    }
+
+    #[test]
+    fn files_inside_the_project_attach_however_they_are_spelled() {
+        let (project, _) = setup();
+        let none = HashSet::new();
+        for spelling in [
+            "@src/main.rs",
+            "@./src/main.rs",
+            "@src/../src/main.rs",
+            "@\"src/main.rs\"",
+        ] {
+            let built = build(
+                &project,
+                &format!("explain {spelling}"),
+                &policy(&none, false, false),
+            )
+            .unwrap();
+            let message = message(built);
+            assert!(
+                message.display.ends_with("[File: @src/main.rs]"),
+                "{spelling}: {}",
+                message.display
+            );
+            assert!(
+                message.content.as_str().unwrap().contains("fn main() {}"),
+                "{spelling}"
+            );
+        }
+        let spaced = message(
+            build(
+                &project,
+                "read @\"my notes.txt\"",
+                &policy(&none, false, false),
+            )
+            .unwrap(),
+        );
+        assert!(spaced.content.as_str().unwrap().contains("spaced"));
+    }
+
+    #[test]
+    fn a_file_named_twice_is_attached_once() {
+        let (project, _) = setup();
+        let none = HashSet::new();
+        let message = message(
+            build(
+                &project,
+                "@src/main.rs and again @./src/main.rs",
+                &policy(&none, false, false),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            message
+                .content
+                .as_str()
+                .unwrap()
+                .matches("[Referenced file:")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn files_outside_the_project_are_refused_unless_the_setting_is_on() {
+        let (project, outer) = setup();
+        let none = HashSet::new();
+        let absolute = format!("@{}", plain(&outer.join("sibling.txt")));
+        for prompt in ["see @../sibling.txt", &format!("see {absolute}")] {
+            let error = build(&project, prompt, &policy(&none, false, false))
+                .err()
+                .expect("refused");
+            let text = format!("{error}");
+            assert!(
+                text.contains("outside the project folder"),
+                "{prompt}: {text}"
+            );
+            assert!(text.contains("Settings → Privacy"), "{text}");
+        }
+        // Climbing out and back in is still inside.
+        let inside = build(
+            &project,
+            "@../project/src/main.rs",
+            &policy(&none, false, false),
+        );
+        assert!(inside.is_ok(), "{:?}", inside.err());
+    }
+
+    #[test]
+    fn with_the_setting_on_each_outside_file_waits_for_confirmation_and_nothing_is_read() {
+        let (project, outer) = setup();
+        let none = HashSet::new();
+        let files =
+            asked(build(&project, "see @../sibling.txt", &policy(&none, true, false)).unwrap());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, outer.join("sibling.txt"));
+        assert_eq!(files[0].typed, "../sibling.txt");
+        assert_eq!(files[0].size, "from the folder above".len() as u64);
+        assert!(!files[0].sensitive);
+    }
+
+    #[test]
+    fn a_confirmed_file_is_attached_under_its_full_path() {
+        let (project, outer) = setup();
+        let approved: HashSet<PathBuf> = [outer.join("sibling.txt")].into_iter().collect();
+        let built = build(
+            &project,
+            "see @../sibling.txt and @src/main.rs",
+            &policy(&approved, true, false),
+        )
+        .unwrap();
+        let message = message(built);
+        assert!(
+            message
+                .content
+                .as_str()
+                .unwrap()
+                .contains("from the folder above")
+        );
+        assert!(
+            message
+                .display
+                .contains(&format!("[File: @{}]", plain(&outer.join("sibling.txt")))),
+            "{}",
+            message.display
+        );
+        // Confirming one file does not confirm another.
+        std::fs::write(outer.join("other.txt"), "x").unwrap();
+        let more = asked(
+            build(
+                &project,
+                "@../sibling.txt @../other.txt",
+                &policy(&approved, true, false),
+            )
+            .unwrap(),
+        );
+        assert_eq!(more.len(), 1);
+        assert_eq!(more[0].typed, "../other.txt");
+    }
+
+    #[test]
+    fn the_no_prompt_option_skips_confirmation_but_never_for_files_that_may_hold_secrets() {
+        let (project, _) = setup();
+        let none = HashSet::new();
+        let plain_file = build(&project, "@../sibling.txt", &policy(&none, true, true)).unwrap();
+        assert!(
+            message(plain_file)
+                .content
+                .as_str()
+                .unwrap()
+                .contains("from the folder above")
+        );
+        let secret = asked(build(&project, "@../.env", &policy(&none, true, true)).unwrap());
+        assert!(secret[0].sensitive, "{secret:?}");
+        // No-prompt alone does nothing while outside files are not allowed.
+        assert!(build(&project, "@../sibling.txt", &policy(&none, false, true)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_project_that_points_out_counts_as_outside() {
+        let (project, outer) = setup();
+        std::os::unix::fs::symlink(outer.join("sibling.txt"), project.join("link.txt")).unwrap();
+        let none = HashSet::new();
+        assert!(build(&project, "@link.txt", &policy(&none, false, false)).is_err());
+        let files = asked(build(&project, "@link.txt", &policy(&none, true, false)).unwrap());
+        assert_eq!(files[0].path, outer.join("sibling.txt"));
+    }
+
+    #[test]
+    fn folders_missing_files_and_untrusted_workspaces_are_reported() {
+        let (project, _) = setup();
+        let none = HashSet::new();
+        let allow = policy(&none, false, false);
+        let folder_error = build(&project, "@src", &allow).err().expect("folder");
+        assert!(format!("{folder_error}").contains("is a folder"));
+        let missing = build(&project, "@src/missing.rs", &allow)
+            .err()
+            .expect("missing");
+        assert!(format!("{missing}").contains("does not exist"));
+        assert!(
+            build(&project, "mention @someone without a file", &allow).is_ok(),
+            "a bare word is not a path"
+        );
+        let untrusted = build_user_message_in(&project, "@src/main.rs", false, &allow)
+            .err()
+            .expect("untrusted");
+        assert!(format!("{untrusted}").contains("not been trusted"));
+        assert!(build_user_message_in(&project, "no references", false, &allow).is_ok());
+    }
+
+    #[test]
+    fn the_home_folder_is_written_with_a_tilde() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_home("~/notes.txt"), home.join("notes.txt"));
+            assert_eq!(expand_home("~"), home);
+        }
+        assert_eq!(expand_home("plain/path"), PathBuf::from("plain/path"));
     }
 }
