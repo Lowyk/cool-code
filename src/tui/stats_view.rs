@@ -148,7 +148,6 @@ impl App {
     }
 }
 
-const ACCENT: Color = Color::Rgb(98, 213, 244);
 const HEAT: [Color; 5] = [
     Color::Rgb(58, 66, 74),
     Color::Rgb(48, 96, 118),
@@ -299,7 +298,7 @@ pub(in crate::tui) fn overview_lines(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!("✦ {fun}"),
-            Style::default().fg(ACCENT),
+            Style::default().fg(crate::tui::theme::accent()),
         )));
     }
     lines
@@ -345,7 +344,7 @@ pub(in crate::tui) fn models_lines(
         if bar_width > 0 {
             spans.push(Span::styled(
                 "█".repeat(filled),
-                Style::default().fg(ACCENT),
+                Style::default().fg(crate::tui::theme::accent()),
             ));
             spans.push(Span::styled(
                 "░".repeat(bar_width - filled),
@@ -379,8 +378,8 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
     let block = Block::default()
         .title(" Stats ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(Color::Rgb(22, 24, 27)));
+        .border_style(Style::default().fg(crate::tui::theme::accent()))
+        .style(Style::default().bg(crate::tui::theme::panel_alt()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 5 || inner.width < 20 {
@@ -390,7 +389,9 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
         Span::styled(
             format!(" {label} "),
             if selected {
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(crate::tui::theme::accent())
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             },

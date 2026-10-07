@@ -15,7 +15,7 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
                 lines.push(Line::from(vec![
                     Span::styled(
                         if index == form.preset { "› " } else { "  " },
-                        Style::default().fg(Color::Rgb(98, 213, 244)),
+                        Style::default().fg(crate::tui::theme::accent()),
                     ),
                     Span::styled(
                         preset.label,
@@ -45,7 +45,7 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
                     Paragraph::new(Line::from(vec![
                         Span::styled(
                             if selected { "› " } else { "  " },
-                            Style::default().fg(Color::Rgb(98, 213, 244)),
+                            Style::default().fg(crate::tui::theme::accent()),
                         ),
                         Span::styled(
                             label,
@@ -157,7 +157,7 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
                     } else {
                         "  "
                     },
-                    Style::default().fg(Color::Rgb(98, 213, 244)),
+                    Style::default().fg(crate::tui::theme::accent()),
                 ),
                 Span::styled(
                     if model.id.is_empty() {
@@ -209,7 +209,7 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
                     "  Create model"
                 },
                 Style::default().fg(if form.focus == create_focus {
-                    Color::Rgb(98, 213, 244)
+                    crate::tui::theme::accent()
                 } else {
                     Color::Gray
                 }),
@@ -238,7 +238,7 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
                         " Draft "
                     },
                     Style::default().fg(if form.focus == draft_focus {
-                        Color::Rgb(98, 213, 244)
+                        crate::tui::theme::accent()
                     } else {
                         Color::Gray
                     }),
@@ -296,7 +296,7 @@ pub(super) fn draw_chain_form(
                     } else {
                         "  "
                     },
-                    Style::default().fg(Color::Rgb(98, 213, 244)),
+                    Style::default().fg(crate::tui::theme::accent()),
                 ),
                 Span::styled(
                     if selected_already { "✓ " } else { "  " },
@@ -330,7 +330,7 @@ pub(super) fn draw_chain_form(
         Line::from(vec![
             Span::styled(
                 if form.focus == 2 { "› " } else { "  " },
-                Style::default().fg(Color::Rgb(98, 213, 244)),
+                Style::default().fg(crate::tui::theme::accent()),
             ),
             Span::styled(
                 format!(
@@ -367,7 +367,7 @@ pub(super) fn draw_chain_form(
                 } else {
                     "  "
                 },
-                Style::default().fg(Color::Rgb(98, 213, 244)),
+                Style::default().fg(crate::tui::theme::accent()),
             ),
             Span::styled(
                 format!("{}. {}", index + 1, display),
@@ -390,7 +390,7 @@ pub(super) fn draw_chain_form(
             "  A · add model"
         },
         Style::default().fg(if form.focus == 3 {
-            Color::Rgb(98, 213, 244)
+            crate::tui::theme::accent()
         } else {
             Color::Gray
         }),
@@ -434,7 +434,7 @@ pub(super) fn chain_field_line<'a>(label: &'a str, value: &'a str, selected: boo
     Line::from(vec![
         Span::styled(
             if selected { "› " } else { "  " },
-            Style::default().fg(Color::Rgb(98, 213, 244)),
+            Style::default().fg(crate::tui::theme::accent()),
         ),
         Span::styled(
             label,

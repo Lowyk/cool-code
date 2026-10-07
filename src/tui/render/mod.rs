@@ -71,7 +71,7 @@ pub(super) fn status_line(turn: &StreamingTurn, now: std::time::Instant) -> Stri
 
 fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> {
     let marker = Style::default()
-        .fg(Color::Rgb(165, 236, 250))
+        .fg(crate::tui::theme::accent_soft())
         .add_modifier(Modifier::BOLD);
     let mut lines = vec![Line::from(Span::styled("• ", marker))];
     let spans = pulse_spans(&turn.text, &turn.arrivals, mode, std::time::Instant::now());
@@ -87,7 +87,7 @@ fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> 
             }
         }
     }
-    let cursor = Span::styled("▍", Style::default().fg(Color::Rgb(98, 213, 244)));
+    let cursor = Span::styled("▍", Style::default().fg(crate::tui::theme::accent()));
     lines
         .last_mut()
         .expect("at least one line")
@@ -137,6 +137,13 @@ pub(super) fn input_prompt_height(input: &str, area: Rect) -> u16 {
 
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
+    crate::tui::theme::set_current(app.settings.theme);
+    if let Some(background) = crate::tui::theme::current().screen_bg {
+        frame.render_widget(
+            ratatui::widgets::Block::default().style(Style::default().bg(background)),
+            area,
+        );
+    }
     let prompt_height = input_prompt_height(&app.input, area);
     let (logo_area, subtitle_area, history_area, prompt_area, help_area, notice_area, status_area) =
         if app.transcript.is_empty() {
@@ -209,8 +216,8 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
         let mut lines = Vec::new();
         for entry in &app.transcript {
             let (marker, color, content_color) = match entry.kind {
-                TranscriptKind::User => ("> ", Color::Rgb(120, 220, 245), Color::White),
-                TranscriptKind::Assistant => ("• ", Color::Rgb(165, 236, 250), Color::White),
+                TranscriptKind::User => ("> ", crate::tui::theme::accent_bright(), Color::White),
+                TranscriptKind::Assistant => ("• ", crate::tui::theme::accent_soft(), Color::White),
                 TranscriptKind::CommandOutput => {
                     ("  ", Color::Rgb(185, 195, 205), Color::Rgb(200, 205, 212))
                 }
@@ -267,15 +274,15 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
     let prompt_area = centered_rect(78, 100, prompt_area);
     let prompt_block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::Rgb(98, 213, 244)))
-        .style(Style::default().bg(Color::Rgb(37, 38, 40)))
+        .border_style(Style::default().fg(crate::tui::theme::accent()))
+        .style(Style::default().bg(crate::tui::theme::input()))
         .padding(ratatui::widgets::Padding::new(2, 0, 1, 0));
     let prompt_inner = prompt_block.inner(prompt_area);
     let (input_lines, (cursor_line, cursor_column)) =
         wrap_input_text(&app.input, prompt_inner.width);
     let prompt = if app.input.is_empty() {
         vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Rgb(98, 213, 244))),
+            Span::styled("› ", Style::default().fg(crate::tui::theme::accent())),
             Span::styled(
                 "Describe what you want to change…",
                 Style::default().fg(Color::DarkGray),
@@ -288,7 +295,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
             .map(|(index, line)| {
                 if index == 0 {
                     Line::from(vec![
-                        Span::styled("› ", Style::default().fg(Color::Rgb(98, 213, 244))),
+                        Span::styled("› ", Style::default().fg(crate::tui::theme::accent())),
                         Span::styled(line.clone(), Style::default().fg(Color::White)),
                     ])
                 } else {
@@ -331,9 +338,12 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: us
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" submit   ", Style::default().fg(Color::DarkGray)),
-        Span::styled("/settings", Style::default().fg(Color::Rgb(98, 213, 244))),
+        Span::styled(
+            "/settings",
+            Style::default().fg(crate::tui::theme::accent()),
+        ),
         Span::styled("  ", Style::default()),
-        Span::styled("/effort", Style::default().fg(Color::Rgb(98, 213, 244))),
+        Span::styled("/effort", Style::default().fg(crate::tui::theme::accent())),
         Span::styled(
             "   /mode   /init   @path   Ctrl+↑/↓ scroll   Esc quit",
             Style::default().fg(Color::DarkGray),
