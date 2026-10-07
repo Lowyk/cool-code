@@ -18,6 +18,8 @@ pub(in crate::tui) struct StatsView {
     pub(in crate::tui) range: crate::stats::Range,
     pub(in crate::tui) records: Vec<crate::stats::Record>,
     pub(in crate::tui) confirm_clear: bool,
+    /// First visible body line. The drawing code clamps it to the content, so keys can overshoot.
+    scroll: std::cell::Cell<u16>,
     // Summaries are recomputed only when the range, the data, or the minute changes.
     summary_cache: std::cell::RefCell<Option<(SummaryKey, crate::stats::Summary)>>,
     grid_cache: std::cell::RefCell<Option<(GridKey, crate::stats::HeatGrid)>>,
@@ -40,9 +42,15 @@ impl StatsView {
             range: crate::stats::Range::All,
             records,
             confirm_clear: false,
+            scroll: std::cell::Cell::new(0),
             summary_cache: std::cell::RefCell::new(None),
             grid_cache: std::cell::RefCell::new(None),
         }
+    }
+
+    fn scroll_by(&self, delta: i32) {
+        let next = i32::from(self.scroll.get()).saturating_add(delta);
+        self.scroll.set(next.clamp(0, i32::from(u16::MAX)) as u16);
     }
 
     fn summary(&self, now_ts: i64) -> crate::stats::Summary {
@@ -109,9 +117,22 @@ impl App {
                     StatsTab::Overview => StatsTab::Models,
                     StatsTab::Models => StatsTab::Overview,
                 };
+                view.scroll.set(0);
             }
-            KeyCode::Right => view.range = RANGES[(position + 1) % RANGES.len()],
-            KeyCode::Left => view.range = RANGES[(position + RANGES.len() - 1) % RANGES.len()],
+            KeyCode::Right => {
+                view.range = RANGES[(position + 1) % RANGES.len()];
+                view.scroll.set(0);
+            }
+            KeyCode::Left => {
+                view.range = RANGES[(position + RANGES.len() - 1) % RANGES.len()];
+                view.scroll.set(0);
+            }
+            KeyCode::Up => view.scroll_by(-1),
+            KeyCode::Down => view.scroll_by(1),
+            KeyCode::PageUp => view.scroll_by(-8),
+            KeyCode::PageDown => view.scroll_by(8),
+            KeyCode::Home => view.scroll.set(0),
+            KeyCode::End => view.scroll.set(u16::MAX),
             KeyCode::Char('c') => view.confirm_clear = true,
             KeyCode::Char('r') if !self.settings.stats_enabled => {
                 self.settings.stats_enabled = true;
@@ -414,16 +435,24 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
         StatsTab::Overview => overview_lines(view, inner.width.saturating_sub(2), now_ts),
         StatsTab::Models => models_lines(view, inner.width.saturating_sub(2), now_ts),
     });
-    let content_height = inner.height.saturating_sub(1);
-    let mut lines = header;
-    lines.extend(body);
+    // The tabs stay pinned; only the body below them scrolls.
+    let content_width = inner.width.saturating_sub(2);
+    let header_height = header.len() as u16;
+    let body_height = inner.height.saturating_sub(1 + header_height);
     frame.render_widget(
-        Paragraph::new(lines),
+        Paragraph::new(header),
+        Rect::new(inner.x + 1, inner.y, content_width, header_height),
+    );
+    let last_scroll = (body.len() as u16).saturating_sub(body_height);
+    let scroll = view.scroll.get().min(last_scroll);
+    view.scroll.set(scroll);
+    frame.render_widget(
+        Paragraph::new(body).scroll((scroll, 0)),
         Rect::new(
             inner.x + 1,
-            inner.y,
-            inner.width.saturating_sub(2),
-            content_height,
+            inner.y + header_height,
+            content_width,
+            body_height,
         ),
     );
     let footer = if view.confirm_clear {
@@ -435,7 +464,7 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
         )
     } else {
         Span::styled(
-            "Tab switch tab   ←/→ range   c clear history   Esc close",
+            "Tab switch tab   ←/→ range   ↑/↓ scroll   c clear history   Esc close",
             Style::default().fg(Color::DarkGray),
         )
     };
@@ -525,6 +554,37 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn a_short_terminal_scrolls_the_body_and_keeps_the_header() {
+        let mut app = app_with_view();
+        let top = screen(&app, 70, 12);
+        assert!(top.contains("Overview"), "{top}");
+        assert!(top.contains("Mon"), "starts at the heatmap: {top}");
+        assert!(!top.contains("Longest turn"), "{top}");
+        app.handle_stats_key(key(KeyCode::End)).expect("end");
+        let bottom = screen(&app, 70, 12);
+        assert!(bottom.contains("Overview"), "header stays pinned: {bottom}");
+        assert!(
+            bottom.contains("Longest turn"),
+            "End reaches the last line: {bottom}"
+        );
+        assert!(!bottom.contains("Mon"), "{bottom}");
+        app.handle_stats_key(key(KeyCode::Home)).expect("home");
+        assert!(!screen(&app, 70, 12).contains("Longest turn"));
+        app.handle_stats_key(key(KeyCode::Down)).expect("down");
+        app.handle_stats_key(key(KeyCode::Up)).expect("up");
+        let shown = screen(&app, 70, 12);
+        assert!(shown.contains("Mon"), "{shown}");
+    }
+
+    #[test]
+    fn changing_tab_or_range_returns_to_the_top() {
+        let mut app = app_with_view();
+        app.handle_stats_key(key(KeyCode::End)).expect("end");
+        app.handle_stats_key(key(KeyCode::Right)).expect("range");
+        assert!(screen(&app, 70, 12).contains("Mon"));
     }
 
     #[test]
