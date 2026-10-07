@@ -15,6 +15,7 @@ mod setup;
 mod state;
 mod stats_view;
 mod theme;
+mod usage_warnings;
 mod widgets;
 mod wordmark;
 

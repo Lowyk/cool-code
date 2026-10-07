@@ -209,13 +209,20 @@ impl App {
                     Ok(lines) => LimitsState::Ready(lines),
                     Err(error) => LimitsState::Failed(friendly_fetch_error(&error)),
                 };
+                let ready = match &state {
+                    LimitsState::Ready(lines) => Some(lines.clone()),
+                    _ => None,
+                };
                 self.limits.insert(
-                    provider_id,
+                    provider_id.clone(),
                     LimitsEntry {
                         fetched_at: Instant::now(),
                         state,
                     },
                 );
+                if let Some(lines) = ready {
+                    self.check_usage(&provider_id, &lines);
+                }
             }
             TaskResult::Models {
                 provider_id,
@@ -409,6 +416,7 @@ mod tests {
             provider_id: "p1".to_owned(),
             url: "https://api.example.com/v1/limits".to_owned(),
             result: Ok(vec![LimitLine {
+                balance_tokens: None,
                 label: "Balance".to_owned(),
                 value: "5 tokens".to_owned(),
                 remaining: None,

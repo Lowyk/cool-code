@@ -53,6 +53,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
 | `src/tui/widgets/` | Reusable widgets: the filterable selectable list and the collapsible provider/creator/model tree |
 | `src/tui/settings/reset.rs` | Settings > General > Reset: menu, custom checklist, confirmation with counts, and the reset itself |
+| `src/tui/usage_warnings.rs` | Turns a provider's limit lines into warnings (low and critical, per window or balance), announces each once, and keeps the worst one for the status line |
 | `src/tui/setup.rs` | The first-run setup wizard: theme (with live preview), reduced motion, usage stats and saved sessions; only unanswered questions are asked |
 | `src/tui/present.rs` | Puts each frame on the terminal: synchronized update, cursor hidden only while cells are written, nothing written for an unchanged frame |
 | `src/tui/stats_view.rs` | The `/stats` full-screen view: overview, models tab, range selection, and clearing history |

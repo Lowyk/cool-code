@@ -501,6 +501,7 @@ mod tests {
         use crate::tui::settings::sync::{LimitsEntry, LimitsState};
         let mut app = app_with(vec![with_endpoints(profile("p1", false, false))], None);
         let line = |label: &str, value: &str, remaining| LimitLine {
+            balance_tokens: None,
             label: label.to_owned(),
             value: value.to_owned(),
             remaining,

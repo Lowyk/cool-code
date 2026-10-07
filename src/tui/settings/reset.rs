@@ -428,7 +428,7 @@ mod tests {
 
     fn open_reset(app: &mut App) {
         press(app, KeyCode::Right);
-        for _ in 0..11 {
+        for _ in 0..12 {
             press(app, KeyCode::Down);
         }
         press(app, KeyCode::Enter);

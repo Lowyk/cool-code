@@ -460,6 +460,7 @@ mod tests {
             "Load AGENTS.md",
             "Global CLAUDE.md",
             "Dynamic workflows",
+            "Usage warnings",
             "Reset",
         ] {
             assert!(

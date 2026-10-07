@@ -19,6 +19,8 @@ pub(crate) struct LimitLine {
     pub(crate) value: String,
     /// Fraction remaining (0.0 to 1.0) when the line can be drawn as a bar.
     pub(crate) remaining: Option<f32>,
+    /// What is left, in tokens, on a pay-as-you-go balance line.
+    pub(crate) balance_tokens: Option<u64>,
 }
 
 /// Resolves an optional endpoint setting against the provider's base URL.
@@ -296,6 +298,7 @@ pub(crate) fn summarize_limits(value: &Value) -> Vec<LimitLine> {
         label: label.to_owned(),
         value,
         remaining,
+        balance_tokens: None,
     };
     if !["account_balance", "subscription", "api_key"]
         .iter()
@@ -315,7 +318,13 @@ pub(crate) fn summarize_limits(value: &Value) -> Vec<LimitLine> {
         .and_then(|balance| balance.get("tokens"))
         .and_then(tokens)
     {
-        lines.push(line("Balance", balance, None));
+        lines.push(LimitLine {
+            balance_tokens: object
+                .get("account_balance")
+                .and_then(|balance| balance.get("tokens"))
+                .and_then(Value::as_u64),
+            ..line("Balance", balance, None)
+        });
     }
     if let Some(subscription) = object.get("subscription") {
         let active = subscription

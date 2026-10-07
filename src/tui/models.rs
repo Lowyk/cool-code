@@ -431,6 +431,7 @@ impl App {
                     .map(|chain| chain.id.clone())
             });
         self.provider_index = provider_index;
+        self.refresh_usage_warning();
         write_settings(&self.settings)?;
         self.model_choices = None;
         self.pending_model = None;
