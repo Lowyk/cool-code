@@ -3,6 +3,7 @@ use crate::tui::effort::{effort_name, effort_style};
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
 use crate::tui::render::mode_span;
+use crate::tui::settings::reset::ResetStage;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::{App, LEVELS};
 use crate::{PulseMode, write_settings};
@@ -13,7 +14,15 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 7;
+pub(super) const ROWS: usize = 11;
+
+fn switch(on: bool) -> Span<'static> {
+    if on {
+        Span::styled("on", Style::default().fg(Color::Rgb(110, 220, 130)))
+    } else {
+        Span::styled("off", Style::default().fg(Color::Gray))
+    }
+}
 
 pub(super) fn draw_general(
     frame: &mut ratatui::Frame<'_>,
@@ -75,6 +84,10 @@ pub(super) fn draw_general(
         } else {
             Span::styled("off", Style::default().fg(Color::Gray))
         }],
+        vec![switch(app.settings.default_load_claude_md)],
+        vec![switch(app.settings.default_load_agents_md)],
+        vec![switch(app.settings.load_global_claude_md)],
+        vec![Span::styled("…", Style::default().fg(Color::DarkGray))],
     ];
     let labels = [
         "Model",
@@ -84,6 +97,10 @@ pub(super) fn draw_general(
         "Pulse",
         "Usage stats",
         "Save sessions",
+        "Load CLAUDE.md",
+        "Load AGENTS.md",
+        "Global CLAUDE.md",
+        "Reset",
     ];
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
@@ -107,8 +124,8 @@ pub(super) fn draw_general(
         ];
         spans.extend(value);
         lines.push(Line::from(spans));
-        lines.push(Line::from(""));
     }
+    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "API keys are kept in the OS credential store, never in the config file.",
         Style::default().fg(Color::DarkGray),
@@ -146,6 +163,22 @@ impl App {
                     self.settings.stats_prompt_answered = true;
                     write_settings(&self.settings)?;
                 }
+                7 => {
+                    self.settings.default_load_claude_md = !self.settings.default_load_claude_md;
+                    self.settings.instructions_prompt_answered = true;
+                    write_settings(&self.settings)?;
+                }
+                8 => {
+                    self.settings.default_load_agents_md = !self.settings.default_load_agents_md;
+                    self.settings.instructions_prompt_answered = true;
+                    write_settings(&self.settings)?;
+                }
+                9 => {
+                    self.settings.load_global_claude_md = !self.settings.load_global_claude_md;
+                    self.settings.instructions_prompt_answered = true;
+                    write_settings(&self.settings)?;
+                }
+                10 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;
