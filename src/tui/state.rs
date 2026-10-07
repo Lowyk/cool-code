@@ -287,6 +287,12 @@ pub(super) fn edit_string(value: &mut String, key: event::KeyEvent) {
 impl App {
     pub(super) fn new(settings: Settings) -> Self {
         let mut app = Self::from_settings(settings);
+        if app.settings.enforce_workflow_lock() {
+            app.notice = format!(
+                "Effort set to {}: Super and Ultimate are locked until Dynamic workflows is turned on in Settings → General.",
+                effort_name(app.settings.effort)
+            );
+        }
         if crate::settings_were_migrated() {
             app.notice =
                 "Settings moved to ~/.coolcode/config.toml; the old file was kept as a backup."
@@ -410,6 +416,9 @@ impl App {
 
     pub(super) fn choose_effort(&mut self) -> Result<()> {
         let selected = LEVELS[self.picker_index];
+        if self.workflow_tier_is_locked(selected) {
+            return Ok(());
+        }
         if matches!(selected, Effort::Ultimate) && !self.settings.ultimate_acknowledged {
             self.confirm_ultimate = true;
             return Ok(());
@@ -417,7 +426,23 @@ impl App {
         self.apply_effort(selected)
     }
 
+    /// True (after telling the user why) when `effort` is a workflow tier that is still locked.
+    pub(super) fn workflow_tier_is_locked(&mut self, effort: Effort) -> bool {
+        let locked = effort.is_workflow_tier() && !self.settings.dynamic_workflows;
+        if locked {
+            self.notice = format!(
+                "{} is locked. Turn on Dynamic workflows in Settings → General to use it.",
+                effort_name(effort)
+            );
+        }
+        locked
+    }
+
     pub(super) fn apply_effort(&mut self, effort: Effort) -> Result<()> {
+        if self.workflow_tier_is_locked(effort) {
+            self.picker = false;
+            return Ok(());
+        }
         self.settings.effort = effort;
         write_settings(&self.settings)?;
         self.picker = false;

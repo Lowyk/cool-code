@@ -14,7 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 11;
+pub(super) const ROWS: usize = 12;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -87,6 +87,7 @@ pub(super) fn draw_general(
         vec![switch(app.settings.default_load_claude_md)],
         vec![switch(app.settings.default_load_agents_md)],
         vec![switch(app.settings.load_global_claude_md)],
+        vec![switch(app.settings.dynamic_workflows)],
         vec![Span::styled("…", Style::default().fg(Color::DarkGray))],
     ];
     let labels = [
@@ -100,6 +101,7 @@ pub(super) fn draw_general(
         "Load CLAUDE.md",
         "Load AGENTS.md",
         "Global CLAUDE.md",
+        "Dynamic workflows",
         "Reset",
     ];
     let focused = view.focus == Focus::Content;
@@ -178,7 +180,21 @@ impl App {
                     self.settings.instructions_prompt_answered = true;
                     write_settings(&self.settings)?;
                 }
-                10 => view.reset = Some(ResetStage::Menu { row: 0 }),
+                10 => {
+                    self.settings.dynamic_workflows = !self.settings.dynamic_workflows;
+                    self.notice = if self.settings.dynamic_workflows {
+                        "Dynamic workflows unlocked: Super, Ultimate and workflows on lower levels can use many more tokens.".to_owned()
+                    } else if self.settings.enforce_workflow_lock() {
+                        format!(
+                            "Dynamic workflows locked; effort set to {}.",
+                            effort_name(self.settings.effort)
+                        )
+                    } else {
+                        "Dynamic workflows locked.".to_owned()
+                    };
+                    write_settings(&self.settings)?;
+                }
+                11 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;

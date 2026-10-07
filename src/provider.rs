@@ -268,7 +268,17 @@ fn complete_turn(
         on_event: &forward,
         cancel: stream.cancel,
     };
+    let api = match (profile.map(|profile| profile.id.as_str()), provider) {
+        (Some("openrouter"), _) => crate::effort_support::Api::OpenRouter,
+        (_, "anthropic" | "anthropic-compatible") => crate::effort_support::Api::Anthropic,
+        (_, "google") => crate::effort_support::Api::Google,
+        _ => crate::effort_support::Api::OpenAiCompatible,
+    };
     let request = Request {
+        effort: Some(EffortRequest {
+            api,
+            wanted: settings.effort,
+        }),
         client: &client,
         base_url: &base_url,
         api_key: &api_key,
@@ -570,9 +580,69 @@ fn redaction_patterns() -> &'static [Regex] {
     ].iter().map(|pattern| Regex::new(pattern).expect("static redaction regex is valid")).collect())
 }
 
+/// The effort the user chose and the API it will be sent to.
+#[derive(Clone, Copy)]
+struct EffortRequest {
+    api: crate::effort_support::Api,
+    wanted: crate::Effort,
+}
+
+/// Sends the request built from `body`. If the provider answers 400 and complains about the effort
+/// parameter, remembers that the model does not take it and sends once more without it.
+fn send_with_effort_fallback(
+    mut body: Value,
+    sent_effort: Option<(crate::effort_support::Api, &str)>,
+    send: impl Fn(&Value) -> Result<reqwest::blocking::Response>,
+) -> Result<reqwest::blocking::Response> {
+    match send(&body) {
+        Err(error)
+            if sent_effort.is_some()
+                && format!("{error:#}").contains("provider returned 400")
+                && crate::effort_support::complains_about_effort(&format!("{error:#}")) =>
+        {
+            if let Some((api, model)) = sent_effort {
+                crate::effort_support::remember_rejected(api, model);
+            }
+            strip_effort(&mut body);
+            send(&body)
+        }
+        other => other,
+    }
+}
+
+/// Removes every effort parameter this program may have added.
+fn strip_effort(body: &mut Value) {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("reasoning_effort");
+        object.remove("reasoning");
+        object.remove("output_config");
+        if let Some(config) = object
+            .get_mut("generationConfig")
+            .and_then(Value::as_object_mut)
+        {
+            config.remove("thinkingConfig");
+            if config.is_empty() {
+                object.remove("generationConfig");
+            }
+        }
+    }
+}
+
+/// Adds the chosen effort to `body` when the model has that control; returns what was sent so
+/// a rejection can be recognized.
+fn add_effort<'a>(
+    body: &mut Value,
+    request: &Request<'a>,
+) -> Option<(crate::effort_support::Api, &'a str)> {
+    let effort = request.effort?;
+    crate::effort_support::apply_effort(body, effort.api, request.model, effort.wanted, &[])
+        .then_some((effort.api, request.model))
+}
+
 /// Everything a provider adapter needs to run one streamed completion.
 #[derive(Clone, Copy)]
 struct Request<'a> {
+    effort: Option<EffortRequest>,
     client: &'a Client,
     base_url: &'a str,
     api_key: &'a str,
@@ -585,6 +655,7 @@ struct Request<'a> {
 
 fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
     let Request {
+        effort: _,
         client,
         base_url,
         api_key,
@@ -600,13 +671,18 @@ fn complete_openai_compatible(request: &Request) -> Result<AgentTurn> {
         body["tools"] = openai_tool_specs(plan_mode);
         body["tool_choice"] = Value::String("auto".to_owned());
     }
-    let response = client
-        .post(endpoint)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .context("sending request to the OpenAI-compatible API")?;
-    parse_openai_stream(std::io::BufReader::new(successful(response)?), stream)
+    let sent = add_effort(&mut body, request);
+    let response = send_with_effort_fallback(body, sent, |body| {
+        successful(
+            client
+                .post(&endpoint)
+                .bearer_auth(api_key)
+                .json(body)
+                .send()
+                .context("sending request to the OpenAI-compatible API")?,
+        )
+    })?;
+    parse_openai_stream(std::io::BufReader::new(response), stream)
 }
 
 /// Returns the response for streaming, or the provider's error body as an error.
@@ -682,6 +758,7 @@ fn openai_call_arguments(call: &Value) -> Result<Value> {
 
 fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
     let Request {
+        effort: _,
         client,
         base_url,
         api_key,
@@ -710,14 +787,19 @@ fn complete_anthropic(request: &Request) -> Result<AgentTurn> {
         body["tools"] = anthropic_tool_specs(plan_mode);
     }
     let endpoint = format!("{}/messages", base_url.trim_end_matches('/'));
-    let response = client
-        .post(endpoint)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .json(&body)
-        .send()
-        .context("sending request to the Anthropic Messages API")?;
-    parse_anthropic_stream(std::io::BufReader::new(successful(response)?), stream)
+    let sent = add_effort(&mut body, request);
+    let response = send_with_effort_fallback(body, sent, |body| {
+        successful(
+            client
+                .post(&endpoint)
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(body)
+                .send()
+                .context("sending request to the Anthropic Messages API")?,
+        )
+    })?;
+    parse_anthropic_stream(std::io::BufReader::new(response), stream)
 }
 
 fn anthropic_message(message: &ChatMessage) -> Result<Value> {
@@ -753,6 +835,7 @@ fn anthropic_message(message: &ChatMessage) -> Result<Value> {
 
 fn complete_google(request: &Request) -> Result<AgentTurn> {
     let Request {
+        effort: _,
         client,
         base_url,
         api_key,
@@ -786,7 +869,10 @@ fn complete_google(request: &Request) -> Result<AgentTurn> {
         "{}/models/{model}:streamGenerateContent?alt=sse",
         base_url.trim_end_matches('/')
     );
-    let response = send_google_request(client, &endpoint, api_key, &body)?;
+    let sent = add_effort(&mut body, request);
+    let response = send_with_effort_fallback(body, sent, |body| {
+        send_google_request(client, &endpoint, api_key, body)
+    })?;
     parse_google_stream(std::io::BufReader::new(response), stream)
 }
 
@@ -1301,6 +1387,149 @@ mod tests {
         assert_eq!(
             privacy_risk("groq", "some-groq-model", "https://api.groq.com/openai/v1"),
             None
+        );
+    }
+
+    /// A one-connection-at-a-time HTTP server that answers each request with the next canned
+    /// response and records the request bodies it received.
+    fn serve(
+        responses: Vec<(u16, &'static str, &'static str)>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        std::thread::spawn(move || {
+            for (status, content_type, body) in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut payload = vec![0u8; length];
+                reader.read_exact(&mut payload).expect("body");
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&payload).into_owned());
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        (format!("http://{address}"), seen)
+    }
+
+    const OK_STREAM: &str =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n";
+
+    fn run_against(base: &str, model: &str, effort: crate::Effort) -> anyhow::Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let on_event = |_event: crate::stream::StreamEvent| {};
+        let stream = crate::stream::Stream {
+            on_event: &on_event,
+            cancel: &cancel,
+        };
+        let messages = [super::ChatMessage::user_with_images(
+            "hi".to_owned(),
+            "hi".to_owned(),
+            Vec::new(),
+        )];
+        let request = super::Request {
+            effort: Some(super::EffortRequest {
+                api: crate::effort_support::Api::OpenAiCompatible,
+                wanted: effort,
+            }),
+            client: &client,
+            base_url: base,
+            api_key: "test-key",
+            model,
+            messages: &messages,
+            allow_tools: false,
+            plan_mode: false,
+            stream: &stream,
+        };
+        super::complete_openai_compatible(&request).map(|_| ())
+    }
+
+    #[test]
+    fn effort_is_sent_to_a_model_that_has_it() {
+        let (base, seen) = serve(vec![(200, "text/event-stream", OK_STREAM)]);
+        run_against(&base, "gpt-6-fallback-sent", crate::Effort::High).expect("ok");
+        let bodies = seen.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        let sent: Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(sent["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn a_model_without_effort_levels_is_sent_no_parameter() {
+        let (base, seen) = serve(vec![(200, "text/event-stream", OK_STREAM)]);
+        run_against(&base, "deepseek-v4-flash", crate::Effort::Max).expect("ok");
+        let sent: Value = serde_json::from_str(&seen.lock().unwrap()[0]).unwrap();
+        assert!(sent.get("reasoning_effort").is_none(), "{sent}");
+    }
+
+    #[test]
+    fn a_provider_that_rejects_the_effort_parameter_gets_one_retry_without_it() {
+        let (base, seen) = serve(vec![
+            (
+                400,
+                "application/json",
+                "{\"error\":{\"message\":\"Unrecognized request argument supplied: reasoning_effort\"}}",
+            ),
+            (200, "text/event-stream", OK_STREAM),
+        ]);
+        let model = "gpt-6-fallback-rejects";
+        run_against(&base, model, crate::Effort::High).expect("the retry succeeds");
+        let bodies = seen.lock().unwrap();
+        assert_eq!(bodies.len(), 2);
+        assert!(bodies[0].contains("reasoning_effort"));
+        assert!(!bodies[1].contains("reasoning_effort"), "{}", bodies[1]);
+        assert!(crate::effort_support::rejected(
+            crate::effort_support::Api::OpenAiCompatible,
+            model
+        ));
+        drop(bodies);
+        // From now on the model is not even asked.
+        let (base, seen) = serve(vec![(200, "text/event-stream", OK_STREAM)]);
+        run_against(&base, model, crate::Effort::High).expect("ok");
+        assert!(!seen.lock().unwrap()[0].contains("reasoning_effort"));
+    }
+
+    #[test]
+    fn an_unrelated_400_is_reported_and_not_retried() {
+        let (base, seen) = serve(vec![
+            (
+                400,
+                "application/json",
+                "{\"error\":\"messages must not be empty\"}",
+            ),
+            (200, "text/event-stream", OK_STREAM),
+        ]);
+        let error = run_against(&base, "gpt-6-fallback-unrelated", crate::Effort::High)
+            .expect_err("a real error");
+        assert!(
+            format!("{error:#}").contains("messages must not be empty"),
+            "{error:#}"
+        );
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "no retry for unrelated errors"
         );
     }
 }
