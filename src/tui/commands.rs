@@ -5,6 +5,7 @@ use crate::tui::effort::effort_name;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
 use crate::tui::settings::Section;
+use crate::tui::settings::auto_mode::ACTIVATE_NOTICE;
 use crate::tui::state::{
     App, LEVELS, PrivacyPrompt, StreamingTurn, TranscriptEntry, TranscriptKind, mode_alias,
 };
@@ -137,15 +138,16 @@ impl App {
                     || label.eq_ignore_ascii_case(requested.trim())
                     || mode_alias(mode) == requested.trim().to_ascii_lowercase()
             }) {
-                self.settings.permission_mode = (*mode).to_owned();
-                self.mode_index = MODES
-                    .iter()
-                    .position(|(_, value)| value == mode)
-                    .unwrap_or(4);
-                write_settings(&self.settings)?;
-                self.notice = format!("Mode set to {}.", requested.trim());
+                if *mode == "auto" && !self.settings.auto_ready() {
+                    self.notice = ACTIVATE_NOTICE.to_owned();
+                } else {
+                    self.settings.permission_mode = (*mode).to_owned();
+                    self.mode_index = crate::policy::mode_index(mode);
+                    write_settings(&self.settings)?;
+                    self.notice = format!("Mode set to {}.", requested.trim());
+                }
             } else {
-                self.notice = "Choose auto, edits, minimal, all, or plan.".to_owned();
+                self.notice = "Choose auto, edits, minimal, all, manual, or plan.".to_owned();
             }
             self.finish_command(self.notice.clone());
             return Ok(());

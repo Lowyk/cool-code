@@ -1,4 +1,5 @@
 mod appearance;
+pub(in crate::tui) mod auto_mode;
 mod auto_switch;
 mod general;
 mod models;
@@ -9,6 +10,7 @@ mod reset;
 pub(super) mod sync;
 
 use crate::tui::settings::appearance::draw_appearance;
+use crate::tui::settings::auto_mode::draw_auto_mode;
 use crate::tui::settings::auto_switch::draw_auto_switch;
 use crate::tui::settings::general::draw_general;
 use crate::tui::settings::models::{ModelEdit, draw_models};
@@ -31,16 +33,18 @@ pub(in crate::tui) enum Section {
     Appearance,
     Providers,
     Models,
+    AutoMode,
     AutoSwitch,
     Privacy,
 }
 
 impl Section {
-    pub(in crate::tui) const ALL: [Section; 6] = [
+    pub(in crate::tui) const ALL: [Section; 7] = [
         Section::General,
         Section::Appearance,
         Section::Providers,
         Section::Models,
+        Section::AutoMode,
         Section::AutoSwitch,
         Section::Privacy,
     ];
@@ -51,6 +55,7 @@ impl Section {
             Section::Appearance => "Appearance",
             Section::Providers => "Providers",
             Section::Models => "Models",
+            Section::AutoMode => "Auto Mode",
             Section::AutoSwitch => "Auto-switch",
             Section::Privacy => "Privacy",
         }
@@ -112,6 +117,7 @@ impl App {
             Section::Appearance => self.handle_appearance_key(key),
             Section::Providers => self.handle_providers_key(key),
             Section::Models => self.handle_models_key(key),
+            Section::AutoMode => self.handle_auto_mode_key(key),
             Section::AutoSwitch => self.handle_auto_switch_key(key),
             Section::Privacy => self.handle_privacy_key(key),
         }
@@ -224,6 +230,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         Section::Appearance => draw_appearance(frame, content, app, view),
         Section::Providers => draw_providers(frame, content, app, view),
         Section::Models => draw_models(frame, content, app, view),
+        Section::AutoMode => draw_auto_mode(frame, content, app, view),
         Section::AutoSwitch => draw_auto_switch(frame, content, app, view),
         Section::Privacy => match &view.privacy_sub {
             Some(sub) => draw_privacy_sub(frame, content, app, sub),
@@ -308,6 +315,7 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
             "Remove this redaction value? y/n".to_owned()
         }
         Section::Privacy => privacy_confirm_question(view.row).to_owned(),
+        Section::AutoMode => String::new(),
         Section::General | Section::Appearance | Section::Providers => {
             let name = app
                 .settings
@@ -340,6 +348,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
         }
         (Focus::Content, Section::Providers) => {
             "↑↓ move   Enter edit   n add   d default   a auto   f models   u usage   x delete   Esc back"
+        }
+        (Focus::Content, Section::AutoMode) => {
+            "↑↓ move   Enter/Space choose or remove   u/d reorder   ← sections   Esc back"
         }
         (Focus::Content, Section::AutoSwitch) => {
             "↑↓ move   Enter edit   n new   Space activate   x delete   Esc back"

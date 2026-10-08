@@ -1,4 +1,3 @@
-use crate::policy::MODES;
 use crate::tui::effort::{effort_name, effort_style};
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
@@ -162,10 +161,7 @@ impl App {
                     self.open_effort_picker();
                 }
                 2 => {
-                    self.mode_index = MODES
-                        .iter()
-                        .position(|(_, mode)| *mode == self.settings.permission_mode)
-                        .unwrap_or(0);
+                    self.mode_index = crate::policy::mode_index(&self.settings.permission_mode);
                     self.mode_picker = true;
                 }
                 3 => self.set_workspace_trusted(!self.workspace_trusted)?,

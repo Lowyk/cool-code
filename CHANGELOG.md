@@ -20,9 +20,13 @@ All notable changes are listed here, newest first. The format follows
   line.
 - `/undo` takes back the file changes of the model's last turn without overwriting later work.
 - `harness run` runs one turn without the interface, for scripts and CI (`--json` available).
-- Auto mode now has a real safety check: fixed rules for dangerous commands and secret files, and a
-  second model call that approves only actions that are clearly safe, asking you (with the
-  reason) otherwise. `guard_model` picks a cheaper model for it.
+- Auto mode: every command, edit and new file goes to guard models you choose in Settings → Auto
+  Mode (recommended small models are listed first). A guard answers yes or no; a no asks you with
+  the reason. Guards are tried in order, so one running out of usage hands over to the next, and
+  with none available the action does not run and the model is told Auto mode is unavailable.
+  Dangerous commands and secret files still always ask you. Auto is greyed out until a guard is set
+  up. Llama Prompt Guard models can be added as injection scanners, which never approve anything.
+- Manual mode: asks before every edit, new file and command.
 - A `generate_image` tool for placeholder pictures, available only after you set up an image API
   (Settings → General → Image generation); each image asks first, and `/undo` can remove it.
 - `@` file suggestions while typing, quoted paths with spaces, and (behind a setting, with each

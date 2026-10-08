@@ -1,4 +1,4 @@
-use crate::policy::{auto_approve_command, auto_approve_create, auto_approve_edit, mode_label};
+use crate::policy::{auto_approve_command, auto_approve_file_change, mode_label};
 use crate::stream::{Stream, StreamEvent};
 use crate::tools::ToolSet;
 use crate::workflow::{Completer, ProviderCompleter, Run};
@@ -368,10 +368,7 @@ pub(crate) fn run_loop(
                     &mut approved_plan,
                     cancel,
                     None,
-                    &crate::guard::CompleterJudge {
-                        completer,
-                        request: request_text.clone(),
-                    },
+                    &crate::guard::GuardChain::from_settings(settings, request_text.clone()),
                 )
             };
             // A cancel ends the turn; any other failure is just the tool's answer.
@@ -465,18 +462,21 @@ pub(crate) fn execute_agent_tool(
             .get("command")
             .and_then(serde_json::Value::as_str)
             .context("run_command requires a string `command`")?;
-        let (reviewed_ok, note) =
-            if !planned && !auto_approve_command(&settings.permission_mode, command) {
-                review(
-                    settings,
-                    root,
-                    judge,
-                    events,
-                    &crate::guard::Action::Command(command),
-                )
-            } else {
-                (false, None)
-            };
+        let verdict = if !planned && !auto_approve_command(&settings.permission_mode, command) {
+            review(
+                settings,
+                root,
+                judge,
+                events,
+                &crate::guard::Action::Command(command),
+            )
+        } else {
+            Review::NotAsked
+        };
+        if matches!(verdict, Review::Unavailable) {
+            return Ok(AUTO_UNAVAILABLE.to_owned());
+        }
+        let (reviewed_ok, note) = verdict.parts();
         if !planned && !reviewed_ok && !auto_approve_command(&settings.permission_mode, command) {
             let details = format!(
                 "{}Permission mode: {}\nWorking directory: {}\nShell: {}\n\nExact command to execute:\n{}",
@@ -530,22 +530,25 @@ pub(crate) fn execute_agent_tool(
             bail!("create_file received an unknown argument");
         }
         let proposal = crate::tools::prepare_create_file(root, path, required("content")?)?;
-        let (reviewed_ok, note) =
-            if !planned && !auto_approve_create(&settings.permission_mode, &proposal) {
-                review(
-                    settings,
-                    root,
-                    judge,
-                    events,
-                    &crate::guard::Action::Create {
-                        path: &proposal.relative_path,
-                        preview: &proposal.content,
-                    },
-                )
-            } else {
-                (false, None)
-            };
-        if !planned && !reviewed_ok && !auto_approve_create(&settings.permission_mode, &proposal) {
+        let verdict = if !planned && !auto_approve_file_change(&settings.permission_mode) {
+            review(
+                settings,
+                root,
+                judge,
+                events,
+                &crate::guard::Action::Create {
+                    path: &proposal.relative_path,
+                    preview: &proposal.content,
+                },
+            )
+        } else {
+            Review::NotAsked
+        };
+        if matches!(verdict, Review::Unavailable) {
+            return Ok(AUTO_UNAVAILABLE.to_owned());
+        }
+        let (reviewed_ok, note) = verdict.parts();
+        if !planned && !reviewed_ok && !auto_approve_file_change(&settings.permission_mode) {
             let details = format!(
                 "{}Permission mode: {}\n\nProposed complete new-file contents:\n{}",
                 review_prefix(&note),
@@ -636,22 +639,25 @@ pub(crate) fn execute_agent_tool(
             .context("write_to_file requires a non-negative integer `line_number`")?;
         crate::tools::prepare_write_to_file(root, path, line_number, required("text")?)?
     };
-    let (reviewed_ok, note) =
-        if !planned && !auto_approve_edit(&settings.permission_mode, &proposal) {
-            review(
-                settings,
-                root,
-                judge,
-                events,
-                &crate::guard::Action::Edit {
-                    path: &proposal.relative_path,
-                    preview: &proposal.preview(),
-                },
-            )
-        } else {
-            (false, None)
-        };
-    if !planned && !reviewed_ok && !auto_approve_edit(&settings.permission_mode, &proposal) {
+    let verdict = if !planned && !auto_approve_file_change(&settings.permission_mode) {
+        review(
+            settings,
+            root,
+            judge,
+            events,
+            &crate::guard::Action::Edit {
+                path: &proposal.relative_path,
+                preview: &proposal.preview(),
+            },
+        )
+    } else {
+        Review::NotAsked
+    };
+    if matches!(verdict, Review::Unavailable) {
+        return Ok(AUTO_UNAVAILABLE.to_owned());
+    }
+    let (reviewed_ok, note) = verdict.parts();
+    if !planned && !reviewed_ok && !auto_approve_file_change(&settings.permission_mode) {
         let details = format!(
             "{}Permission mode: {}\n\nProposed file change:\n{}",
             review_prefix(&note),
@@ -766,25 +772,50 @@ fn generate_image(
     ))
 }
 
-/// In Auto mode, has the safety check look at an action the fixed rules did not approve.
-/// Returns whether it may run without asking, and the reason to show when it must be asked about.
-/// Other modes never use the check.
+/// What the model is told when Auto mode cannot check an action because no guard model answered.
+const AUTO_UNAVAILABLE: &str = "Auto Mode isn't currently available. Ask the user to switch your mode to Plan, Accept Minimal, Accept Edits, or Manual";
+
+/// The outcome of asking Auto mode's guards about an action.
+enum Review {
+    /// Not Auto mode (or already decided), so nobody was asked.
+    NotAsked,
+    /// The guards said it is safe: run it without asking the user.
+    Allowed,
+    /// The guards said no: ask the user, showing this reason.
+    Ask(String),
+    /// No guard could answer: do not run it.
+    Unavailable,
+}
+
+impl Review {
+    /// Whether the action may run unasked, and the reason to show when the user is asked.
+    fn parts(self) -> (bool, Option<String>) {
+        match self {
+            Review::Allowed => (true, None),
+            Review::Ask(reason) => (false, Some(reason)),
+            Review::NotAsked | Review::Unavailable => (false, None),
+        }
+    }
+}
+
+/// In Auto mode, has the guard models look at an action. Other modes never use them.
 fn review(
     settings: &Settings,
     root: &Path,
     judge: &dyn crate::guard::Judge,
     events: &mpsc::Sender<PendingEvent>,
     action: &crate::guard::Action<'_>,
-) -> (bool, Option<String>) {
+) -> Review {
     if settings.permission_mode != "auto" {
-        return (false, None);
+        return Review::NotAsked;
     }
     let _ = events.send(PendingEvent::ToolStarted(
         "checking that it is safe".to_owned(),
     ));
     match judge.judge(settings, root, action) {
-        crate::guard::Judgement::Allow => (true, None),
-        crate::guard::Judgement::Ask(reason) => (false, Some(reason)),
+        crate::guard::Judgement::Allow => Review::Allowed,
+        crate::guard::Judgement::Ask(reason) => Review::Ask(reason),
+        crate::guard::Judgement::Unavailable => Review::Unavailable,
     }
 }
 
@@ -1487,7 +1518,7 @@ mod auto_guard_tests {
 
     /// A reviewer with a fixed answer that remembers what it was asked about.
     struct Fixed {
-        answer: Option<String>,
+        answer: Option<Option<String>>,
         asked: Mutex<Vec<String>>,
     }
 
@@ -1501,7 +1532,14 @@ mod auto_guard_tests {
 
         fn asking(reason: &str) -> Fixed {
             Fixed {
-                answer: Some(reason.to_owned()),
+                answer: Some(Some(reason.to_owned())),
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn unavailable() -> Fixed {
+            Fixed {
+                answer: Some(None),
                 asked: Mutex::new(Vec::new()),
             }
         }
@@ -1521,7 +1559,8 @@ mod auto_guard_tests {
             self.asked.lock().unwrap().push(described);
             match &self.answer {
                 None => Judgement::Allow,
-                Some(reason) => Judgement::Ask(reason.clone()),
+                Some(Some(reason)) => Judgement::Ask(reason.clone()),
+                Some(None) => Judgement::Unavailable,
             }
         }
     }
@@ -1676,7 +1715,7 @@ mod auto_guard_tests {
     }
 
     #[test]
-    fn small_edits_to_ordinary_files_need_no_reviewer_but_big_or_new_ones_get_one() {
+    fn in_auto_mode_every_edit_and_new_file_gets_the_guards_verdict() {
         let root = workspace();
         let judge = Fixed::allowing();
         let (result, approvals, _) = run(
@@ -1689,31 +1728,76 @@ mod auto_guard_tests {
         );
         result.unwrap();
         assert!(approvals.is_empty());
-        assert!(judge.asked().is_empty(), "the fixed rules approved it");
-        let big = "x".repeat(3_000);
+        assert_eq!(
+            judge.asked(),
+            ["edit: a.txt"],
+            "even a small edit is checked"
+        );
         let (result, approvals, _) = run(
             "auto",
             &judge,
             &root,
             "create_file",
-            serde_json::json!({"path": "big.txt", "content": big}),
+            serde_json::json!({"path": "new.txt", "content": "hi"}),
             false,
         );
         result.unwrap();
         assert!(approvals.is_empty());
-        assert_eq!(judge.asked(), ["create: big.txt"]);
-        assert!(root.join("big.txt").exists());
-        let (result, approvals, _) = run(
-            "auto",
+        assert_eq!(judge.asked(), ["edit: a.txt", "create: new.txt"]);
+        assert!(root.join("new.txt").exists());
+    }
+
+    #[test]
+    fn manual_mode_asks_the_user_every_time_and_never_the_guards() {
+        let root = workspace();
+        let judge = Fixed::allowing();
+        let (result, approvals, started) = run(
+            "manual",
+            &judge,
+            &root,
+            "run_command",
+            serde_json::json!({"command": "cargo test"}),
+            true,
+        );
+        result.unwrap();
+        assert_eq!(approvals.len(), 1);
+        let (_, approvals, _) = run(
+            "manual",
             &judge,
             &root,
             "replace_text",
-            serde_json::json!({"path": "big.txt", "old_text": "x".repeat(2_500), "new_text": "z".repeat(2_500)}),
-            false,
+            serde_json::json!({"path": "a.txt", "old_text": "alpha", "new_text": "beta"}),
+            true,
         );
-        result.unwrap();
-        assert!(approvals.is_empty());
-        assert_eq!(judge.asked(), ["create: big.txt", "edit: big.txt"]);
+        assert_eq!(approvals.len(), 1);
+        assert!(judge.asked().is_empty() && started.is_empty());
+    }
+
+    #[test]
+    fn when_no_guard_can_answer_nothing_runs_and_the_model_is_told_why() {
+        let root = workspace();
+        let judge = Fixed::unavailable();
+        let want = "Auto Mode isn't currently available. Ask the user to switch your mode to Plan, Accept Minimal, Accept Edits, or Manual";
+        for (name, arguments) in [
+            ("run_command", serde_json::json!({"command": "echo never"})),
+            (
+                "replace_text",
+                serde_json::json!({"path": "a.txt", "old_text": "alpha", "new_text": "beta"}),
+            ),
+            (
+                "create_file",
+                serde_json::json!({"path": "never.txt", "content": "x"}),
+            ),
+        ] {
+            let (result, approvals, _) = run("auto", &judge, &root, name, arguments, true);
+            assert_eq!(result.unwrap(), want, "{name}");
+            assert!(approvals.is_empty(), "{name}: the user is not asked either");
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "alpha\n"
+        );
+        assert!(!root.join("never.txt").exists());
     }
 
     #[test]

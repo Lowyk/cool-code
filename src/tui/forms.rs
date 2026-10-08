@@ -35,6 +35,7 @@ pub(super) fn remove_provider_profile(settings: &mut Settings, id: &str) -> bool
         return false;
     };
     settings.providers.remove(index);
+    settings.auto_guards.retain(|guard| guard.provider_id != id);
 
     for chain in &mut settings.model_chains {
         chain.members.retain(|member| member.provider_id != id);
@@ -269,6 +270,7 @@ impl App {
             self.settings = previous_settings;
             return Err(error);
         }
+        self.leave_auto_if_unusable()?;
         let forgotten = if profile.adapter == "chatgpt" {
             crate::chatgpt_auth::sign_out(&profile.id)
         } else {
