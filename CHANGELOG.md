@@ -27,6 +27,9 @@ All notable changes are listed here, newest first. The format follows
   Dangerous commands and secret files still always ask you. Auto is greyed out until a guard is set
   up. Llama Prompt Guard models can be added as injection scanners, which never approve anything.
 - Manual mode: asks before every edit, new file and command.
+- Light mode, and live previews in Settings → Appearance (themes in their own colours, the
+  backdrop options, and the effort-name animation).
+- Shift+Enter or Alt+Enter starts a new line in the prompt.
 - A `generate_image` tool for placeholder pictures, available only after you set up an image API
   (Settings → General → Image generation); each image asks first, and `/undo` can remove it.
 - `@` file suggestions while typing, quoted paths with spaces, and (behind a setting, with each
@@ -47,7 +50,15 @@ All notable changes are listed here, newest first. The format follows
   projects. Folders trusted by older versions must be trusted again once.
 - Series names such as `/model fable` respect each provider's automatic-switching setting.
 - Notices raised in Settings are shown in the Settings footer.
+- The page after a ChatGPT sign-in looks like a Windows 10 console window.
 
 ### Fixed
 
+- The `@` file list showed only eight matches and could not scroll; it now keeps up to 200 and
+  scrolls with the highlight.
+- Pasting several lines sent the message at the first line break.
+- A command that left a background process running (a dev server, `start /b`) could make the
+  turn wait forever; it now waits at most two seconds for the output to close.
+- A crash left the terminal in raw mode; the terminal is restored before the message is shown.
+- Pasting an API key with a non-ASCII character near its start crashed the harness.
 - Plan mode no longer blocks read-only tools.

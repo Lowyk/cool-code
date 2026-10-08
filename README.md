@@ -14,7 +14,7 @@ Cool Code is a terminal UI where an AI model reads your repository, proposes edi
 - **Permissions enforced by the harness.** Five modes from read-only *Plan* to *Accept Everything*, with every command shown before it runs unless the mode says otherwise.
 - **Know what you are spending.** `/usage` shows every provider's remaining usage, and running-low warnings appear before a balance or limit runs out.
 - **Private by default.** Sessions and usage stats are opt-in, project data lives outside your repositories, and outbound text can be redacted for providers that need it.
-- **Looks good.** Answers are drawn as Markdown (headings, code blocks, lists, tables), there are eight themes with animated backdrops, and a synchronized renderer with no flicker.
+- **Looks good.** Answers are drawn as Markdown (headings, code blocks, lists, tables), there are eight themes with animated backdrops and a light mode, and a synchronized renderer with no flicker.
 
 ## Install
 
@@ -148,7 +148,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/privacy [add\|clear\|revoke]` | Local redaction values and acknowledgements |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
-Attach files with `@path` (see above). **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness run`, `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
+Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness run`, `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
 
 ## Privacy and data
 
@@ -160,7 +160,7 @@ Attach files with `@path` (see above). **Ctrl+Up/Down** scrolls the conversation
 
 ## Appearance
 
-Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, Mint, Autumn, Retro (CRT), Synthwave), each with a colour set and an animated backdrop, plus options for the backdrop on the welcome screen and while chatting, and for animating the effort name. `NO_COLOR` turns the backdrop off. The browser page shown after a sign-in matches your theme.
+Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, Mint, Autumn, Retro (CRT), Synthwave), each with a colour set and an animated backdrop, plus a light mode, options for the backdrop on the welcome screen and while chatting, and for animating the effort name. Next to the options is a live preview of the highlighted one: a theme is shown in its own colours with its backdrop before you pick it, and the effort names under "Animate effort name" move only while it is on. Light mode works with every theme: it keeps each theme's colours but draws them light. `NO_COLOR` turns the backdrop off. The browser page shown after a sign-in looks like a Windows 10 console window in your theme's colours.
 
 ## Principles
 
