@@ -130,6 +130,12 @@ pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, 
     let mut column = 2usize.min(width);
     let characters = input.chars().collect::<Vec<_>>();
     for (index, character) in characters.iter().copied().enumerate() {
+        if character == '\n' {
+            lines.push(String::new());
+            row += 1;
+            column = 0;
+            continue;
+        }
         let character_width = character.width().unwrap_or(0);
         if column + character_width > width {
             lines.push(String::new());
