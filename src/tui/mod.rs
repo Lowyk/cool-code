@@ -41,6 +41,14 @@ use std::io;
 use std::time::Duration;
 
 pub(crate) fn run(resume: Option<sessions::Resume>) -> Result<()> {
+    // A panic would otherwise leave the terminal in raw mode on the alternate screen, which looks
+    // like a frozen window; put it back first so the message can be read.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
+        previous(info);
+    }));
     let mut terminal = setup_terminal()?;
     let result = run_app(&mut terminal, resume);
     restore_terminal(&mut terminal)?;
