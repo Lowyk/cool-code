@@ -18,7 +18,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Suggestions shown at once.
-const MAX_SUGGESTIONS: usize = 8;
+/// Most matches kept for one query; the popup scrolls through them.
+const MAX_SUGGESTIONS: usize = 200;
+/// Rows of suggestions the popup shows at once.
+const VISIBLE_SUGGESTIONS: usize = 8;
 /// How long the list of project files is reused before it is read again.
 const FILES_FRESH_FOR: Duration = Duration::from_secs(10);
 const MAX_FILES: usize = 5_000;
@@ -45,6 +48,8 @@ pub(in crate::tui) struct MentionState {
     start: usize,
     items: Vec<Suggestion>,
     selected: usize,
+    /// The first row shown, so moving within the visible rows does not scroll.
+    offset: usize,
 }
 
 /// A message waiting for the user to confirm files outside the project, one at a time.
@@ -335,6 +340,7 @@ impl App {
             start,
             items,
             selected,
+            offset: 0,
         });
     }
 
@@ -349,6 +355,11 @@ impl App {
                     state.selected = next as usize;
                     break;
                 }
+            }
+            if state.selected < state.offset {
+                state.offset = state.selected;
+            } else if state.selected >= state.offset + VISIBLE_SUGGESTIONS {
+                state.offset = state.selected + 1 - VISIBLE_SUGGESTIONS;
             }
         }
     }
@@ -494,7 +505,8 @@ pub(in crate::tui) fn draw_mentions(
     prompt_area: Rect,
     state: &MentionState,
 ) {
-    let height = (state.items.len() as u16 + 2).min(prompt_area.y);
+    let shown = state.items.len().min(VISIBLE_SUGGESTIONS);
+    let height = (shown as u16 + 2).min(prompt_area.y);
     if height < 3 {
         return;
     }
@@ -509,14 +521,24 @@ pub(in crate::tui) fn draw_mentions(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(crate::tui::theme::accent()))
         .style(Style::default().bg(crate::tui::theme::panel()))
-        .title(" Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ");
+        .title(" Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ")
+        .title_bottom(
+            Line::from(format!(" {}/{} ", state.selected + 1, state.items.len())).right_aligned(),
+        );
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    let rows = inner.height as usize;
+    // Keep the highlighted row inside the visible window, even if the popup is shorter than usual.
+    let first = state
+        .offset
+        .max((state.selected + 1).saturating_sub(rows))
+        .min(state.selected);
     let lines = state
         .items
         .iter()
         .enumerate()
-        .take(inner.height as usize)
+        .skip(first)
+        .take(rows)
         .map(|(index, item)| {
             if item.disabled {
                 return Line::from(Span::styled(
@@ -826,6 +848,7 @@ mod tests {
                 },
             ],
             selected: 1,
+            offset: 0,
         });
         app.accept_mention();
         assert_eq!(app.input, "explain @src/main.rs ");
@@ -839,6 +862,7 @@ mod tests {
                 disabled: false,
             }],
             selected: 0,
+            offset: 0,
         });
         spaced.accept_mention();
         assert_eq!(
@@ -856,6 +880,7 @@ mod tests {
             start: 0,
             items: vec![disabled("explanation")],
             selected: 0,
+            offset: 0,
         });
         app.accept_mention();
         assert_eq!(app.input, "@..", "nothing inserted");
@@ -877,6 +902,7 @@ mod tests {
                 },
             ],
             selected: 0,
+            offset: 0,
         });
         app.mention_move(1);
         assert_eq!(app.mention.as_ref().unwrap().selected, 2, "skips the note");
@@ -899,6 +925,7 @@ mod tests {
                 disabled: false,
             }],
             selected: 0,
+            offset: 0,
         });
         assert!(
             !app.mention_takes_enter(),
@@ -921,6 +948,7 @@ mod tests {
                 disabled: false,
             }],
             selected: 0,
+            offset: 0,
         });
         app.dismiss_mention();
         assert!(app.mention.is_none());
@@ -964,6 +992,51 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn a_long_list_keeps_every_match_and_scrolls_to_follow_the_choice() {
+        let files: Vec<String> = (0..40).map(|n| format!("src/file{n:02}.rs")).collect();
+        let found = suggestions(Path::new("."), &files, "file", false, None);
+        assert_eq!(
+            found.len(),
+            40,
+            "all matches are offered, not just the first few"
+        );
+        let mut app = trusted_app();
+        app.input = "see @file".to_owned();
+        app.mention = Some(MentionState {
+            start: 4,
+            items: found,
+            selected: 0,
+            offset: 0,
+        });
+        let first = screen(&app);
+        assert!(first.contains("src/file00.rs"), "{first}");
+        assert!(first.contains("1/40"), "the position is shown: {first}");
+        assert!(!first.contains("src/file20.rs"));
+        for _ in 0..20 {
+            app.mention_move(1);
+        }
+        let later = screen(&app);
+        assert!(
+            later.contains("src/file20.rs"),
+            "the list scrolled: {later}"
+        );
+        assert!(!later.contains("src/file00.rs"), "{later}");
+        assert!(later.contains("21/40"), "{later}");
+        // Moving back up inside the window moves the highlight, not the list.
+        app.mention_move(-1);
+        let up = screen(&app);
+        assert!(
+            up.contains("src/file20.rs") && up.contains("src/file13.rs"),
+            "{up}"
+        );
+        // Wrapping from the top goes to the last match, which must be visible too.
+        for _ in 0..21 {
+            app.mention_move(-1);
+        }
+        assert!(screen(&app).contains("src/file39.rs"));
     }
 
     fn trusted_app() -> App {
