@@ -341,6 +341,82 @@ pub(super) fn login_palette(id: ThemeId) -> crate::login_page::Palette {
     }
 }
 
+/// Light mode: every frame is drawn as usual and then repainted with each color's lightness
+/// turned around, keeping its hue. Dark panels become pale, light text becomes dark, and accent
+/// colors keep their character while staying readable on a light background.
+pub(super) fn to_light(buffer: &mut ratatui::buffer::Buffer) {
+    for cell in buffer.content.iter_mut() {
+        cell.fg = light_foreground(cell.fg);
+        cell.bg = light_background(cell.bg);
+    }
+}
+
+/// The page color of light mode, used where the terminal's own background would show.
+const LIGHT_PAGE: Color = rgb(246, 247, 249);
+
+pub(super) fn light_background(color: Color) -> Color {
+    match color {
+        Color::Reset | Color::Black => LIGHT_PAGE,
+        Color::Rgb(r, g, b) => flip_lightness((r, g, b), 0.80, 0.97),
+        Color::White | Color::Gray => rgb(70, 72, 76),
+        Color::DarkGray => rgb(205, 208, 214),
+        other => other,
+    }
+}
+
+pub(super) fn light_foreground(color: Color) -> Color {
+    match color {
+        Color::Reset | Color::White => rgb(28, 30, 34),
+        Color::Gray => rgb(70, 74, 80),
+        Color::DarkGray => rgb(120, 124, 132),
+        Color::Black => rgb(246, 247, 249),
+        Color::Red | Color::LightRed => rgb(190, 30, 40),
+        Color::Green | Color::LightGreen => rgb(20, 125, 55),
+        Color::Yellow | Color::LightYellow => rgb(150, 105, 0),
+        Color::Blue | Color::LightBlue => rgb(30, 80, 190),
+        Color::Magenta | Color::LightMagenta => rgb(150, 40, 150),
+        Color::Cyan | Color::LightCyan => rgb(0, 115, 140),
+        Color::Rgb(r, g, b) => flip_lightness((r, g, b), 0.12, 0.42),
+        other => other,
+    }
+}
+
+/// Turns the lightness of a color around (dark to light and back), keeping its hue and
+/// saturation, and keeps the result between `low` and `high`.
+fn flip_lightness((r, g, b): (u8, u8, u8), low: f32, high: f32) -> Color {
+    let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (max + min) / 2.0;
+    let delta = max - min;
+    let (hue, saturation) = if delta == 0.0 {
+        (0.0, 0.0)
+    } else {
+        let saturation = delta / (1.0 - (2.0 * lightness - 1.0).abs());
+        let hue = if max == r {
+            ((g - b) / delta).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / delta + 2.0
+        } else {
+            (r - g) / delta + 4.0
+        };
+        (hue * 60.0, saturation)
+    };
+    let lightness = (1.0 - lightness).clamp(low, high);
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let x = chroma * (1.0 - ((hue / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match hue {
+        h if h < 60.0 => (chroma, x, 0.0),
+        h if h < 120.0 => (x, chroma, 0.0),
+        h if h < 180.0 => (0.0, chroma, x),
+        h if h < 240.0 => (0.0, x, chroma),
+        h if h < 300.0 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let offset = lightness - chroma / 2.0;
+    let channel = |value: f32| ((value + offset) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Color::Rgb(channel(r), channel(g), channel(b))
+}
+
 pub(super) fn current() -> &'static Theme {
     theme_for(CURRENT.with(Cell::get))
 }
@@ -404,6 +480,71 @@ mod tests {
         ] {
             assert_ne!(login_palette(id).window, login_palette(id).text, "readable");
         }
+    }
+
+    fn lightness(color: Color) -> f32 {
+        let (r, g, b) = channels(color);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        (f32::from(max) + f32::from(min)) / 510.0
+    }
+
+    #[test]
+    fn light_mode_turns_dark_backgrounds_light_and_light_text_dark() {
+        for theme in &THEMES {
+            for background in [theme.panel, theme.panel_alt, theme.dialog, theme.input] {
+                assert!(
+                    lightness(light_background(background)) >= 0.8,
+                    "{} {background:?}",
+                    theme.name
+                );
+            }
+            for text in [
+                theme.accent,
+                theme.accent_bright,
+                theme.accent_soft,
+                theme.tagline,
+            ] {
+                assert!(
+                    lightness(light_foreground(text)) <= 0.45,
+                    "{} {text:?} would be hard to read on white",
+                    theme.name
+                );
+            }
+        }
+        assert!(
+            lightness(light_background(Color::Reset)) >= 0.9,
+            "the terminal's own background"
+        );
+        for text in [Color::Reset, Color::White, Color::Gray] {
+            assert!(lightness(light_foreground(text)) <= 0.35, "{text:?}");
+        }
+        assert!(lightness(light_foreground(Color::DarkGray)) <= 0.6);
+    }
+
+    #[test]
+    fn light_mode_keeps_each_colors_hue() {
+        // Cool's ice blue stays blue, Sakura's pink stays pink.
+        let (r, g, b) = channels(light_foreground(rgb(98, 213, 244)));
+        assert!(b > r && g > r, "still blue: {r},{g},{b}");
+        let (r, g, b) = channels(light_foreground(rgb(255, 150, 200)));
+        assert!(r > g && r > b, "still pink: {r},{g},{b}");
+    }
+
+    #[test]
+    fn light_mode_repaints_every_cell_of_a_frame() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buffer[(0, 0)].set_fg(Color::White).set_bg(rgb(25, 32, 38));
+        buffer[(1, 0)].set_fg(rgb(98, 213, 244));
+        to_light(&mut buffer);
+        assert!(lightness(buffer[(0, 0)].bg) >= 0.8);
+        assert!(lightness(buffer[(0, 0)].fg) <= 0.35);
+        assert!(
+            lightness(buffer[(1, 0)].bg) >= 0.9,
+            "unpainted cells get a light background"
+        );
+        assert!(lightness(buffer[(2, 0)].fg) <= 0.35);
     }
 
     #[test]

@@ -170,6 +170,13 @@ pub(super) fn input_prompt_height(input: &str, area: Rect) -> u16 {
 const CHAT_BACKDROP_DIM: f32 = 0.4;
 
 pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
+    draw_dark(frame, app, animation_tick);
+    if app.settings.light_mode {
+        crate::tui::theme::to_light(frame.buffer_mut());
+    }
+}
+
+fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
     crate::tui::theme::set_current(app.settings.theme);
     app.cursor.set(None);
