@@ -100,14 +100,67 @@ fn run_app(
         if !event::poll(frame_interval).context("waiting for terminal input")? {
             continue;
         }
-        let Event::Key(key) = event::read().context("reading terminal input")? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
+        // Everything already waiting is read at once, so a paste can be told apart from typing.
+        let mut presses = Vec::new();
+        loop {
+            if let Event::Key(key) = event::read().context("reading terminal input")?
+                && key.kind == KeyEventKind::Press
+            {
+                presses.push(key);
+            }
+            if presses.len() >= MAX_BATCH
+                || !event::poll(Duration::ZERO).context("waiting for terminal input")?
+            {
+                break;
+            }
+        }
+        handle_batch(&mut app, &presses)?;
+    }
+    Ok(())
+}
+
+impl state::App {
+    /// Whether keys go to the prompt rather than to a dialog, picker or the settings screen.
+    /// Mirrors the order of checks in [`handle_key`].
+    fn typing_in_prompt(&self) -> bool {
+        !(self.trust_prompt
+            || self.chatgpt_login.is_some()
+            || self.outside_prompt.is_some()
+            || self.image_setup.is_some()
+            || self.wizard.is_some()
+            || self.tool_approval.is_some()
+            || self.confirm_ultimate
+            || self.privacy_confirmation.is_some()
+            || self.chain_form.is_some()
+            || self.provider_form.is_some()
+            || self.model_choices.is_some()
+            || self.session_picker.is_some()
+            || self.model_picker.is_some()
+            || self.mode_picker
+            || self.picker
+            || self.usage_view.is_some()
+            || self.stats_view.is_some()
+            || self.settings_view.is_some())
+    }
+}
+
+/// Most key presses handled between two frames.
+const MAX_BATCH: usize = 50_000;
+
+/// Handles key presses that arrived together. Terminals without paste support deliver a paste as
+/// typed keys; an Enter with more text right behind it is a line break inside that paste, not a
+/// request to send. Nobody types the next character within the same instant.
+fn handle_batch(app: &mut state::App, presses: &[event::KeyEvent]) -> Result<()> {
+    for (index, key) in presses.iter().enumerate() {
+        let pasted_line_break = key.code == KeyCode::Enter
+            && presses[index + 1..]
+                .iter()
+                .any(|next| matches!(next.code, KeyCode::Char(_)));
+        if pasted_line_break && app.typing_in_prompt() {
+            app.input.push('\n');
             continue;
         }
-
-        handle_key(&mut app, key)?;
+        handle_key(app, *key)?;
     }
     Ok(())
 }
@@ -288,6 +341,13 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
             KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
+            KeyCode::Enter
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+            {
+                app.input.push('\n')
+            }
             KeyCode::Enter if app.mention_takes_enter() => app.accept_mention(),
             KeyCode::Esc if app.mention.is_some() => app.dismiss_mention(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -342,6 +402,67 @@ mod tests {
         turn.text = text.to_owned();
         app.streaming = Some(turn);
         (app, sender, cancel)
+    }
+
+    fn key_press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn typed(text: &str) -> Vec<KeyEvent> {
+        text.chars()
+            .map(|character| match character {
+                '\n' => key_press(KeyCode::Enter),
+                other => key_press(KeyCode::Char(other)),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pasted_block_of_lines_stays_in_the_prompt_instead_of_being_sent_line_by_line() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        super::handle_batch(&mut app, &typed("fn main() {\n    run();\n}")).unwrap();
+        assert_eq!(app.input, "fn main() {\n    run();\n}");
+        assert!(app.transcript.is_empty(), "nothing was sent");
+        assert!(app.pending.is_none());
+    }
+
+    #[test]
+    fn an_enter_on_its_own_still_sends() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        super::handle_batch(&mut app, &typed("/help")).unwrap();
+        super::handle_batch(&mut app, &typed("\n")).unwrap();
+        assert!(app.input.is_empty(), "the command ran: {:?}", app.input);
+        // A key that is not text behind the Enter (say an arrow) does not make it a paste.
+        app.input = "/help".to_owned();
+        super::handle_batch(
+            &mut app,
+            &[key_press(KeyCode::Enter), key_press(KeyCode::Up)],
+        )
+        .unwrap();
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn shift_or_alt_enter_starts_a_new_line() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.input = "first".to_owned();
+        for modifier in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+            handle_key(&mut app, KeyEvent::new(KeyCode::Enter, modifier)).unwrap();
+        }
+        assert_eq!(app.input, "first\n\n");
+    }
+
+    #[test]
+    fn line_breaks_in_the_prompt_start_new_rows_and_move_the_cursor() {
+        let (lines, cursor) = crate::tui::render::wrap_input_text("ab\ncd", 40);
+        assert_eq!(lines, ["ab", "cd"]);
+        assert_eq!(cursor, (1, 2));
+        let (lines, cursor) = crate::tui::render::wrap_input_text("ab\n", 40);
+        assert_eq!(lines, ["ab", ""]);
+        assert_eq!(cursor, (1, 0));
     }
 
     #[test]
