@@ -190,6 +190,8 @@ struct Settings {
     workflows: bool,
     /// Keep the effort name in the status line animated instead of fading it after a change.
     effort_always_animated: bool,
+    /// Draw the interface light instead of dark.
+    light_mode: bool,
     /// Warn when the active provider reports that its balance or usage limits are running low.
     usage_warnings: bool,
     /// Condense the older conversation into a summary before it fills the model's context window.
@@ -325,6 +327,7 @@ impl Default for Settings {
             dynamic_workflows: false,
             workflows: false,
             effort_always_animated: false,
+            light_mode: false,
             usage_warnings: true,
             auto_compact: true,
             auto_guards: Vec::new(),
