@@ -1,12 +1,16 @@
 [package]
-name = "harness"
+name = "coolcode"
 version = "0.1.0"
 edition = "2024"
-description = "A coding-focused AI harness built from scratch"
+description = "Cool Code: an AI coding assistant for your terminal"
 license = "MIT"
+repository = "https://github.com/Lowyk/cool-code"
+readme = "README.md"
+keywords = ["ai", "coding", "terminal", "tui", "assistant"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
-name = "harness"
+name = "coolcode"
 path = "src/main.rs"
 
 [dependencies]

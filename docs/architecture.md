@@ -35,7 +35,8 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/responses.rs` | Builds requests in the OpenAI Responses format, which the ChatGPT sign-in backend speaks |
 | `src/guard.rs` | Auto mode's guards: fixed dangerous-command and secret-file rules, then the user's chosen guard models asked in order for a strict-JSON yes or no, with fallback when one cannot answer and an "unavailable" result when none can; optional prompt-injection scanners |
 | `src/tui/settings/auto_mode.rs` | Settings → Auto Mode: choosing and ordering the guard models, with the recommended small-model families listed first |
-| `src/headless.rs` | `harness run`: one non-interactive turn, with approvals declined, progress on standard error or as JSON lines |
+| `install.sh` and `installer/coolcode.iss` | The macOS/Linux install script (checksum-verified) and the Windows installer (Inno Setup; per-user, optional PATH entry, removed on uninstall) |
+| `src/headless.rs` | `coolcode run`: one non-interactive turn, with approvals declined, progress on standard error or as JSON lines |
 | `src/context.rs` | Keeping a long conversation inside the context window: token estimates, the model-reported window, where to cut, and the summary that replaces the older messages |
 | `src/imagegen.rs` | The image API behind `generate_image`: configuration, request, response parsing and the checks on what comes back |
 | `src/tui/image_setup.rs` | The Settings form for the image API (address, model, key, turn off) |

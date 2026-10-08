@@ -1,4 +1,4 @@
-//! `harness run`: one turn without the interface, for scripts and CI.
+//! `coolcode run`: one turn without the interface, for scripts and CI.
 //!
 //! The answer goes to standard output; progress goes to standard error (or, with `--json`,
 //! everything is one JSON object per line on standard output). There is nobody to ask, so any
@@ -144,7 +144,7 @@ fn read_prompt(given: &str) -> Result<String> {
         return Ok(given.to_owned());
     }
     if std::io::stdin().is_terminal() {
-        bail!("give a prompt: harness run \"what to do\", or pipe it in on standard input");
+        bail!("give a prompt: coolcode run \"what to do\", or pipe it in on standard input");
     }
     let mut text = String::new();
     std::io::stdin()

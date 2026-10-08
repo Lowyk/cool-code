@@ -259,6 +259,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolcode"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dirs",
+ "keyring",
+ "pulldown-cmark",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "unicode-width 0.2.0",
+ "uuid",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,29 +584,6 @@ dependencies = [
  "r-efi",
  "rand_core",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "harness"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "clap",
- "crossterm",
- "dirs",
- "keyring",
- "pulldown-cmark",
- "ratatui",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "toml",
- "unicode-width 0.2.0",
- "uuid",
 ]
 
 [[package]]
