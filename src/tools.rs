@@ -620,8 +620,8 @@ pub(crate) fn run_command(
     let mut child = process.spawn().context("starting approved shell command")?;
     let stdout = child.stdout.take().context("capturing command stdout")?;
     let stderr = child.stderr.take().context("capturing command stderr")?;
-    let stdout_reader = thread::spawn(|| read_bounded(stdout));
-    let stderr_reader = thread::spawn(|| read_bounded(stderr));
+    let stdout = capture(stdout);
+    let stderr = capture(stderr);
     let deadline = Instant::now() + Duration::from_secs(300);
     let status = loop {
         if let Some(status) = child.try_wait().context("waiting for command")? {
@@ -639,12 +639,17 @@ pub(crate) fn run_command(
         }
         thread::sleep(Duration::from_millis(100));
     };
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("stdout reader stopped unexpectedly"))??;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("stderr reader stopped unexpectedly"))??;
+    // A background process the command started can keep the output open long after the command
+    // itself is done (a dev server, `start /b`, `cmd &`); wait for it only briefly.
+    let grace = Instant::now() + OUTPUT_GRACE;
+    while !(finished(&stdout) && finished(&stderr))
+        && Instant::now() < grace
+        && !cancel.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        thread::sleep(Duration::from_millis(20));
+    }
+    let still_open = !(finished(&stdout) && finished(&stderr));
+    let (stdout, stderr) = (collected(&stdout), collected(&stderr));
     let mut result = format!(
         "Exit status: {}\n",
         status
@@ -662,26 +667,66 @@ pub(crate) fn run_command(
         result.push_str(&stderr);
         result.push('\n');
     }
+    if still_open {
+        result.push_str("Note: a background process started by this command is still running and holds its output open; anything it prints later is not shown.\n");
+    }
     Ok(result.chars().take(MAX_OUTPUT_BYTES).collect())
 }
 
-fn read_bounded<R: Read>(mut reader: R) -> Result<String> {
-    const LIMIT: usize = 24 * 1024;
-    let mut kept = Vec::new();
-    let mut buffer = [0u8; 4096];
-    loop {
-        let count = reader.read(&mut buffer).context("reading command output")?;
-        if count == 0 {
-            break;
+/// How long to wait for a command's output to close after the command itself has exited.
+const OUTPUT_GRACE: Duration = Duration::from_secs(2);
+/// Most output kept from one stream of one command.
+const STREAM_LIMIT: usize = 24 * 1024;
+
+/// Output gathered by a reader thread, readable while the thread is still running.
+#[derive(Default)]
+struct Captured {
+    bytes: Vec<u8>,
+    truncated: bool,
+    done: bool,
+}
+
+/// Reads `reader` to its end on its own thread, keeping the first [`STREAM_LIMIT`] bytes.
+fn capture<R: Read + Send + 'static>(mut reader: R) -> std::sync::Arc<std::sync::Mutex<Captured>> {
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(Captured::default()));
+    let writer = shared.clone();
+    thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        loop {
+            let count = reader.read(&mut buffer).unwrap_or(0);
+            let mut captured = writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if count == 0 {
+                captured.done = true;
+                return;
+            }
+            let remaining = STREAM_LIMIT.saturating_sub(captured.bytes.len());
+            captured.truncated |= count > remaining;
+            captured
+                .bytes
+                .extend_from_slice(&buffer[..count.min(remaining)]);
         }
-        let remaining = LIMIT.saturating_sub(kept.len());
-        kept.extend_from_slice(&buffer[..count.min(remaining)]);
-    }
-    let mut output = String::from_utf8_lossy(&kept).into_owned();
-    if kept.len() >= LIMIT {
+    });
+    shared
+}
+
+fn finished(captured: &std::sync::Mutex<Captured>) -> bool {
+    captured
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .done
+}
+
+fn collected(captured: &std::sync::Mutex<Captured>) -> String {
+    let captured = captured
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut output = String::from_utf8_lossy(&captured.bytes).into_owned();
+    if captured.truncated {
         output.push_str("\n… output truncated");
     }
-    Ok(output)
+    output
 }
 
 const MAX_READ_BYTES: u64 = 512 * 1024;
@@ -1249,5 +1294,29 @@ mod cancel_tests {
             started.elapsed()
         );
         assert!(error.to_string().contains("cancelled"), "{error}");
+    }
+
+    #[test]
+    fn a_background_process_holding_the_output_open_does_not_hang_the_command() {
+        let cancel = AtomicBool::new(false);
+        // The shell exits at once but leaves a child that inherited its output pipe.
+        let command = if cfg!(windows) {
+            "cmd /c 'start /b ping -n 25 127.0.0.1'; 'started'"
+        } else {
+            "sleep 25 & echo started"
+        };
+        let started = Instant::now();
+        let output = run_command(&std::env::temp_dir(), command, &cancel).expect("ran");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "waited {:?} for a background process",
+            started.elapsed()
+        );
+        assert!(output.contains("started"), "{output}");
+        assert!(output.contains("Exit status: 0"), "{output}");
+        assert!(
+            output.contains("still running"),
+            "the model is told why: {output}"
+        );
     }
 }
