@@ -37,6 +37,11 @@ pub(crate) fn apply_overrides(settings: &mut Settings, options: &Options) -> Res
         }
         settings.permission_mode = mode.clone();
     }
+    if settings.permission_mode == "auto" && !settings.auto_ready() {
+        bail!(
+            "auto mode needs a judge model: choose one in the interactive harness under Settings > Auto Mode, or pick another --mode"
+        );
+    }
     if let Some(model) = &options.model {
         if model.trim().is_empty() {
             bail!("--model needs a model id");
@@ -261,6 +266,43 @@ mod tests {
         let before = (untouched.permission_mode.clone(), untouched.effort);
         apply_overrides(&mut untouched, &options()).unwrap();
         assert_eq!((untouched.permission_mode, untouched.effort), before);
+    }
+
+    #[test]
+    fn auto_mode_needs_a_judge_model_and_manual_is_always_allowed() {
+        let auto = Options {
+            mode: Some("auto".to_owned()),
+            ..options()
+        };
+        let mut settings = Settings::default();
+        let error = apply_overrides(&mut settings, &auto)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Settings > Auto Mode"), "{error}");
+        let mut saved_auto = Settings::default();
+        saved_auto.permission_mode = "auto".to_owned();
+        assert!(
+            apply_overrides(&mut saved_auto, &options()).is_err(),
+            "a saved Auto mode without a judge is refused too"
+        );
+        let manual = Options {
+            mode: Some("manual".to_owned()),
+            ..options()
+        };
+        apply_overrides(&mut Settings::default(), &manual).unwrap();
+        let mut ready = Settings::default();
+        ready.providers = vec![crate::ProviderProfile {
+            id: "p".to_owned(),
+            name: "p".to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            ..Default::default()
+        }];
+        ready.auto_guards = vec![crate::guard::AutoGuard {
+            provider_id: "p".to_owned(),
+            model_id: "haiku".to_owned(),
+        }];
+        apply_overrides(&mut ready, &auto).unwrap();
+        assert_eq!(ready.permission_mode, "auto");
     }
 
     #[test]

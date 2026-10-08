@@ -28,6 +28,7 @@ fn mode_color(mode: &str) -> Color {
         "accept-edits" => Color::Rgb(180, 130, 255),
         "auto" => Color::Rgb(110, 220, 130),
         "plan" => Color::Rgb(240, 210, 90),
+        "manual" => Color::Rgb(255, 150, 90),
         "accept-minimal" => Color::Rgb(98, 213, 244),
         _ => Color::Gray,
     }
@@ -558,12 +559,13 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
 
-    const MODE_COLORS: [(&str, Color); 5] = [
+    const MODE_COLORS: [(&str, Color); 6] = [
         ("accept-everything", Color::Rgb(235, 80, 80)),
         ("accept-edits", Color::Rgb(180, 130, 255)),
         ("auto", Color::Rgb(110, 220, 130)),
         ("plan", Color::Rgb(240, 210, 90)),
         ("accept-minimal", Color::Rgb(98, 213, 244)),
+        ("manual", Color::Rgb(255, 150, 90)),
     ];
 
     #[test]
@@ -587,7 +589,7 @@ mod tests {
             mode_span("accept-everything", true).content,
             "!! Accept Everything !!"
         );
-        for mode in ["accept-edits", "auto", "plan", "accept-minimal"] {
+        for mode in ["accept-edits", "auto", "plan", "accept-minimal", "manual"] {
             assert!(!mode_span(mode, true).content.contains('!'), "{mode}");
         }
     }
@@ -597,6 +599,16 @@ mod tests {
         for (mode, color) in MODE_COLORS {
             let mut settings = Settings::default();
             settings.permission_mode = mode.to_owned();
+            settings.providers = vec![crate::ProviderProfile {
+                id: "p".to_owned(),
+                name: "p".to_owned(),
+                adapter: "openai-compatible".to_owned(),
+                ..Default::default()
+            }];
+            settings.auto_guards = vec![crate::guard::AutoGuard {
+                provider_id: "p".to_owned(),
+                model_id: "haiku".to_owned(),
+            }];
             let mut app = App::new(settings);
             app.trust_prompt = false;
             let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("test terminal");

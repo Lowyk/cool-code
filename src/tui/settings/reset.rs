@@ -74,6 +74,7 @@ pub(in crate::tui) fn reset_preferences(settings: &Settings) -> Settings {
         base_url: settings.base_url.clone(),
         api_key_env: settings.api_key_env.clone(),
         providers: settings.providers.clone(),
+        auto_guards: settings.auto_guards.clone(),
         image_generation: settings.image_generation.clone(),
         active_provider_id: settings.active_provider_id.clone(),
         default_provider_id: settings.default_provider_id.clone(),
@@ -161,6 +162,8 @@ impl App {
             crate::secrets::delete(&crate::imagegen::key_name())?;
             self.settings.image_generation = None;
             self.settings.providers.clear();
+            self.settings.auto_guards.clear();
+            self.leave_auto_if_unusable()?;
             self.settings.model_chains.clear();
             self.settings.active_chain_id = None;
             self.settings.active_provider_id = None;
@@ -517,9 +520,22 @@ mod tests {
         let mut app = lived_in();
         let id = app.settings.providers[0].id.clone();
         assert!(crate::secrets::load(&id).unwrap().is_some());
+        app.settings.auto_guards = vec![crate::guard::AutoGuard {
+            provider_id: id.clone(),
+            model_id: "m".to_owned(),
+        }];
+        app.settings.permission_mode = "auto".to_owned();
         choose(&mut app, 3);
         press(&mut app, KeyCode::Char('y'));
         assert!(app.settings.providers.is_empty());
+        assert!(
+            app.settings.auto_guards.is_empty(),
+            "guards live on providers"
+        );
+        assert_eq!(
+            app.settings.permission_mode, "manual",
+            "Auto cannot stay on without a guard"
+        );
         assert_eq!(
             crate::secrets::load(&id).unwrap(),
             None,
@@ -532,9 +548,19 @@ mod tests {
     #[test]
     fn resetting_settings_restores_preferences_but_keeps_providers_and_answers() {
         let mut app = lived_in();
+        let guard = crate::guard::AutoGuard {
+            provider_id: app.settings.providers[0].id.clone(),
+            model_id: "m".to_owned(),
+        };
+        app.settings.auto_guards = vec![guard.clone()];
         choose(&mut app, 4);
         press(&mut app, KeyCode::Char('y'));
         let settings = &app.settings;
+        assert_eq!(
+            settings.auto_guards,
+            [guard],
+            "they belong to the kept providers"
+        );
         assert_eq!(settings.theme, ThemeId::Cool);
         assert_eq!(settings.pulse, PulseMode::Words);
         assert!(!settings.stats_enabled && !settings.sessions_enabled);

@@ -300,10 +300,6 @@ pub(crate) struct EditProposal {
 }
 
 impl EditProposal {
-    pub(crate) fn is_small(&self) -> bool {
-        self.before.len() <= 2_048 && self.after.len() <= 2_048
-    }
-
     pub(crate) fn preview(&self) -> String {
         format!(
             "File: {}\n{}\n\n- {}\n+ {}",
@@ -323,10 +319,6 @@ pub(crate) struct CreateProposal {
 impl CreateProposal {
     pub(crate) fn preview(&self) -> String {
         format!("New file: {}\n\n{}", self.relative_path, self.content)
-    }
-
-    pub(crate) fn is_small(&self) -> bool {
-        self.content.len() <= 2_048
     }
 }
 

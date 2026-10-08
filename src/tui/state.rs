@@ -1,6 +1,7 @@
 use crate::agent::{PendingEvent, ToolApproval};
-use crate::policy::{MODES, mode_label};
+use crate::policy::mode_label;
 use crate::tui::effort::effort_name;
+use crate::tui::settings::auto_mode::{ACTIVATE_NOTICE, AUTO_OFF_NOTICE};
 use crate::{ChainModel, Effort, PulseMode, Settings, provider, write_settings};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers};
@@ -455,10 +456,8 @@ impl App {
                     .position(|profile| profile.id == id)
             })
             .unwrap_or(0);
-        let mode_index = MODES
-            .iter()
-            .position(|(_, mode)| *mode == settings.permission_mode)
-            .unwrap_or(4);
+        let auto_was_unusable = settings.fall_back_from_unusable_auto();
+        let mode_index = crate::policy::mode_index(&settings.permission_mode);
         let projects_path = crate::projects::default_path();
         let workspace_trusted = std::env::current_dir()
             .ok()
@@ -527,7 +526,9 @@ impl App {
             mode_picker: false,
             mode_index,
             effort_flash_until: None,
-            notice: if workspace_trusted {
+            notice: if auto_was_unusable {
+                AUTO_OFF_NOTICE.to_owned()
+            } else if workspace_trusted {
                 "Trusted workspace · type a task or use /help for commands.".to_owned()
             } else {
                 "Workspace access is paused until you trust this folder or decline.".to_owned()
@@ -655,11 +656,12 @@ impl App {
     }
 
     pub(super) fn apply_mode(&mut self, mode: &str) -> Result<()> {
+        if mode == "auto" && !self.settings.auto_ready() {
+            self.notice = ACTIVATE_NOTICE.to_owned();
+            return Ok(());
+        }
         self.settings.permission_mode = mode.to_owned();
-        self.mode_index = MODES
-            .iter()
-            .position(|(_, value)| *value == mode)
-            .unwrap_or(4);
+        self.mode_index = crate::policy::mode_index(mode);
         write_settings(&self.settings)?;
         self.mode_picker = false;
         self.notice = format!("Mode set to {}.", mode_label(mode));

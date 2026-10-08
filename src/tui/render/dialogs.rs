@@ -248,13 +248,16 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
         .style(Style::default().bg(crate::tui::theme::panel()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    let auto_unusable = !app.settings.auto_ready();
     let options = MODES.iter().enumerate().map(|(index, (_, mode))| {
-        if index == app.mode_index {
-            let span = mode_span(mode, true);
-            Span::styled(format!("[ {} ]", span.content), span.style)
-        } else {
-            mode_span(mode, false)
+        let mut span = mode_span(mode, index == app.mode_index);
+        if *mode == "auto" && auto_unusable {
+            span.style = Style::default().fg(Color::DarkGray);
         }
+        if index == app.mode_index {
+            span.content = format!("[ {} ]", span.content).into();
+        }
+        span
     });
     let mut spans = Vec::new();
     for (index, option) in options.enumerate() {

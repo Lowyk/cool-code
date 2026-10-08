@@ -194,10 +194,10 @@ struct Settings {
     usage_warnings: bool,
     /// Condense the older conversation into a summary before it fills the model's context window.
     auto_compact: bool,
-    /// The model Auto mode asks whether an action is safe (on the active provider). Unset uses
-    /// the active model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    guard_model: Option<String>,
+    /// The models Auto mode asks whether an action is safe, in the order they are tried. Auto
+    /// mode is unavailable until at least one can judge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    auto_guards: Vec<guard::AutoGuard>,
     /// Allow `@` references to files outside the project folder (each one is still confirmed).
     outside_files: bool,
     /// Skip that confirmation, except for paths that may hold secrets. Hidden until unlocked.
@@ -327,7 +327,7 @@ impl Default for Settings {
             effort_always_animated: false,
             usage_warnings: true,
             auto_compact: true,
-            guard_model: None,
+            auto_guards: Vec::new(),
             outside_files: false,
             outside_files_no_prompt: false,
             image_generation: None,
