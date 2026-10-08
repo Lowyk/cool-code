@@ -5,7 +5,15 @@ All notable changes are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-08
+
+The first release.
+
 ### Added
+
+- A Windows installer (`coolcode-v0.1.0-windows-x64-setup.exe`) that installs for your user
+  without an administrator prompt and can add `coolcode` to your PATH, and an install script for
+  macOS and Linux that checks the download against its checksum.
 
 - Providers: Kimi Code (membership), Moonshot, Z.ai GLM Coding Plan, DeepSeek, Mistral, xAI,
   Groq and Ollama (local) presets, and an unofficial ChatGPT Plus/Pro sign-in whose models and
@@ -19,7 +27,7 @@ All notable changes are listed here, newest first. The format follows
 - `/compact` and automatic condensing of long conversations, with a context meter in the status
   line.
 - `/undo` takes back the file changes of the model's last turn without overwriting later work.
-- `harness run` runs one turn without the interface, for scripts and CI (`--json` available).
+- `coolcode run` runs one turn without the interface, for scripts and CI (`--json` available).
 - Auto mode: every command, edit and new file goes to guard models you choose in Settings → Auto
   Mode (recommended small models are listed first). A guard answers yes or no; a no asks you with
   the reason. Guards are tried in order, so one running out of usage hands over to the next, and
@@ -46,6 +54,8 @@ All notable changes are listed here, newest first. The format follows
 
 ### Changed
 
+- The program is now called `coolcode` (it was `harness`). Settings, sessions and saved keys are
+  unchanged.
 - Project data (trusted folders and per-project choices) lives in `~/.coolcode/`, not inside
   projects. Folders trusted by older versions must be trusted again once.
 - Series names such as `/model fable` respect each provider's automatic-switching setting.

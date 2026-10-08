@@ -36,7 +36,11 @@ mod tui;
 mod workflow;
 
 #[derive(Debug, Parser)]
-#[command(name = "harness", version, about = "A coding-focused AI harness")]
+#[command(
+    name = "coolcode",
+    version,
+    about = "Cool Code: an AI coding assistant for your terminal"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -566,7 +570,7 @@ fn run() -> Result<()> {
                         effort.description()
                     );
                 }
-                println!("Use `harness effort <level>` to select one.");
+                println!("Use `coolcode effort <level>` to select one.");
             }
         }
     }
@@ -595,10 +599,17 @@ mod tests {
     }
 
     #[test]
+    fn the_program_is_called_coolcode() {
+        use clap::CommandFactory;
+        assert_eq!(Cli::command().get_name(), "coolcode");
+        assert_eq!(env!("CARGO_PKG_NAME"), "coolcode");
+    }
+
+    #[test]
     fn the_run_command_takes_a_prompt_and_its_options() {
         use clap::Parser;
         let cli = Cli::try_parse_from([
-            "harness",
+            "coolcode",
             "run",
             "fix",
             "the",
@@ -627,7 +638,7 @@ mod tests {
             }
             other => panic!("not the run command: {other:?}"),
         }
-        let bare = Cli::try_parse_from(["harness", "run"]).expect("parse");
+        let bare = Cli::try_parse_from(["coolcode", "run"]).expect("parse");
         assert!(matches!(bare.command, Some(Command::Run { prompt, .. }) if prompt.is_empty()));
     }
 

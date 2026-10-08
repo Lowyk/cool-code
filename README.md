@@ -18,24 +18,34 @@ Cool Code is a terminal UI where an AI model reads your repository, proposes edi
 
 ## Install
 
-**From a release.** Each tagged release has archives for Windows, macOS (Apple silicon and Intel) and Linux, with a checksum file. Download the one for your system from the [releases page](https://github.com/Lowyk/cool-code/releases), unpack it and put `harness` somewhere on your `PATH`.
+**Windows.** Download `coolcode-v0.1.0-windows-x64-setup.exe` from the [releases page](https://github.com/Lowyk/cool-code/releases) and run it. It installs for your user (no administrator prompt) and can add `coolcode` to your PATH; open a new terminal afterwards and type `coolcode`. Windows may show a SmartScreen warning because the installer is not code-signed yet: choose *More info*, then *Run anyway*. Uninstall it from Settings → Apps.
+
+**macOS and Linux.**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Lowyk/cool-code/master/install.sh | sh
+```
+
+The script picks the right build for your computer, checks it against its checksum, and puts `coolcode` in `~/.local/bin` (change it with `COOLCODE_INSTALL_DIR`; pick a version with `COOLCODE_VERSION=v0.1.0`). It tells you if that folder is not on your `PATH`.
+
+**By hand.** Each release also has an archive for every system (Windows, macOS on Apple silicon and Intel, Linux) with a `.sha256` checksum file. Unpack one and put `coolcode` somewhere on your `PATH`.
 
 **From source.** You need a recent stable [Rust toolchain](https://rustup.rs) (the 2024 edition, so Rust 1.88 or newer). Windows, macOS and Linux are all tested in CI.
 
 ```sh
-cargo install --git https://github.com/Lowyk/cool-code   # installs `harness`
+cargo install --git https://github.com/Lowyk/cool-code   # installs `coolcode`
 # or, to work on it:
 git clone https://github.com/Lowyk/cool-code
 cd cool-code
 cargo build --release
-./target/release/harness        # harness.exe on Windows
+./target/release/coolcode        # coolcode.exe on Windows
 ```
 
 On Linux the credential store needs the Secret Service libraries (`libdbus-1-dev` and `pkg-config` to build). The compiler toolchain is LLVM/Clang-based; GCC is not used.
 
 ## Quick start
 
-1. Run `harness`. A short setup asks for a theme, reduced motion, and whether to keep usage stats, saved sessions, and your `CLAUDE.md` / `AGENTS.md` files. Everything privacy-related is off unless you say yes.
+1. Run `coolcode`. A short setup asks for a theme, reduced motion, and whether to keep usage stats, saved sessions, and your `CLAUDE.md` / `AGENTS.md` files. Everything privacy-related is off unless you say yes.
 2. Type `/settings`, open **Providers**, press `n`, and pick a preset. Enter an API key (or sign in, for ChatGPT). Keys go to the OS credential store, never to a file.
 3. Choose a model with `/model`, set an effort with `/effort`, and start typing.
 4. When asked, decide whether to **trust the folder**. Trust is what lets the model read your files and propose edits.
@@ -87,7 +97,7 @@ This is **not an official or supported API.** It uses the same sign-in as OpenAI
 | **Auto** | Greyed out until you choose guard models in **Settings → Auto Mode**. Then every command, edit and new file is shown to those models, which answer yes or no; a no asks you and shows why (see below). |
 | **Accept Everything** | Approves edits and shell commands automatically. |
 
-**Setting up Auto mode.** Open **Settings → Auto Mode** and pick the models that should act as guards. They come from providers you already added, with the small, fast families listed first as recommendations: Luna, Haiku, Flash, Flash-Lite and Safety models (for example `gpt-oss-safeguard`) can judge an action. Llama Prompt Guard models are classifiers: they only scan for injected instructions and can flag an action, never approve one, so you need at least one judge as well. Until a judge is chosen, picking Auto shows *Go to Settings > Auto Mode to activate*, and `harness run --mode auto` refuses to start.
+**Setting up Auto mode.** Open **Settings → Auto Mode** and pick the models that should act as guards. They come from providers you already added, with the small, fast families listed first as recommendations: Luna, Haiku, Flash, Flash-Lite and Safety models (for example `gpt-oss-safeguard`) can judge an action. Llama Prompt Guard models are classifiers: they only scan for injected instructions and can flag an action, never approve one, so you need at least one judge as well. Until a judge is chosen, picking Auto shows *Go to Settings > Auto Mode to activate*, and `coolcode run --mode auto` refuses to start.
 
 **How Auto mode decides.** Fixed rules come first and cannot be overruled: commands that delete trees, force-push, run downloaded code, use `sudo`, touch credentials or system settings, or send data over the network, and files that look like secrets (`.env`, keys, anything named like credentials), are never shown to a guard and always go to you. For the rest, the first guard that can answer sees the action as quoted data, with your request for context, and replies `yes` or `no` in strict JSON. A yes runs the action; a no asks you, with the guard's reason, and if you approve it the action runs as in any other mode. Guards are asked in the order you set (move them with `u`/`d`), so a later one covers for an earlier one that is out of usage, offline or gave an unreadable reply. If none can answer, the action does not run and the model is told *Auto Mode isn't currently available. Ask the user to switch your mode to Plan, Accept Minimal, Accept Edits, or Manual*. Removing the last judge, or deleting its provider, switches Auto off to Manual. Guards run at a low effort on their own provider and never fall over to your chat chain. Every check is one more request to that provider, and the command or edit it looks at is sent there; a provider that needs the one-time privacy acknowledgement must have had it (by sending it a message once) or its guard counts as unable to answer. Only Auto mode makes these requests.
 
@@ -125,7 +135,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 
 ### Scripts and CI
 
-`harness run "what to do"` runs one turn without the interface (or pipe the prompt in: `git diff | harness run "review this"`). The answer goes to standard output and progress to standard error; `--json` prints one JSON object per line instead (`tool`, `file`, `declined`, `note` and a final `result`). It uses your saved provider and settings, with `--model`, `--mode` and `--effort` to override them for one run. The folder must already be trusted for the model to have tools (or pass `--trust` for that run only; nothing is saved). There is nobody to ask for approval, so anything the permission mode would ask about is declined and reported: pick a mode that fits the job, for example `--mode accept-edits`. Super and Ultimate stay locked unless Dynamic workflows is on, and a provider that needs a one-time privacy acknowledgement refuses until you have given it in the interface. Headless runs are not saved as sessions.
+`coolcode run "what to do"` runs one turn without the interface (or pipe the prompt in: `git diff | coolcode run "review this"`). The answer goes to standard output and progress to standard error; `--json` prints one JSON object per line instead (`tool`, `file`, `declined`, `note` and a final `result`). It uses your saved provider and settings, with `--model`, `--mode` and `--effort` to override them for one run. The folder must already be trusted for the model to have tools (or pass `--trust` for that run only; nothing is saved). There is nobody to ask for approval, so anything the permission mode would ask about is declined and reported: pick a mode that fits the job, for example `--mode accept-edits`. Super and Ultimate stay locked unless Dynamic workflows is on, and a provider that needs a one-time privacy acknowledgement refuses until you have given it in the interface. Headless runs are not saved as sessions.
 
 ### Project instructions
 
@@ -148,12 +158,12 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/privacy [add\|clear\|revoke]` | Local redaction values and acknowledgements |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
-Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation. The command line also has `harness run`, `harness config`, `harness effort`, `harness init`, `harness --resume`, `harness --latest` and `--all-folders`.
+Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation. The command line also has `coolcode run`, `coolcode config`, `coolcode effort`, `coolcode init`, `coolcode --resume`, `coolcode --latest` and `--all-folders`.
 
 ## Privacy and data
 
 - **Everything lives in `~/.coolcode/`**, never inside your projects: `config.toml`, `projects.toml` (which folders you trust, so a repository cannot trust itself), optional `sessions/`, and optional `stats.jsonl`. API keys and sign-in tokens use the OS credential store.
-- **Sessions are opt-in.** They are plain files holding the full conversation exactly as typed, before redaction. Resume with `/resume` or `harness --resume`.
+- **Sessions are opt-in.** They are plain files holding the full conversation exactly as typed, before redaction. Resume with `/resume` or `coolcode --resume`.
 - **Usage stats are opt-in** and record only timestamps, provider and model names, token counts, durations and outcomes. Never prompts or answers, and nothing is sent anywhere. `/stats` shows a summary and a heatmap.
 - **Redaction.** For providers that require it, common API keys, emails, phone-like numbers and your custom values are replaced by placeholders before sending, and restored locally in the reply. This is best-effort, not a guarantee, and images cannot be inspected, so they need their own consent.
 - **Reset.** Settings → General → Reset clears trusted folders, sessions, providers (and their keys), settings or stats, individually or all at once, always after asking.

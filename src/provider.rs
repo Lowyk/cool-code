@@ -192,7 +192,7 @@ fn complete_turn(
         .or_else(|| settings.model.clone())
         .or_else(|| profile.map(|profile| profile.model.clone()))
         .filter(|value| !value.trim().is_empty())
-        .context("no model configured; use `harness config set --model <model>`")?;
+        .context("no model configured; use `coolcode config set --model <model>`")?;
     let base_url = env::var("HARNESS_BASE_URL")
         .ok()
         .or_else(|| profile.and_then(|profile| profile.base_url.clone()))

@@ -1,11 +1,14 @@
 name: Release
 
-# Pushing a tag such as v0.2.0 builds the program for each platform and publishes a GitHub release
-# with the archives and their checksums.
+# Pushing a tag such as v0.2.0 builds Cool Code for each platform, builds the Windows installer,
+# tests the installers, and publishes a GitHub release with the archives, the installer and their
+# checksums. Running the workflow by hand (Actions > Release > Run workflow) does everything
+# except publishing, as a dry run.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,9 +17,38 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check:
+    name: Check the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        shell: bash
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$crate" ]; then
+              echo "The tag is $GITHUB_REF_NAME but Cargo.toml says version $crate." >&2
+              exit 1
+            fi
+            if ! grep -q "^## \[$crate\]" CHANGELOG.md; then
+              echo "CHANGELOG.md has no section for $crate." >&2
+              exit 1
+            fi
+            echo "version=v$crate" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v$crate-dryrun" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build (${{ matrix.target }})
+    needs: check
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -49,12 +81,12 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name="harness-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="coolcode-${VERSION}-${{ matrix.target }}"
           mkdir "$name"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/harness.exe" "$name/"
+            cp "target/${{ matrix.target }}/release/coolcode.exe" "$name/"
           else
-            cp "target/${{ matrix.target }}/release/harness" "$name/"
+            cp "target/${{ matrix.target }}/release/coolcode" "$name/"
           fi
           cp LICENSE README.md "$name/"
           mkdir -p dist
@@ -69,21 +101,108 @@ jobs:
           else
             shasum -a 256 "$name".* > "$name.sha256"
           fi
+      - name: Check that the program starts (Linux, Windows, Apple silicon)
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          exe="target/${{ matrix.target }}/release/coolcode"
+          [ "${{ runner.os }}" = "Windows" ] && exe="$exe.exe"
+          "$exe" --version | tee version.txt
+          grep -q "^coolcode " version.txt
+
+      - name: Test install.sh against this build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          COOLCODE_VERSION="$VERSION" \
+            COOLCODE_TARGET=${{ matrix.target }} \
+            COOLCODE_BASE_URL="file://$PWD/dist" \
+            COOLCODE_INSTALL_DIR="$RUNNER_TEMP/bin" \
+            sh install.sh
+          "$RUNNER_TEMP/bin/coolcode" --version
+      - name: Test install.sh against this build (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          set -eu
+          COOLCODE_VERSION="$VERSION" \
+            COOLCODE_TARGET=${{ matrix.target }} \
+            COOLCODE_BASE_URL="file://$PWD/dist" \
+            COOLCODE_INSTALL_DIR="$RUNNER_TEMP/bin" \
+            sh install.sh
+          "$RUNNER_TEMP/bin/coolcode" --version
+
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          & $iscc "/DAppVersion=$($env:VERSION.TrimStart('v'))" "/DSourceExe=..\target\${{ matrix.target }}\release\coolcode.exe" installer\coolcode.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          $setup = Get-ChildItem dist -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "the installer was not produced" }
+          (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $setup.Name | Set-Content -Encoding ascii "$($setup.FullName -replace '\.exe$','.sha256')"
+          "SETUP=$($setup.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Test the Windows installer (install, run, uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "coolcode-installed"
+          $p = Start-Process $env:SETUP -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\coolcode.exe")) { throw "coolcode.exe was not installed" }
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if (($userPath -split ";") -notcontains $dir) { throw "the install folder was not added to PATH" }
+          & "$dir\coolcode.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "the installed program does not start" }
+          $u = Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "uninstaller exited with $($u.ExitCode)" }
+          # The uninstaller hands over to a temporary copy of itself, so wait for it to finish.
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Test-Path "$dir\coolcode.exe") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+          if (Test-Path "$dir\coolcode.exe") { throw "the uninstaller left coolcode.exe behind" }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((([Environment]::GetEnvironmentVariable("Path", "User") -split ";") -contains $dir) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+          $after = [Environment]::GetEnvironmentVariable("Path", "User")
+          if (($after -split ";") -contains $dir) { throw "the uninstaller left the PATH entry behind" }
+          Write-Host "installer round trip ok"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: harness-${{ matrix.target }}
+          name: coolcode-${{ matrix.target }}
           path: dist/*
 
   publish:
     name: Publish release
-    needs: build
+    if: github.ref_type == 'tag'
+    needs: [check, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Write the release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            awk -v v="$version" '
+              $0 ~ "^## \\[" v "\\]" { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md
+            echo
+            echo "## Install"
+            echo
+            echo "- **Windows:** run \`coolcode-${GITHUB_REF_NAME}-windows-x64-setup.exe\`. It installs for your user and can add \`coolcode\` to your PATH."
+            echo "- **macOS and Linux:** \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.sh | sh\`"
+            echo "- Or unpack the archive for your system and put \`coolcode\` on your PATH. Each download has a \`.sha256\` file."
+          } > notes.md
+          cat notes.md
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/* install.sh --repo "$GITHUB_REPOSITORY" --title "Cool Code $GITHUB_REF_NAME" --notes-file notes.md

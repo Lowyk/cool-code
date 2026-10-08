@@ -219,7 +219,7 @@ fn prompt(step: SetupStep) -> Prompt {
         },
         SetupStep::Sessions => Prompt {
             heading: "Save conversations so you can resume them?",
-            detail: "Sessions are saved as files in ~/.coolcode/sessions, on this computer only, so `harness --resume` and /resume can continue them. They contain the full conversation, including tool output and anything you typed, exactly as typed (before privacy redaction).",
+            detail: "Sessions are saved as files in ~/.coolcode/sessions, on this computer only, so `coolcode --resume` and /resume can continue them. They contain the full conversation, including tool output and anything you typed, exactly as typed (before privacy redaction).",
             options: vec!["No thanks".to_owned(), "Yes, save sessions".to_owned()],
         },
         SetupStep::Instructions => Prompt {
