@@ -298,10 +298,8 @@ pub(super) fn draw_ultimate_confirmation(frame: &mut ratatui::Frame<'_>, area: R
         .style(Style::default().bg(crate::tui::theme::dialog()));
     let body = Paragraph::new(vec![
         Line::from(
-            "Ultimate runs at the model's highest effort and lets the assistant start up to",
+            "Ultimate runs at the model's highest effort and lets the assistant start as many subagents as your Dynamic workflows size allows, and have its work reviewed twice. It can use many times more tokens and cost much more than a normal turn.",
         ),
-        Line::from("6 subagents at a time and have its work reviewed twice. It can use many times"),
-        Line::from("more tokens and cost much more than a normal turn."),
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -326,6 +324,27 @@ mod tests {
     use crate::{Settings, provider};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn the_ultimate_warning_points_at_the_workflow_size_instead_of_a_fixed_number() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).expect("test terminal");
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.confirm_ultimate = true;
+        terminal
+            .draw(|frame| draw(frame, &app, 0))
+            .expect("draw the warning");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Confirm Ultimate"), "{rendered}");
+        assert!(rendered.contains("workflows size"), "{rendered}");
+        assert!(!rendered.contains("6 subagents"), "{rendered}");
+    }
 
     #[test]
     fn privacy_dialog_offers_separate_image_consent() {
