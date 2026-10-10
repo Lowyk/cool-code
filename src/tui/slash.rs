@@ -1,7 +1,10 @@
 //! `/` commands: the one table that lists them (it drives both `/help` and the popup), the popup
 //! that offers them while typing, and the suggestion for a mistyped command.
 
-use crate::tui::mentions::{draw_list_popup, popup_current, popup_marker, step_selection};
+use crate::tui::mentions::{
+    ListPopup, draw_list_popup, popup_current, popup_marker, step_selection,
+};
+use crate::tui::mouse::Hits;
 use crate::tui::state::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -398,6 +401,7 @@ pub(in crate::tui) fn draw_slash(
     frame: &mut ratatui::Frame<'_>,
     prompt_area: Rect,
     popup: &SlashPopup,
+    hits: &Hits,
 ) {
     let width = popup
         .items
@@ -444,13 +448,19 @@ pub(in crate::tui) fn draw_slash(
             Line::from(spans)
         })
         .collect();
+    let choosable = vec![true; popup.items.len()];
     draw_list_popup(
         frame,
         prompt_area,
-        " Commands · ↑/↓ choose · Tab or Enter to complete · Esc closes ",
-        rows,
-        popup.selected,
-        popup.offset,
+        hits,
+        ListPopup {
+            title: "Commands",
+            hint: " ↑/↓ choose · Tab or Enter to complete · Esc closes ",
+            rows,
+            choosable: &choosable,
+            selected: popup.selected,
+            offset: popup.offset,
+        },
     );
 }
 

@@ -1,67 +1,16 @@
-use crate::agent::ToolApproval;
 use crate::policy::MODES;
+use crate::tui::dialog::{Button, Dialog, Tone, draw_dialog, hint_style, window};
+use crate::tui::mouse::{Click, Row as MouseRow, record_wrapped};
 use crate::tui::render::{centered_rect, mode_span};
 use crate::tui::state::{App, PrivacyPrompt};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Padding, Paragraph, Wrap};
 
-pub(super) fn draw_tool_approval(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    approval: &ToolApproval,
-    scroll: u16,
-) {
-    let popup = centered_rect(88, 82, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(format!(" Approve action · {} ", approval.title))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(crate::tui::theme::dialog()))
-        .padding(ratatui::widgets::Padding::horizontal(2));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let lines = vec![
-        Line::from(Span::styled(
-            "This action is waiting for your approval.",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(approval.details.as_str()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Y/Enter approve · N/Esc decline · ↑/↓ review details",
-            Style::default().fg(Color::Rgb(255, 197, 92)),
-        )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        inner,
-    );
-}
-
-pub(super) fn draw_privacy_confirmation(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    prompt: &PrivacyPrompt,
-    has_image: bool,
-) {
-    let popup = centered_rect(82, 68, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Privacy check ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(crate::tui::theme::dialog()))
-        .padding(ratatui::widgets::Padding::horizontal(2));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+/// The one-time privacy acknowledgement before a request to a flagged provider. `i` (or Space)
+/// toggles the separate consent for images.
+pub(in crate::tui) fn privacy_dialog(prompt: &PrivacyPrompt, has_image: bool) -> Dialog<'static> {
     let lines = vec![
         Line::from(Span::styled(
             format!(
@@ -99,34 +48,42 @@ pub(super) fn draw_privacy_confirmation(
                 Style::default().fg(Color::White),
             ),
         ]),
-        if has_image && !prompt.allow_images {
-            Line::from(Span::styled(
-                "An image is attached; enable this option before continuing.",
-                Style::default().fg(Color::Rgb(255, 197, 92)),
-            ))
-        } else {
-            Line::from("")
-        },
-        Line::from(""),
-        Line::from(Span::styled(
-            "←/→ or Space toggle images · Y/Enter acknowledge and send · N/Esc cancel",
-            Style::default().fg(Color::Rgb(255, 197, 92)),
-        )),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    let mut lines = lines;
+    if has_image && !prompt.allow_images {
+        lines.push(Line::from(Span::styled(
+            "An image is attached; enable this option before continuing.",
+            Style::default().fg(Color::Rgb(255, 197, 92)),
+        )));
+    }
+    Dialog {
+        id: "privacy",
+        title: "Privacy check".to_owned(),
+        tone: Tone::Warning,
+        body: lines,
+        buttons: vec![
+            Button::new("Allow images", 'i'),
+            Button::new("Acknowledge and send", 'y'),
+            Button::new("Cancel", 'n'),
+        ],
+        cancel: 2,
+        default: 2,
+    }
 }
 
-pub(super) fn draw_workspace_trust_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let popup = centered_rect(78, 62, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Trust this workspace? ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(crate::tui::theme::dialog()))
-        .padding(ratatui::widgets::Padding::horizontal(2));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+pub(super) fn draw_privacy_confirmation(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    app: &App,
+    prompt: &PrivacyPrompt,
+    has_image: bool,
+) {
+    let dialog = privacy_dialog(prompt, has_image);
+    draw_dialog(frame, area, &dialog, &app.dialog_focus, &app.hits);
+}
+
+/// The question whether to trust the working folder.
+pub(in crate::tui) fn trust_dialog() -> Dialog<'static> {
     let root = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "(unknown folder)".to_owned());
@@ -157,40 +114,19 @@ pub(super) fn draw_workspace_trust_prompt(frame: &mut ratatui::Frame<'_>, area: 
         Line::from(
             "Declining keeps chat available but disables COOL.md and @path file reads. You can change this later in Settings → Privacy.",
         ),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                if app.trust_choice == 0 {
-                    "[ Yes, trust this folder ]"
-                } else {
-                    "  Yes, trust this folder  "
-                },
-                Style::default().fg(if app.trust_choice == 0 {
-                    Color::Green
-                } else {
-                    Color::Gray
-                }),
-            ),
-            Span::raw("    "),
-            Span::styled(
-                if app.trust_choice == 1 {
-                    "[ No ]"
-                } else {
-                    " No "
-                },
-                Style::default().fg(if app.trust_choice == 1 {
-                    Color::Rgb(255, 197, 92)
-                } else {
-                    Color::Gray
-                }),
-            ),
-        ]),
-        Line::from(Span::styled(
-            "←/→ choose · Enter confirm · Y/N quick keys",
-            Style::default().fg(Color::DarkGray),
-        )),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    Dialog::confirm(
+        "trust",
+        "Trust this workspace?",
+        Tone::Warning,
+        lines,
+        "Yes, trust this folder",
+        "No",
+    )
+}
+
+pub(super) fn draw_workspace_trust_prompt(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    draw_dialog(frame, area, &trust_dialog(), &app.dialog_focus, &app.hits);
 }
 
 pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
@@ -200,19 +136,21 @@ pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: R
         .expect("model provider picker open");
     let popup = centered_rect(62, (choices.len() as u16 * 3 + 8).min(70), area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Choose provider ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = window("Choose provider", Tone::Normal).padding(Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    app.hits.wheel_arrows(popup);
     let model = app.pending_model.as_deref().unwrap_or("model");
     let mut lines = vec![
         Line::from(format!("`{model}` is available from multiple providers:")),
         Line::from(""),
     ];
+    let mut clicks = Vec::new();
     for (index, (provider_index, name, _model_id)) in choices.iter().enumerate() {
+        clicks.push((
+            lines.len(),
+            Click::Row(MouseRow::new(index, app.model_choice_index)),
+        ));
         let profile = &app.settings.providers[*provider_index];
         lines.push(Line::from(vec![
             Span::styled(
@@ -233,43 +171,81 @@ pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: R
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "↑/↓ choose · Enter select · Esc cancel",
-        Style::default().fg(Color::DarkGray),
+        hint_style(),
     )));
+    record_wrapped(&app.hits, inner, &lines, &clicks);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
+/// The gap between two modes in the mode picker.
+const MODE_GAP: &str = "   ·   ";
+
 pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    use unicode_width::UnicodeWidthStr as _;
     let popup = centered_rect(72, 34, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Permission mode ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent_bright()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = window("Permission mode", Tone::Normal).padding(Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let auto_unusable = !app.settings.auto_ready();
-    let options = MODES.iter().enumerate().map(|(index, (_, mode))| {
-        let mut span = mode_span(mode, index == app.mode_index);
-        if *mode == "auto" && auto_unusable {
-            span.style = Style::default().fg(Color::DarkGray);
+    let options = MODES
+        .iter()
+        .enumerate()
+        .map(|(index, (_, mode))| {
+            let mut span = mode_span(mode, index == app.mode_index);
+            if *mode == "auto" && auto_unusable {
+                span.style = Style::default().fg(Color::DarkGray);
+            }
+            if index == app.mode_index {
+                span.content = format!("[ {} ]", span.content).into();
+            }
+            span
+        })
+        .collect::<Vec<_>>();
+    // The modes are packed into as few centered rows as fit, so each one's place is known.
+    let mut rows: Vec<Vec<(usize, Span<'static>)>> = vec![Vec::new()];
+    let mut used = 0usize;
+    let gap = MODE_GAP.width();
+    for (index, option) in options.into_iter().enumerate() {
+        let width = option.content.width();
+        let row = rows.last_mut().expect("a row");
+        if !row.is_empty() && used + gap + width > usize::from(inner.width) {
+            rows.push(vec![(index, option)]);
+            used = width;
+        } else {
+            used += if row.is_empty() { width } else { gap + width };
+            row.push((index, option));
         }
-        if index == app.mode_index {
-            span.content = format!("[ {} ]", span.content).into();
+    }
+    let mut lines = vec![Line::from("")];
+    for (row_index, row) in rows.iter().enumerate() {
+        let width = row
+            .iter()
+            .map(|(_, span)| span.content.width())
+            .sum::<usize>()
+            + gap * row.len().saturating_sub(1);
+        let mut x = inner.x + inner.width.saturating_sub(width as u16) / 2;
+        let y = inner.y + 1 + row_index as u16;
+        let mut spans = Vec::new();
+        for (position, (index, span)) in row.iter().enumerate() {
+            if position > 0 {
+                spans.push(Span::raw(MODE_GAP));
+                x += gap as u16;
+            }
+            let span_width = span.content.width() as u16;
+            if y < inner.bottom() {
+                app.hits.click(
+                    Rect::new(x, y, span_width.min(inner.right().saturating_sub(x)), 1),
+                    Click::Row(MouseRow::new(*index, app.mode_index).horizontal()),
+                );
+            }
+            x += span_width;
+            spans.push(span.clone());
         }
-        span
-    });
-    let mut spans = Vec::new();
-    for (index, option) in options.enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("   ·   "));
-        }
-        spans.push(option);
+        lines.push(Line::from(spans));
     }
     let selected = MODES[app.mode_index].1;
-    let lines = vec![
-        Line::from(""),
-        Line::from(spans),
+    lines.extend([
         Line::from(""),
         Line::from(vec![
             Span::styled("Current: ", Style::default().fg(Color::Gray)),
@@ -277,44 +253,34 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
         ]),
         Line::from(Span::styled(
             "←/→ browse   Enter select   Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            hint_style(),
         )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
+    ]);
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
 }
 
-pub(super) fn draw_ultimate_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect) {
-    let popup = centered_rect(58, 34, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Confirm Ultimate effort ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red))
-        .style(Style::default().bg(crate::tui::theme::dialog()));
-    let body = Paragraph::new(vec![
-        Line::from(
+/// The one-time warning before the Ultimate effort is first chosen.
+pub(in crate::tui) fn ultimate_dialog() -> Dialog<'static> {
+    Dialog::confirm(
+        "ultimate",
+        "Confirm Ultimate effort",
+        Tone::Danger,
+        vec![Line::from(
             "Ultimate runs at the model's highest effort and lets the assistant start as many subagents as your Dynamic workflows size allows, and have its work reviewed twice. It can use many times more tokens and cost much more than a normal turn.",
-        ),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Y",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" confirm    "),
-            Span::styled("N / Esc", Style::default().fg(Color::White)),
-            Span::raw(" cancel"),
-        ]),
-    ])
-    .alignment(Alignment::Center)
-    .wrap(Wrap { trim: true })
-    .block(block);
-    frame.render_widget(body, popup);
+        )],
+        "Use Ultimate",
+        "Cancel",
+    )
+}
+
+pub(super) fn draw_ultimate_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    draw_dialog(
+        frame,
+        area,
+        &ultimate_dialog(),
+        &app.dialog_focus,
+        &app.hits,
+    );
 }
 
 #[cfg(test)]
@@ -344,6 +310,141 @@ mod tests {
         assert!(rendered.contains("Confirm Ultimate"), "{rendered}");
         assert!(rendered.contains("workflows size"), "{rendered}");
         assert!(!rendered.contains("6 subagents"), "{rendered}");
+    }
+
+    fn app() -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app
+    }
+
+    fn press(app: &mut App, code: crossterm::event::KeyCode) {
+        crate::tui::handle_key(
+            app,
+            crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE),
+        )
+        .expect("key");
+    }
+
+    use crate::tui::mouse::testing::{click_text, drawn, has_button, rows};
+    use crossterm::event::KeyCode;
+
+    /// The dialog's outline: its top and bottom rows, found by the rounded corners.
+    fn dialog_rows(app: &App) -> (usize, usize) {
+        let shown = rows(&drawn(app, 100, 30));
+        let top = shown.iter().position(|row| row.contains('╭')).expect("top");
+        let bottom = shown
+            .iter()
+            .rposition(|row| row.contains('╰'))
+            .expect("bottom");
+        (top, bottom)
+    }
+
+    #[test]
+    fn the_trust_question_is_a_shared_dialog_with_the_same_answers() {
+        let mut asking = app();
+        asking.trust_prompt = true;
+        assert!(has_button(&asking, "Yes, trust this folder"));
+        assert!(has_button(&asking, "No"));
+        let (top, bottom) = dialog_rows(&asking);
+        assert!(
+            bottom - top < 20,
+            "short, not a tall popup: {top}..{bottom}"
+        );
+        for (keys, trusted) in [
+            (vec![KeyCode::Enter], false),
+            (vec![KeyCode::Esc], false),
+            (vec![KeyCode::Char('n')], false),
+            (vec![KeyCode::Left, KeyCode::Enter], true),
+        ] {
+            let mut app = app();
+            app.trust_prompt = true;
+            app.projects_path =
+                std::env::temp_dir().join(format!("trust-{}.toml", uuid::Uuid::new_v4()));
+            for key in &keys {
+                press(&mut app, *key);
+            }
+            assert!(!app.trust_prompt, "{keys:?} answers");
+            assert_eq!(app.workspace_trusted, trusted, "{keys:?}");
+        }
+        let mut clicked = app();
+        clicked.trust_prompt = true;
+        clicked.projects_path =
+            std::env::temp_dir().join(format!("trust-{}.toml", uuid::Uuid::new_v4()));
+        click_text(&mut clicked, "Yes, trust this folder");
+        assert!(clicked.workspace_trusted && !clicked.trust_prompt);
+    }
+
+    #[test]
+    fn the_ultimate_warning_is_a_shared_dialog_with_the_same_answers() {
+        let unlocked = || {
+            let mut app = app();
+            app.settings.workflow_size = crate::workflow::WorkflowSize::Medium;
+            app.confirm_ultimate = true;
+            app
+        };
+        assert!(has_button(&unlocked(), "Use Ultimate"));
+        for key in [KeyCode::Char('n'), KeyCode::Esc, KeyCode::Enter] {
+            let mut app = unlocked();
+            press(&mut app, key);
+            assert!(!app.confirm_ultimate, "{key:?}");
+            assert_eq!(app.notice, "Ultimate was not selected.", "{key:?}");
+            assert!(!app.settings.ultimate_acknowledged);
+        }
+        let mut app = unlocked();
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.settings.ultimate_acknowledged && !app.confirm_ultimate);
+        assert_eq!(app.settings.effort, crate::Effort::Ultimate);
+        let mut app = unlocked();
+        click_text(&mut app, "Use Ultimate");
+        assert_eq!(app.settings.effort, crate::Effort::Ultimate);
+    }
+
+    #[test]
+    fn the_privacy_check_is_a_shared_dialog_with_the_same_answers() {
+        let asking = || {
+            let mut app = app();
+            app.privacy_confirmation = Some(PrivacyPrompt {
+                risk: "Google/Gemini".to_owned(),
+                allow_images: false,
+            });
+            app
+        };
+        assert!(has_button(&asking(), "Acknowledge and send"));
+        for key in [KeyCode::Char('n'), KeyCode::Esc, KeyCode::Enter] {
+            let mut app = asking();
+            app.pending_privacy_message = Some(provider::ChatMessage::user_with_images(
+                "hi".to_owned(),
+                "hi".to_owned(),
+                Vec::new(),
+            ));
+            press(&mut app, key);
+            assert!(app.privacy_confirmation.is_none(), "{key:?}");
+            assert!(app.pending_privacy_message.is_none(), "{key:?}");
+            assert_eq!(app.notice, "Request cancelled; nothing was sent.");
+        }
+        let mut app = asking();
+        for key in [KeyCode::Char('i'), KeyCode::Char(' ')] {
+            press(&mut app, key);
+        }
+        assert!(
+            !app.privacy_confirmation.as_ref().unwrap().allow_images,
+            "i and Space each toggle the image consent"
+        );
+        click_text(&mut app, "Allow images");
+        assert!(app.privacy_confirmation.as_ref().unwrap().allow_images);
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.privacy_confirmation.is_none());
+        assert!(
+            app.settings
+                .privacy_acknowledged
+                .contains(&"Google/Gemini".to_owned())
+        );
+        assert!(
+            app.settings
+                .privacy_image_acknowledged
+                .contains(&"Google/Gemini".to_owned())
+        );
     }
 
     #[test]

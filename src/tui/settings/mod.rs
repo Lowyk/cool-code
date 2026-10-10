@@ -11,6 +11,8 @@ mod reset;
 pub(super) mod sync;
 mod workflow_size;
 
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, hint_style, route, window};
+use crate::tui::mouse::{Click, Hits, Row as MouseRow, line_rect};
 use crate::tui::settings::appearance::draw_appearance;
 use crate::tui::settings::auto_mode::draw_auto_mode;
 use crate::tui::settings::auto_switch::draw_auto_switch;
@@ -28,7 +30,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum Section {
@@ -155,10 +157,20 @@ impl App {
         if view.workflow_chooser.is_some() {
             return self.handle_workflow_chooser_key(key);
         }
-        if view.confirm_delete
-            || view.model_edit.is_some()
-            || view.privacy_sub.is_some()
-            || view.plugin_confirm.is_some()
+        if view.confirm_delete {
+            // The dialog turns a key or a click into y or n, which the section then handles as it
+            // always has: y deletes, anything else cancels.
+            let section = view.section;
+            let view = view.clone();
+            let dialog = delete_dialog(self, &view);
+            return match route(&dialog, &mut self.dialog_focus, key) {
+                Routed::Press(code) => {
+                    self.handle_section_key(section, event::KeyEvent::from(code))
+                }
+                Routed::Moved | Routed::Other => Ok(()),
+            };
+        }
+        if view.model_edit.is_some() || view.privacy_sub.is_some() || view.plugin_confirm.is_some()
         {
             let section = view.section;
             return self.handle_section_key(section, key);
@@ -203,22 +215,21 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         return;
     };
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Settings ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel_alt()));
+    let block = window("Settings", Tone::Normal)
+        .style(Style::default().bg(crate::tui::theme::panel_alt()))
+        .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 3 || inner.width < 10 {
         return;
     }
+    app.hits.wheel_arrows(area);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
     let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
 
     let content = if inner.width >= COLLAPSE_BELOW_WIDTH {
         let sidebar = Rect::new(body.x, body.y, SIDEBAR_WIDTH, body.height);
-        draw_sidebar(frame, sidebar, view);
+        draw_sidebar(frame, sidebar, view, &app.hits);
         Rect::new(
             body.x + SIDEBAR_WIDTH + 2,
             body.y,
@@ -261,27 +272,58 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         },
         Section::Plugins => plugins::draw_plugins(frame, content, app, view),
     }
-    let footer_line = if view.confirm_delete {
-        let question = confirm_question(app, view);
-        Span::styled(
-            question,
-            Style::default()
-                .fg(Color::Rgb(235, 80, 80))
-                .add_modifier(Modifier::BOLD),
-        )
-    } else if !app.notice.is_empty() {
+    let footer_line = if !app.notice.is_empty() {
         // The settings screen covers the notice line, so what just happened is shown here.
         Span::styled(
             app.notice.clone(),
             Style::default().fg(Color::Rgb(240, 210, 90)),
         )
     } else {
-        Span::styled(footer_hint(view), Style::default().fg(Color::DarkGray))
+        Span::styled(footer_hint(view), hint_style())
     };
     frame.render_widget(Paragraph::new(footer_line), footer);
+    if view.confirm_delete {
+        draw_dialog(
+            frame,
+            area,
+            &delete_dialog(app, view),
+            &app.dialog_focus,
+            &app.hits,
+        );
+    }
 }
 
-fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView) {
+/// A click on row `index` of a section that keeps its highlighted row in `view.row`: it moves
+/// the keyboard focus to the section first if the sidebar has it.
+pub(in crate::tui) fn content_row(view: &SettingsView, index: usize) -> Click {
+    Click::Row(MouseRow::new(index, view.row).focus(focus_key(view)))
+}
+
+/// The key that moves the keyboard focus from the sidebar to the section, while the sidebar
+/// has it.
+pub(in crate::tui) fn focus_key(view: &SettingsView) -> Option<KeyCode> {
+    (view.focus == Focus::Sidebar).then_some(KeyCode::Right)
+}
+
+fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView, hits: &Hits) {
+    // While a sub-screen is open Esc belongs to it, so the sidebar cannot take the focus back.
+    let reachable = view.reset.is_none()
+        && view.workflow_chooser.is_none()
+        && view.model_edit.is_none()
+        && view.privacy_sub.is_none()
+        && !view.confirm_delete;
+    if reachable {
+        for (index, _) in Section::ALL.iter().enumerate() {
+            hits.click(
+                line_rect(area, index),
+                Click::Row(
+                    MouseRow::new(index, view.section.index())
+                        .activate(Some(KeyCode::Right))
+                        .focus((view.focus == Focus::Content).then_some(KeyCode::Esc)),
+                ),
+            );
+        }
+    }
     let lines = Section::ALL
         .iter()
         .map(|section| {
@@ -314,8 +356,10 @@ fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView)
     }
 }
 
-fn confirm_question(app: &App, view: &SettingsView) -> String {
-    match view.section {
+/// The confirmation before something in Settings is deleted: its title, question and the label
+/// of the button that deletes.
+fn delete_dialog(app: &App, view: &SettingsView) -> Dialog<'static> {
+    let (title, question, yes) = match view.section {
         Section::Models => {
             let rows = view.tree.rows(&app.settings, false);
             let id = view
@@ -324,7 +368,7 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
                 .and_then(|row| row.target.as_ref())
                 .map(|target| target.id.clone())
                 .unwrap_or_default();
-            format!("Remove {id}? y/n")
+            ("Remove model", format!("Remove {id}?"), "Remove")
         }
         Section::AutoSwitch => {
             let id = app
@@ -333,23 +377,43 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
                 .get(view.row)
                 .map(|chain| chain.id.as_str())
                 .unwrap_or("this chain");
-            format!("Delete chain {id}? y/n")
+            ("Delete chain", format!("Delete chain {id}?"), "Delete")
         }
-        Section::Privacy if view.privacy_sub.is_some() => {
-            "Remove this redaction value? y/n".to_owned()
+        Section::Privacy if view.privacy_sub.is_some() => (
+            "Remove redaction value",
+            "Remove this redaction value?".to_owned(),
+            "Remove",
+        ),
+        Section::Privacy => {
+            let (title, question, yes) = privacy_confirm_question(view.row);
+            (title, question.to_owned(), yes)
         }
-        Section::Privacy => privacy_confirm_question(view.row).to_owned(),
-        Section::AutoMode | Section::Plugins => String::new(),
-        Section::General | Section::Appearance | Section::Providers => {
+        Section::General
+        | Section::Appearance
+        | Section::Providers
+        | Section::AutoMode
+        | Section::Plugins => {
             let name = app
                 .settings
                 .providers
                 .get(view.row)
                 .map(|profile| profile.name.as_str())
                 .unwrap_or("this provider");
-            format!("Delete {name} and its saved API key? y/n")
+            (
+                "Delete provider",
+                format!("Delete {name} and its saved API key?"),
+                "Delete",
+            )
         }
-    }
+    };
+    Dialog::confirm(
+        "settings-delete",
+        title,
+        Tone::Danger,
+        vec![Line::from(question)],
+        yes,
+        "Cancel",
+    )
 }
 
 fn footer_hint(view: &SettingsView) -> &'static str {
@@ -512,6 +576,7 @@ mod tests {
             "Global CLAUDE.md",
             "Dynamic workflows",
             "Usage warnings",
+            "Mouse",
             "Reset",
         ] {
             assert!(
@@ -577,6 +642,28 @@ mod tests {
             "dropped out of Ultimate"
         );
         assert!(app.notice.contains("locked"), "{}", app.notice);
+    }
+
+    #[test]
+    fn the_mouse_row_switches_mouse_capture_and_is_saved() {
+        let mut app = app();
+        assert!(app.settings.mouse, "on by default");
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..15 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        assert!(screen(&app, 100, 30).contains("Mouse"));
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("off");
+        assert!(!app.settings.mouse);
+        assert!(!crate::read_settings().expect("saved").mouse);
+        assert!(app.notice.contains("Shift"), "{}", app.notice);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("on");
+        assert!(app.settings.mouse);
     }
 
     #[test]

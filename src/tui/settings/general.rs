@@ -1,10 +1,11 @@
 use crate::tui::effort::{effort_name, effort_style};
 use crate::tui::models::selected_model_name;
+use crate::tui::mouse::record_wrapped;
 use crate::tui::pickers::model::ModelPicker;
 use crate::tui::render::mode_span;
 use crate::tui::settings::reset::ResetStage;
 use crate::tui::settings::workflow_size::WorkflowChooser;
-use crate::tui::settings::{Focus, SettingsView};
+use crate::tui::settings::{Focus, SettingsView, content_row};
 use crate::tui::state::App;
 use crate::{PulseMode, write_settings};
 use anyhow::Result;
@@ -14,7 +15,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 16;
+pub(super) const ROWS: usize = 17;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -115,6 +116,7 @@ pub(super) fn draw_general(
             Some(_) => Span::styled("key missing", Style::default().fg(Color::Rgb(255, 197, 92))),
             None => Span::styled("off", Style::default().fg(Color::Gray)),
         }],
+        vec![switch(app.settings.mouse)],
         vec![Span::styled("…", Style::default().fg(Color::DarkGray))],
     ];
     let labels = [
@@ -133,10 +135,14 @@ pub(super) fn draw_general(
         "Usage warnings",
         "Auto-compact",
         "Image generation",
+        "Mouse",
         "Reset",
     ];
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
+    let clicks = (0..ROWS)
+        .map(|index| (index, content_row(view, index)))
+        .collect::<Vec<_>>();
     for (index, (label, value)) in labels.iter().zip(values).enumerate() {
         let selected = focused && index == view.row;
         let mut spans = vec![
@@ -163,6 +169,7 @@ pub(super) fn draw_general(
         "API keys are kept in the OS credential store, never in the config file.",
         Style::default().fg(Color::DarkGray),
     )));
+    record_wrapped(&app.hits, area, &lines, &clicks);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
@@ -235,7 +242,17 @@ impl App {
                     write_settings(&self.settings)?;
                 }
                 14 => self.open_image_setup(),
-                15 => view.reset = Some(ResetStage::Menu { row: 0 }),
+                15 => {
+                    self.settings.mouse = !self.settings.mouse;
+                    self.notice = if self.settings.mouse {
+                        "Mouse on: click buttons and rows, scroll with the wheel. Hold Shift (Option on macOS) to select text."
+                    } else {
+                        "Mouse off: the terminal selects text as usual. Shift is no longer needed."
+                    }
+                    .to_owned();
+                    write_settings(&self.settings)?;
+                }
+                16 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;

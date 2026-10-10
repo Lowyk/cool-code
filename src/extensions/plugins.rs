@@ -585,6 +585,25 @@ events = ["turn_finished", "tool_started"]
         folder
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_folder_that_links_outside_the_plugin_is_refused_and_never_loaded() {
+        let folder = source_folder();
+        let outside = temp("outside");
+        std::os::unix::fs::symlink(&outside, folder.join("linked")).unwrap();
+        let manifest = manifest_with(|m| m.skills = vec!["linked".to_owned()]);
+        let error = manifest
+            .validate(&folder)
+            .expect_err("a link out of the plugin");
+        assert!(format!("{error:#}").contains("inside"), "{error:#}");
+        let plugin = Plugin {
+            manifest,
+            dir: folder,
+            enabled: true,
+        };
+        assert!(plugin.skill_folders().is_empty());
+    }
+
     fn dirs() -> Dirs {
         Dirs::under(&temp("home"))
     }

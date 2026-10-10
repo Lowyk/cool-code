@@ -14,7 +14,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 /// The text fields, in order, followed by the buttons.
 const FIELD_COUNT: usize = 3;
@@ -129,11 +129,8 @@ pub(in crate::tui) fn draw_image_setup(
 ) {
     let popup = centered_rect(74, 70, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Image generation ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent_bright()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = crate::tui::dialog::window("Image generation", crate::tui::dialog::Tone::Normal)
+        .padding(ratatui::widgets::Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let dim = Style::default().fg(Color::DarkGray);

@@ -76,6 +76,12 @@ pub(super) fn draw_appearance(
         Paragraph::new(option_lines(app, view, tick, with_preview)),
         list_area,
     );
+    for row in 0..ROWS {
+        app.hits.click(
+            crate::tui::mouse::line_rect(list_area, line_of(row)),
+            super::content_row(view, row),
+        );
+    }
     if with_preview {
         let preview = Rect::new(
             area.x + LIST_WIDTH + 2,
@@ -84,6 +90,16 @@ pub(super) fn draw_appearance(
             area.height.min(20),
         );
         draw_preview(frame, preview, app, view.row, elapsed.as_secs_f32(), tick);
+    }
+}
+
+/// The line of `option_lines` that shows `row`: the themes and light mode follow the Theme
+/// heading, and each later group has a blank line and a heading of its own.
+fn line_of(row: usize) -> usize {
+    match row {
+        row if row <= LIGHT_MODE => row + 1,
+        row if row <= DIM_IN_CHAT => row + 3,
+        row => row + 5,
     }
 }
 
@@ -497,6 +513,30 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn every_option_row_is_clickable_where_it_is_drawn() {
+        use crate::tui::mouse::testing::click_text;
+        let mut app = app();
+        for (label, row) in [
+            ("Light mode", LIGHT_MODE),
+            ("Welcome screen", WELCOME_BACKDROP),
+            ("While chatting", CHAT_BACKDROP),
+            ("Dim while chatting", super::DIM_IN_CHAT),
+            ("Animate effort name", ANIMATE_EFFORT),
+            (crate::tui::theme::THEMES[2].name, 2),
+        ] {
+            click_text(&mut app, label);
+            assert_eq!(app.settings_view.as_ref().unwrap().row, row, "{label}");
+        }
+        let before = app.settings.light_mode;
+        click_text(&mut app, "Light mode");
+        click_text(&mut app, "Light mode");
+        assert_ne!(
+            app.settings.light_mode, before,
+            "the second click switched it"
+        );
     }
 
     #[test]

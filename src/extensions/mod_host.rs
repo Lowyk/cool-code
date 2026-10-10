@@ -478,6 +478,24 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_command_that_links_outside_the_mod_folder_is_refused() {
+        let folder =
+            std::env::temp_dir().join(format!("coolcode-mod-link-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(folder.join("bin")).unwrap();
+        std::fs::write(folder.join("bin/inside.sh"), "").unwrap();
+        std::os::unix::fs::symlink("/bin/sh", folder.join("bin/outside")).unwrap();
+        let mut info = helper("echo", &[]);
+        info.dir = folder.clone();
+        info.manifest.command = "bin/inside.sh".to_owned();
+        assert!(program(&info).is_ok());
+        info.manifest.command = "bin/outside".to_owned();
+        let error = program(&info).expect_err("a link out of the folder");
+        assert!(error.contains("outside the mod's folder"), "{error}");
+        std::fs::remove_dir_all(folder).ok();
+    }
+
     /// Not a test of its own: when the host starts this binary as a mod, this is the mod.
     #[test]
     fn mod_helper_process() {

@@ -1,4 +1,5 @@
 use crate::provider::{self, PRIVACY_FAMILIES};
+use crate::tui::mouse::{Click, Row as MouseRow, line_rect};
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::App;
 use crate::write_settings;
@@ -72,8 +73,10 @@ pub(super) fn draw_privacy(
     }
     let focused = view.focus == Focus::Content;
     let mut lines = Vec::new();
+    let mut clicks = Vec::new();
     for (index, (label, value, help)) in rows.into_iter().enumerate() {
         let selected = focused && index == view.row;
+        clicks.push((lines.len(), super::content_row(view, index)));
         lines.push(Line::from(vec![
             Span::styled(
                 if selected { "▸ " } else { "  " },
@@ -101,6 +104,7 @@ pub(super) fn draw_privacy(
         "Text redaction is best-effort. Images are sent unredacted only with explicit consent.",
         Style::default().fg(Color::DarkGray),
     )));
+    crate::tui::mouse::record_wrapped(&app.hits, area, &lines, &clicks);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
@@ -185,11 +189,20 @@ impl App {
     }
 }
 
-pub(super) fn privacy_confirm_question(row: usize) -> &'static str {
+/// The title, question and confirming button of the Privacy row's confirmation.
+pub(super) fn privacy_confirm_question(row: usize) -> (&'static str, &'static str, &'static str) {
     if row == 1 {
-        "Clear all custom redaction values? y/n"
+        (
+            "Clear redaction values",
+            "Clear all custom redaction values?",
+            "Clear",
+        )
     } else {
-        "Revoke all privacy acknowledgements and image grants? y/n"
+        (
+            "Revoke acknowledgements",
+            "Revoke all privacy acknowledgements and image grants?",
+            "Revoke",
+        )
     }
 }
 
@@ -364,6 +377,10 @@ pub(super) fn draw_privacy_sub(
                     &app.settings.privacy_acknowledged
                 };
                 let checked = list.iter().any(|item| item == family);
+                app.hits.click(
+                    line_rect(area, lines.len()),
+                    Click::Row(MouseRow::new(index, *row).activate(Some(KeyCode::Char(' ')))),
+                );
                 lines.push(Line::from(vec![
                     pointer(index == *row),
                     Span::styled(
@@ -397,6 +414,14 @@ pub(super) fn draw_privacy_sub(
                 Style::default().fg(Color::DarkGray),
             )));
             lines.push(Line::from(""));
+            if adding.is_none() {
+                for index in 0..=values.len() {
+                    app.hits.click(
+                        line_rect(area, lines.len() + index),
+                        Click::Row(MouseRow::new(index, *row)),
+                    );
+                }
+            }
             for (index, value) in values.iter().enumerate() {
                 let shown = if *reveal {
                     value.clone()

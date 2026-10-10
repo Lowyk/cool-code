@@ -369,6 +369,29 @@ impl TreeState {
     }
 }
 
+/// Records a click for every row `draw_tree` shows in `area` (each row is one step of ↑/↓);
+/// `focus` is the key that gives the tree the keyboard focus, when it does not have it.
+pub(in crate::tui) fn record_tree(
+    hits: &crate::tui::mouse::Hits,
+    area: Rect,
+    rows: usize,
+    selected: usize,
+    focus: Option<crossterm::event::KeyCode>,
+) {
+    use crate::tui::mouse::{Click, Row, line_rect};
+    if rows == 0 {
+        return;
+    }
+    let selected = selected.min(rows - 1);
+    let start = (selected + 1).saturating_sub(area.height as usize);
+    for position in start..rows.min(start + area.height as usize) {
+        hits.click(
+            line_rect(area, position - start),
+            Click::Row(Row::new(position, selected).focus(focus)),
+        );
+    }
+}
+
 pub(in crate::tui) fn draw_tree(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
