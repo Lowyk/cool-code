@@ -441,7 +441,7 @@ mod frame_tests {
     }
 
     #[test]
-    fn the_setup_wizard_and_the_session_picker_take_clicks() {
+    fn the_setup_wizard_takes_clicks() {
         let mut app = app();
         app.settings.motion_prompt_answered = true;
         app.settings.stats_prompt_answered = true;
