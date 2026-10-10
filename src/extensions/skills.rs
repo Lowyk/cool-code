@@ -81,10 +81,21 @@ impl Roots {
         root: &Path,
         trusted: bool,
     ) -> Roots {
+        let (plugins, _) = crate::extensions::plugins::installed(dirs, settings);
+        let plugin_folders = plugins
+            .iter()
+            .filter(|plugin| plugin.enabled)
+            .flat_map(|plugin| {
+                plugin
+                    .skill_folders()
+                    .into_iter()
+                    .map(|folder| (plugin.manifest.name.clone(), folder))
+            })
+            .collect();
         Roots::build(
             dirs.coolcode_join("skills"),
             trusted.then_some(root),
-            Vec::new(),
+            plugin_folders,
             dirs.claude
                 .as_ref()
                 .filter(|_| settings.load_claude_skills)
@@ -705,6 +716,32 @@ mod tests {
             warnings.iter().any(|w| w.contains("review")),
             "{warnings:?}"
         );
+    }
+
+    #[test]
+    fn skills_from_plugins_load_only_while_the_plugin_is_enabled() {
+        let home = folder("plugin-home");
+        let dirs = crate::extensions::Dirs::under(&home);
+        let plugin = home.join(".coolcode/plugins/kit");
+        write(
+            &plugin.join("plugin.toml"),
+            "name = \"kit\"\nversion = \"1\"\ndescription = \"Kit\"\nskills = [\"skills\"]\n",
+        );
+        write(
+            &plugin.join("skills/tidy/SKILL.md"),
+            &skill_file("tidy", "Tidy up"),
+        );
+        let mut settings = crate::Settings::default();
+        let project = folder("plugin-project");
+        let (skills, _) = discover(&Roots::in_dirs(&dirs, &settings, &project, false));
+        let tidy = skills
+            .iter()
+            .find(|skill| skill.name == "tidy")
+            .expect("loaded");
+        assert_eq!(tidy.source, Source::Plugin("kit".to_owned()));
+        settings.disabled_plugins.push("kit".to_owned());
+        let (skills, _) = discover(&Roots::in_dirs(&dirs, &settings, &project, false));
+        assert!(skills.is_empty(), "{skills:?}");
     }
 
     #[cfg(unix)]

@@ -214,6 +214,15 @@ struct Settings {
     /// The image API `generate_image` uses (its key is in the credential store). Off when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image_generation: Option<imagegen::ImageConfig>,
+    /// Installed plugins the user switched off (their skills, commands and mods do not load).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    disabled_plugins: Vec<String>,
+    /// Mods the user approved, each with the hash of the manifest that was shown.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    approved_mods: std::collections::BTreeMap<String, String>,
+    /// Approved mods the user switched off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    disabled_mods: Vec<String>,
     effort: Effort,
     permission_mode: String,
 }
@@ -342,6 +351,9 @@ impl Default for Settings {
             outside_files: false,
             outside_files_no_prompt: false,
             image_generation: None,
+            disabled_plugins: Vec::new(),
+            approved_mods: std::collections::BTreeMap::new(),
+            disabled_mods: Vec::new(),
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }

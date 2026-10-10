@@ -314,6 +314,14 @@ impl App {
             self.finish_command(self.notice.clone());
             return Ok(());
         }
+        if let Some(arguments) = value
+            .strip_prefix("/plugin")
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            let output = self.plugin_command(arguments.trim())?;
+            self.finish_command(output);
+            return Ok(());
+        }
         if value == "/undo" {
             let message = self.undo_last();
             self.finish_command(message.clone());
@@ -429,6 +437,9 @@ impl App {
         self.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: user_message.display.clone(),
+        });
+        self.mod_event(crate::extensions::mods::Event::PromptSubmitted {
+            chars: user_message.display.chars().count(),
         });
         self.messages.push(user_message);
         self.save_session();
@@ -550,6 +561,9 @@ impl App {
         self.answer_unfinished_tool_calls();
         self.keep_partial_answer(&turn.text, true);
         self.notice = "Turn cancelled.".to_owned();
+        self.mod_event(crate::extensions::mods::Event::TurnFinished {
+            outcome: "cancelled",
+        });
     }
 
     /// Gives every tool call without a result a cancelled result, so the next request stays valid.
@@ -604,6 +618,7 @@ impl App {
     /// Applies every event the worker has sent since the last frame.
     pub(super) fn poll_response(&mut self) {
         self.poll_tasks();
+        self.poll_extensions();
         if let Some(turn) = self.streaming.as_mut() {
             turn.prune_arrivals(std::time::Instant::now());
         }
@@ -632,6 +647,7 @@ impl App {
     }
 
     fn apply_pending_event(&mut self, event: Result<PendingEvent, TryRecvError>) {
+        self.observe_for_mods(&event);
         let now = std::time::Instant::now();
         match event {
             Ok(PendingEvent::TextDelta(delta)) => {

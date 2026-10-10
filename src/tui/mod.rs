@@ -12,6 +12,7 @@ mod markdown;
 mod mentions;
 pub(crate) mod models;
 mod pickers;
+mod plugin_install;
 mod present;
 mod render;
 mod series;
@@ -83,6 +84,7 @@ fn run_app(
         app.start_from(resume);
     }
     app.start_setup();
+    app.start_mods();
     let animation_start = std::time::Instant::now();
     let mut presenter = present::Presenter::new();
     while app.running {
@@ -127,6 +129,7 @@ fn run_app(
         }
         handle_batch(&mut app, &presses)?;
     }
+    app.stop_mods();
     Ok(())
 }
 
@@ -137,6 +140,7 @@ impl state::App {
         !(self.trust_prompt
             || self.chatgpt_login.is_some()
             || self.outside_prompt.is_some()
+            || self.plugin_review_open()
             || self.image_setup.is_some()
             || self.wizard.is_some()
             || self.tool_approval.is_some()
@@ -192,6 +196,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         app.handle_chatgpt_login_key(key);
     } else if app.outside_prompt.is_some() {
         app.handle_outside_prompt_key(key)?;
+    } else if app.plugin_review_open() {
+        app.handle_plugin_review_key(key)?;
     } else if app.image_setup.is_some() {
         app.handle_image_setup_key(key)?;
     } else if app.wizard.is_some() {

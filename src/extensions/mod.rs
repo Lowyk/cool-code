@@ -7,6 +7,9 @@
 
 use std::path::PathBuf;
 
+pub(crate) mod mod_host;
+pub(crate) mod mods;
+pub(crate) mod plugins;
 pub(crate) mod skills;
 
 /// `~/.coolcode`, where the user's own skills, plugins and mods live.
