@@ -362,6 +362,18 @@ fn fetch(source: &Source, into: &Path) -> Result<()> {
     }
 }
 
+/// A path git on Windows can use: real paths there start with `\\?\`, which git refuses.
+fn for_git(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{share}"))
+    } else if let Some(plain) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(plain)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// `git clone --depth 1`, without prompts, stopped after [`CLONE_TIMEOUT`].
 fn git_clone(url: &str, into: &Path) -> Result<()> {
     use std::io::Read as _;
@@ -377,7 +389,7 @@ fn git_clone(url: &str, into: &Path) -> Result<()> {
             "--",
             url,
         ])
-        .arg(into)
+        .arg(for_git(into))
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -602,6 +614,17 @@ events = ["turn_finished", "tool_started"]
             enabled: true,
         };
         assert!(plugin.skill_folders().is_empty());
+    }
+
+    #[test]
+    fn paths_given_to_git_lose_the_windows_verbatim_prefix() {
+        for (given, plain) in [
+            (r"\\?\C:\Users\me\plugins", r"C:\Users\me\plugins"),
+            (r"\\?\UNC\server\share\plugins", r"\\server\share\plugins"),
+            ("/home/me/plugins", "/home/me/plugins"),
+        ] {
+            assert_eq!(for_git(Path::new(given)), PathBuf::from(plain), "{given}");
+        }
     }
 
     fn dirs() -> Dirs {
