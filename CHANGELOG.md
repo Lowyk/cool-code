@@ -5,6 +5,24 @@ All notable changes are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
+Cool Code 0.2 extends the harness in three areas: larger and better-controlled workflows, an
+extension system (skills, plugins and mods) with an approval step before anything third-party
+runs, and a more consistent, mouse-aware interface.
+
+**Highlights**
+
+- **Workflows scale to the task.** Choose a workflow size from 5 to 500 subagents per turn, and
+  limit how many run at the same time.
+- **Extensions.** Skills in the Claude Code `SKILL.md` format, plugins installed from a git URL or
+  a folder, and mods that react to events. Nothing from a plugin runs until you have reviewed and
+  approved it.
+- **A consistent interface.** One dialog style for every question, tool approvals shown above the
+  prompt, a command list that opens when you type `/`, a subagent tracker, and mouse support.
+- **Editing in the prompt.** A real cursor with word movement and word deletion.
+- **More models with effort control.** Low, High and Max for DeepSeek V4 and Kimi K3.
+
 ### Added
 
 - Workflow sizes: Settings → General → Dynamic workflows now chooses the most subagents a turn
@@ -49,7 +67,6 @@ All notable changes are listed here, newest first. The format follows
   answers no longer cancels a deletion; Esc or n does.
 - The windows (Settings, the pickers, /usage, /stats, /resume, the setup wizard, the sign-in and
   image setup screens) share the dialog's rounded, titled frame.
-
 - The Dynamic workflows switch became a size. Settings files with `dynamic_workflows = true` load
   as Medium, `false` as Off. Medium keeps Super's old limits (4 per call, 8 per turn); Ultimate on
   Medium allows 5 per call and 15 per turn (it was 6 and 20).
@@ -57,6 +74,23 @@ All notable changes are listed here, newest first. The format follows
 - `/help` and the command list come from one table, and an unknown command names the closest
   ones.
 - The system prompt is at version 4: it lists installed skills.
+
+### Upgrade notes
+
+- Settings files from 0.1 load without changes. `dynamic_workflows = true` becomes the Medium
+  workflow size and `false` becomes Off.
+- With the old switch on, Ultimate now allows 5 subagents per call and 15 per turn on Medium (it
+  was 6 and 20). Choose a larger size in Settings → General → Dynamic workflows to raise this.
+- With the mouse on, selecting text in the terminal needs Shift (Option on macOS). Turn the mouse
+  off in Settings → General → Mouse to restore the previous behaviour.
+
+### Known limitations
+
+- Subagents that edit files still run one at a time; read-only subagents run in parallel, up to
+  the "At once" limit.
+- A subagent cancelled from the tracker while it waits for a tool approval stops after you answer.
+- Plugins cannot be updated in place; remove and reinstall.
+- Mods run only in the interactive interface, not in `coolcode run`.
 
 ## [0.1.0] - 2026-10-08
 
