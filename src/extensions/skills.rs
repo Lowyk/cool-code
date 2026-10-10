@@ -341,8 +341,17 @@ pub(crate) fn discover(roots: &Roots) -> (Vec<Skill>, Vec<String>) {
                 warnings.push(skipped("its folder cannot be read".to_owned()));
                 continue;
             };
-            if *source == Source::Project && !project.as_ref().is_some_and(|p| dir.starts_with(p)) {
-                warnings.push(skipped("it leads outside the project".to_owned()));
+            // A repository or a plugin can contain links; the user's own folders may link
+            // wherever the user likes.
+            let boundary = match source {
+                Source::Project => Some((project.clone(), "the project")),
+                Source::Plugin(_) => Some((folder.canonicalize().ok(), "the plugin")),
+                Source::User | Source::Claude => None,
+            };
+            if let Some((inside, place)) = boundary
+                && !inside.is_some_and(|inside| dir.starts_with(inside))
+            {
+                warnings.push(skipped(format!("it leads outside {place}")));
                 continue;
             }
             match read_skill(&dir) {
@@ -758,6 +767,27 @@ mod tests {
             .unwrap();
         let (skills, warnings) = discover(&Roots::build(None, Some(&project), Vec::new(), None));
         assert!(skills.is_empty(), "{skills:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("outside")),
+            "{warnings:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_skill_that_links_out_of_the_plugin_is_refused() {
+        let outside = folder("plugin-outside");
+        write(
+            &outside.join("evil/SKILL.md"),
+            &skill_file("evil", "Leaves"),
+        );
+        let skills = folder("plugin-skills");
+        std::os::unix::fs::symlink(outside.join("evil"), skills.join("evil")).unwrap();
+        write(&skills.join("fine/SKILL.md"), &skill_file("fine", "Stays"));
+        let roots = Roots::build(None, None, vec![("kit".to_owned(), skills)], None);
+        let (found, warnings) = discover(&roots);
+        let names = found.iter().map(|s| s.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, ["fine"]);
         assert!(
             warnings.iter().any(|w| w.contains("outside")),
             "{warnings:?}"
