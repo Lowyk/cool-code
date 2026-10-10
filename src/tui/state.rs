@@ -103,6 +103,8 @@ pub(super) struct App {
     pub(super) mention: Option<crate::tui::mentions::MentionState>,
     /// The cursor position at which the user closed the suggestions.
     pub(super) mention_dismissed_at: Option<usize>,
+    /// The `/` command suggestions.
+    pub(super) slash: crate::tui::slash::SlashPopup,
     /// The project's files for suggestions, and when they were read.
     pub(super) project_files: Option<(std::time::Instant, Vec<String>)>,
     /// A message waiting for files outside the project to be confirmed.
@@ -498,6 +500,7 @@ impl App {
             pending_note: None,
             mention: None,
             mention_dismissed_at: None,
+            slash: Default::default(),
             project_files: None,
             outside_prompt: None,
             image_setup: None,

@@ -17,6 +17,7 @@ mod series;
 pub(crate) mod sessions;
 mod settings;
 mod setup;
+mod slash;
 mod state;
 mod stats_view;
 mod theme;
@@ -347,14 +348,19 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else {
         if let Some(edit) = editing::edit_key(key) {
             app.edit_input(edit);
-            app.refresh_mentions();
+            app.refresh_popups();
             return Ok(());
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let slash = app.slash.is_open() && app.mention.is_none();
         match key.code {
             KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
             KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
+            KeyCode::Up if slash && !control => app.slash_move(-1),
+            KeyCode::Down if slash && !control => app.slash_move(1),
+            KeyCode::Tab if slash => app.accept_slash(),
+            KeyCode::Esc if slash => app.dismiss_slash(),
             KeyCode::Enter
                 if key
                     .modifiers
@@ -363,6 +369,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
                 app.insert_input("\n")
             }
             KeyCode::Enter if app.mention_takes_enter() => app.accept_mention(),
+            KeyCode::Enter if slash && app.slash_takes_enter() => app.accept_slash(),
             KeyCode::Esc if app.mention.is_some() => app.dismiss_mention(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.running = false;
@@ -384,7 +391,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             }
             _ => {}
         }
-        app.refresh_mentions();
+        app.refresh_popups();
     }
     Ok(())
 }
