@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Lowyk/cool-code/master/install.sh | sh
 #
 # Settings, all optional:
-#   COOLCODE_VERSION      a release tag such as v0.1.0 (default: the latest release)
+#   COOLCODE_VERSION      a release tag such as v0.2.0 (default: the latest release)
 #   COOLCODE_INSTALL_DIR  where to put the program (default: $HOME/.local/bin)
 #   COOLCODE_REPO         owner/name on GitHub (default: Lowyk/cool-code)
 #   COOLCODE_BASE_URL     a folder or URL that already holds the archive and its .sha256

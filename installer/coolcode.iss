@@ -1,5 +1,5 @@
 ; Inno Setup script for the Windows installer.
-; Build:  ISCC /DAppVersion=0.1.0 installer\coolcode.iss   (after `cargo build --release`)
+; Build:  ISCC /DAppVersion=0.2.0 installer\coolcode.iss   (after `cargo build --release`)
 ; Output: dist\coolcode-v<version>-windows-x64-setup.exe
 
 #ifndef AppVersion

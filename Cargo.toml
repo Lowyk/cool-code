@@ -1,6 +1,6 @@
 [package]
 name = "coolcode"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Cool Code: an AI coding assistant for your terminal"
 license = "MIT"
