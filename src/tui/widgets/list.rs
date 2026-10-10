@@ -1,3 +1,5 @@
+use crate::tui::mouse::{Click, Hits, Row as MouseRow, line_rect};
+use crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -60,8 +62,8 @@ pub(in crate::tui) fn draw_list(
     state: &ListState,
     focused: bool,
 ) {
-    let visible = visible_indices(items, &state.filter);
-    if visible.is_empty() {
+    let (rows, _, current_row) = layout(items, state, focused);
+    if rows.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "No matches",
@@ -71,9 +73,53 @@ pub(in crate::tui) fn draw_list(
         );
         return;
     }
+    let height = area.height as usize;
+    let start = (current_row + 1).saturating_sub(height);
+    let shown = rows
+        .into_iter()
+        .skip(start)
+        .take(height)
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(shown), area);
+}
+
+/// Records a click for every selectable row `draw_list` shows in `area`; `focus` is the key that
+/// gives the list the keyboard focus, when it does not have it.
+pub(in crate::tui) fn record_list(
+    hits: &Hits,
+    area: Rect,
+    items: &[ListItem],
+    state: &ListState,
+    focus: Option<KeyCode>,
+) {
+    let (_, choices, current_row) = layout(items, state, true);
+    let Some(current) = choices.get(current_row).copied().flatten() else {
+        return;
+    };
+    let start = (current_row + 1).saturating_sub(area.height as usize);
+    for (row, choice) in choices.iter().enumerate().skip(start) {
+        if let Some(choice) = choice {
+            hits.click(
+                line_rect(area, row - start),
+                Click::Row(MouseRow::new(*choice, current).focus(focus)),
+            );
+        }
+    }
+}
+
+/// The rows `draw_list` draws, which choice (the position among the rows ↑/↓ step through)
+/// each one is, and the row of the highlighted one.
+fn layout(
+    items: &[ListItem],
+    state: &ListState,
+    focused: bool,
+) -> (Vec<Line<'static>>, Vec<Option<usize>>, usize) {
+    let visible = visible_indices(items, &state.filter);
     let current = state.current(items);
     let accent = crate::tui::theme::accent_bright();
     let mut rows = Vec::new();
+    let mut choices = Vec::new();
+    let mut choice = 0;
     let mut current_row = 0;
     let mut last_group: Option<&str> = None;
     for index in visible {
@@ -87,7 +133,14 @@ pub(in crate::tui) fn draw_list(
                     .fg(Color::Gray)
                     .add_modifier(Modifier::BOLD),
             )));
+            choices.push(None);
             last_group = Some(group);
+        }
+        if item.selectable {
+            choices.push(Some(choice));
+            choice += 1;
+        } else {
+            choices.push(None);
         }
         let is_current = current == Some(index);
         if is_current {
@@ -122,14 +175,7 @@ pub(in crate::tui) fn draw_list(
             ),
         ]));
     }
-    let height = area.height as usize;
-    let start = (current_row + 1).saturating_sub(height);
-    let shown = rows
-        .into_iter()
-        .skip(start)
-        .take(height)
-        .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(shown), area);
+    (rows, choices, current_row)
 }
 
 #[cfg(test)]

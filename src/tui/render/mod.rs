@@ -8,15 +8,17 @@ use crate::tui::effort::draw_effort_picker;
 use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::draw_model_picker;
 use crate::tui::render::dialogs::{
-    draw_mode_picker, draw_model_provider_picker, draw_privacy_confirmation, draw_tool_approval,
+    draw_mode_picker, draw_model_provider_picker, draw_privacy_confirmation,
     draw_ultimate_confirmation, draw_workspace_trust_prompt,
 };
+pub(super) use crate::tui::render::dialogs::{privacy_dialog, trust_dialog, ultimate_dialog};
 use crate::tui::render::motion::pulse_spans;
 use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::stats_view::draw_stats;
 use crate::tui::wordmark::{cool_code_wordmark, tagline_lines, wordmark_height};
 use crate::{PulseMode, provider};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -196,6 +198,17 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let area = frame.area();
     crate::tui::theme::set_current(app.settings.theme);
     app.cursor.set(None);
+    app.hits.clear();
+    // The wheel scrolls the conversation unless something drawn later is in the way; a window
+    // that takes the keys also takes the mouse.
+    app.hits.wheel(
+        area,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL),
+    );
+    if !app.typing_in_prompt() {
+        app.hits.modal(area);
+    }
     if let Some(background) = crate::tui::theme::current().screen_bg {
         frame.render_widget(
             ratatui::widgets::Block::default().style(Style::default().bg(background)),
@@ -421,9 +434,9 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     }
 
     if let Some(state) = app.mention.as_ref() {
-        crate::tui::mentions::draw_mentions(frame, prompt_area, state);
+        crate::tui::mentions::draw_mentions(frame, prompt_area, state, &app.hits);
     } else if app.slash.is_open() {
-        crate::tui::slash::draw_slash(frame, prompt_area, &app.slash);
+        crate::tui::slash::draw_slash(frame, prompt_area, &app.slash, &app.hits);
     }
 
     let help = Line::from(vec![
@@ -446,10 +459,19 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         ),
     ]);
     let help = match app.streaming.as_ref() {
-        Some(turn) => Line::from(Span::styled(
-            status_line(turn, std::time::Instant::now()),
-            Style::default().fg(Color::Rgb(120, 170, 200)),
-        )),
+        Some(turn) => {
+            let mut spans = vec![Span::styled(
+                status_line(turn, std::time::Instant::now()),
+                Style::default().fg(Color::Rgb(120, 170, 200)),
+            )];
+            if let Some(hint) = crate::tui::tracker::status_hint(&app.tracker) {
+                spans.push(Span::styled(
+                    format!(" · {hint}"),
+                    Style::default().fg(Color::Rgb(255, 197, 92)),
+                ));
+            }
+            Line::from(spans)
+        }
         None => help,
     };
     frame.render_widget(Paragraph::new(help).alignment(Alignment::Center), help_area);
@@ -528,14 +550,14 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         draw_effort_picker(frame, area, app, animation_tick);
     }
     if app.confirm_ultimate {
-        draw_ultimate_confirmation(frame, area);
+        draw_ultimate_confirmation(frame, area, app);
     }
     if let Some(prompt) = app.privacy_confirmation.as_ref() {
         let has_image = app
             .pending_privacy_message
             .as_ref()
             .is_some_and(provider::message_contains_image);
-        draw_privacy_confirmation(frame, area, prompt, has_image);
+        draw_privacy_confirmation(frame, area, app, prompt, has_image);
     }
     if app.mode_picker {
         draw_mode_picker(frame, area, app);
@@ -544,31 +566,40 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         draw_model_provider_picker(frame, area, app);
     }
     if let Some(picker) = app.session_picker.as_ref() {
-        crate::tui::sessions::draw_session_picker(frame, area, picker);
+        crate::tui::sessions::draw_session_picker(frame, area, app, picker);
     }
     if let Some(login) = app.chatgpt_login.as_ref() {
-        crate::tui::chatgpt_login::draw_chatgpt_login(frame, area, login);
+        crate::tui::chatgpt_login::draw_chatgpt_login(frame, area, login, &app.hits);
     }
     if let Some(prompt) = app.outside_prompt.as_ref() {
-        crate::tui::mentions::draw_outside_prompt(frame, area, prompt);
+        crate::tui::mentions::draw_outside_prompt(
+            frame,
+            area,
+            prompt,
+            &app.dialog_focus,
+            &app.hits,
+        );
     }
     crate::tui::plugin_install::draw_plugin_review(frame, area, app);
     if let Some(setup) = app.image_setup.as_ref() {
         crate::tui::image_setup::draw_image_setup(frame, area, setup);
     }
     if let Some(picker) = app.model_picker.as_ref() {
-        draw_model_picker(frame, area, picker, &app.settings);
+        draw_model_picker(frame, area, picker, app);
     }
     if let Some(wizard) = app.wizard.as_ref()
         && !app.trust_prompt
     {
-        crate::tui::setup::draw_setup(frame, area, wizard);
+        crate::tui::setup::draw_setup(frame, area, wizard, &app.hits);
     }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);
     }
+    if app.tracker.open {
+        crate::tui::tracker::draw_tracker(frame, area, app);
+    }
     if let Some(approval) = app.tool_approval.as_ref() {
-        draw_tool_approval(frame, area, approval, app.approval_scroll);
+        crate::tui::approval::draw_approval_card(frame, area, prompt_area, app, approval);
     }
 }
 

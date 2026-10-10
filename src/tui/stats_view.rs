@@ -1,3 +1,4 @@
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, hint_style, route, window};
 use crate::tui::state::App;
 use crate::write_settings;
 use anyhow::Result;
@@ -5,7 +6,21 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
+
+/// The question before the usage history is deleted.
+fn clear_dialog() -> Dialog<'static> {
+    Dialog::confirm(
+        "stats-clear",
+        "Delete usage history",
+        Tone::Danger,
+        vec![Line::from(
+            "Delete all usage history? This cannot be undone.",
+        )],
+        "Delete",
+        "Cancel",
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum StatsTab {
@@ -90,7 +105,10 @@ impl App {
             return Ok(());
         };
         if view.confirm_clear {
-            let confirmed = matches!(key.code, KeyCode::Char('y' | 'Y'));
+            let confirmed = match route(&clear_dialog(), &mut self.dialog_focus, key) {
+                Routed::Press(code) => code == KeyCode::Char('y'),
+                Routed::Moved | Routed::Other => return Ok(()),
+            };
             view.confirm_clear = false;
             if confirmed {
                 // A file that cannot be deleted (locked, read-only) must not end the session.
@@ -375,16 +393,14 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
         return;
     };
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Stats ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel_alt()));
+    let block =
+        window("Stats", Tone::Normal).style(Style::default().bg(crate::tui::theme::panel_alt()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 5 || inner.width < 20 {
         return;
     }
+    app.hits.wheel_arrows(area);
     let tab = |label: &'static str, selected: bool| {
         Span::styled(
             format!(" {label} "),
@@ -456,19 +472,10 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
             body_height,
         ),
     );
-    let footer = if view.confirm_clear {
-        Span::styled(
-            "Delete all usage history? y/n",
-            Style::default()
-                .fg(Color::Rgb(235, 80, 80))
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(
-            "Tab switch tab   ←/→ range   ↑/↓ scroll   c clear history   Esc close",
-            Style::default().fg(Color::DarkGray),
-        )
-    };
+    let footer = Span::styled(
+        "Tab switch tab   ←/→ range   ↑/↓ scroll   c clear history   Esc close",
+        hint_style(),
+    );
     frame.render_widget(
         Paragraph::new(footer),
         Rect::new(
@@ -478,6 +485,9 @@ pub(in crate::tui) fn draw_stats(frame: &mut ratatui::Frame<'_>, area: Rect, app
             1,
         ),
     );
+    if view.confirm_clear {
+        draw_dialog(frame, area, &clear_dialog(), &app.dialog_focus, &app.hits);
+    }
 }
 
 #[cfg(test)]
@@ -682,6 +692,23 @@ mod tests {
         app.handle_stats_key(key(KeyCode::Char('y'))).expect("y");
         let view = app.stats_view.as_ref().expect("view stays open");
         assert!(view.records.is_empty() && !view.confirm_clear);
+    }
+
+    #[test]
+    fn clearing_history_asks_in_a_shared_dialog_where_enter_cancels() {
+        use crate::tui::mouse::testing::{click_text, has_button};
+        let _guard = STATS_FILE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut app = app_with_view();
+        app.handle_stats_key(key(KeyCode::Char('c'))).expect("c");
+        assert!(has_button(&app, "Delete"));
+        app.handle_stats_key(key(KeyCode::Enter)).expect("Enter");
+        let view = app.stats_view.as_ref().expect("open");
+        assert!(!view.confirm_clear && view.records.len() == 4);
+        app.handle_stats_key(key(KeyCode::Char('c'))).expect("c");
+        click_text(&mut app, "[ Delete (y)");
+        assert!(app.stats_view.as_ref().unwrap().records.is_empty());
     }
 
     #[test]

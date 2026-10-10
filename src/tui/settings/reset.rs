@@ -2,6 +2,8 @@
 //!
 //! Anything that deletes data asks for confirmation first, and says how much it will delete.
 
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, route};
+use crate::tui::mouse::{Click, Row as MouseRow, line_rect};
 use crate::tui::settings::SettingsView;
 use crate::tui::state::App;
 use crate::{Settings, write_settings};
@@ -96,6 +98,30 @@ pub(in crate::tui) fn reset_preferences(settings: &Settings) -> Settings {
 }
 
 impl App {
+    /// The confirmation before a reset: what it will remove, and that it cannot be undone.
+    fn reset_dialog(&self, targets: &[ResetTarget]) -> Dialog<'static> {
+        let mut lines = vec![Line::from(Span::styled(
+            "This will:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))];
+        for target in targets {
+            lines.push(Line::from(Span::styled(
+                format!("  • {}", self.reset_effect(*target)),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "This cannot be undone.",
+            Style::default()
+                .fg(Color::Rgb(235, 80, 80))
+                .add_modifier(Modifier::BOLD),
+        )));
+        Dialog::confirm("reset", "Reset", Tone::Danger, lines, "Reset", "Cancel")
+    }
+
     /// A sentence describing what resetting `target` would remove right now.
     fn reset_effect(&self, target: ResetTarget) -> String {
         let plural = |count: usize, one: &str, many: &str| {
@@ -262,15 +288,18 @@ impl App {
                 }
                 _ => Some(ResetStage::Custom { row, checks }),
             },
-            ResetStage::Confirm { targets } => match key.code {
-                KeyCode::Char('y' | 'Y') => {
-                    let summary = self.apply_reset(&targets)?;
-                    self.notice = summary;
-                    None
+            ResetStage::Confirm { targets } => {
+                let dialog = self.reset_dialog(&targets);
+                match route(&dialog, &mut self.dialog_focus, key) {
+                    Routed::Press(KeyCode::Char('y')) => {
+                        let summary = self.apply_reset(&targets)?;
+                        self.notice = summary;
+                        None
+                    }
+                    Routed::Press(_) => Some(ResetStage::Menu { row: 0 }),
+                    Routed::Moved | Routed::Other => Some(ResetStage::Confirm { targets }),
                 }
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(ResetStage::Menu { row: 0 }),
-                _ => Some(ResetStage::Confirm { targets }),
-            },
+            }
         };
         if let Some(view) = self.settings_view.as_mut() {
             view.reset = next;
@@ -283,7 +312,7 @@ pub(super) fn reset_hint(stage: &ResetStage) -> &'static str {
     match stage {
         ResetStage::Menu { .. } => "↑↓ move   Enter choose   Esc back",
         ResetStage::Custom { .. } => "↑↓ move   Space tick   Enter continue   Esc back",
-        ResetStage::Confirm { .. } => "y confirm   n or Esc cancel",
+        ResetStage::Confirm { .. } => "y reset   n or Esc cancel",
     }
 }
 
@@ -323,14 +352,23 @@ pub(super) fn draw_reset(
     };
     let mut lines = Vec::new();
     match stage {
-        ResetStage::Menu { row } => {
+        ResetStage::Menu { .. } | ResetStage::Confirm { .. } => {
+            // The menu stays in view behind the confirmation.
+            let row = match stage {
+                ResetStage::Menu { row } => Some(*row),
+                _ => None,
+            };
             lines.push(heading("Reset what?"));
             lines.push(Line::from(""));
             for (index, (name, _)) in MENU.iter().enumerate() {
-                lines.push(Line::from(vec![
-                    marker(index == *row),
-                    label(name, index == *row),
-                ]));
+                let selected = row == Some(index);
+                lines.push(Line::from(vec![marker(selected), label(name, selected)]));
+                if let Some(row) = row {
+                    app.hits.click(
+                        line_rect(area, lines.len() - 1),
+                        Click::Row(MouseRow::new(index, row)),
+                    );
+                }
             }
         }
         ResetStage::Custom { row, checks } => {
@@ -349,27 +387,23 @@ pub(super) fn draw_reset(
                     ),
                     label(target.label(), index == *row),
                 ]));
+                app.hits.click(
+                    line_rect(area, lines.len() - 1),
+                    Click::Row(MouseRow::new(index, *row).activate(Some(KeyCode::Char(' ')))),
+                );
             }
-        }
-        ResetStage::Confirm { targets } => {
-            lines.push(heading("This will:"));
-            lines.push(Line::from(""));
-            for target in targets {
-                lines.push(Line::from(Span::styled(
-                    format!("  • {}", app.reset_effect(*target)),
-                    Style::default().fg(Color::Gray),
-                )));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "This cannot be undone. Press y to confirm.",
-                Style::default()
-                    .fg(Color::Rgb(235, 80, 80))
-                    .add_modifier(Modifier::BOLD),
-            )));
         }
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    if let ResetStage::Confirm { targets } = stage {
+        draw_dialog(
+            frame,
+            frame.area(),
+            &app.reset_dialog(targets),
+            &app.dialog_focus,
+            &app.hits,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +525,28 @@ mod tests {
             view.reset = Some(ResetStage::Menu { row: entry });
         }
         press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn the_reset_confirmation_is_a_shared_dialog_where_enter_cancels() {
+        use crate::tui::mouse::testing::{click_text, has_button};
+        let mut app = lived_in();
+        choose(&mut app, 2);
+        assert!(has_button(&app, "Reset"), "the dialog's buttons");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            crate::session::list_in(&app.session_dir, None).len(),
+            1,
+            "Enter is on Cancel"
+        );
+        assert_eq!(
+            app.settings_view.as_ref().and_then(|v| v.reset.clone()),
+            Some(ResetStage::Menu { row: 0 })
+        );
+        choose_again(&mut app, 2);
+        click_text(&mut app, "[ Reset (y)");
+        assert!(crate::session::list_in(&app.session_dir, None).is_empty());
+        assert!(app.notice.contains("Reset: sessions"), "{}", app.notice);
     }
 
     #[test]

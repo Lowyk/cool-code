@@ -211,6 +211,8 @@ struct Settings {
     effort_always_animated: bool,
     /// Draw the interface light instead of dark.
     light_mode: bool,
+    /// Capture the mouse: click buttons and rows, scroll with the wheel.
+    mouse: bool,
     /// Warn when the active provider reports that its balance or usage limits are running low.
     usage_warnings: bool,
     /// Condense the older conversation into a summary before it fills the model's context window.
@@ -360,6 +362,7 @@ impl Default for Settings {
             workflows: false,
             effort_always_animated: false,
             light_mode: false,
+            mouse: true,
             usage_warnings: true,
             auto_compact: true,
             auto_guards: Vec::new(),
@@ -801,6 +804,15 @@ mod tests {
             Some("abc")
         );
         assert_eq!(back.disabled_mods, ["clock"]);
+    }
+
+    #[test]
+    fn the_mouse_is_on_unless_switched_off() {
+        let old: Settings = toml::from_str("permission_mode = \"plan\"\n").expect("parse");
+        assert!(old.mouse, "files from before the setting turn it on");
+        let off: Settings = toml::from_str("mouse = false\n").expect("parse");
+        assert!(!off.mouse);
+        assert!(Settings::default().mouse);
     }
 
     #[test]

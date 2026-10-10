@@ -63,12 +63,20 @@ pub(super) fn draw_providers(
         selected: view.row,
         filter: String::new(),
     };
+    let list_area = Rect::new(area.x, area.y, area.width, list_height);
     draw_list(
         frame,
-        Rect::new(area.x, area.y, area.width, list_height),
+        list_area,
         &items,
         &state,
         view.focus == Focus::Content,
+    );
+    crate::tui::widgets::list::record_list(
+        &app.hits,
+        list_area,
+        &items,
+        &state,
+        super::focus_key(view),
     );
     let details_y = area.y + list_height + 1;
     if details_y >= area.bottom() {
@@ -421,6 +429,32 @@ mod tests {
         assert!(app.settings_view.is_some());
         press(&mut app, KeyCode::Char('x'));
         press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.settings.providers.len(), 1);
+        assert_eq!(app.settings.providers[0].id, "groq");
+    }
+
+    #[test]
+    fn deleting_a_provider_asks_in_a_shared_dialog_where_enter_cancels() {
+        use crate::tui::mouse::testing::{click_text, drawn, has_button, rows};
+        let mut app = app_with(
+            vec![
+                profile("google", false, false),
+                profile("groq", false, false),
+            ],
+            Some("google"),
+        );
+        press(&mut app, KeyCode::Char('x'));
+        assert!(has_button(&app, "Delete"));
+        let shown = rows(&drawn(&app, 100, 30)).join("\n");
+        assert!(
+            shown.contains("Delete google and its saved API key?"),
+            "{shown}"
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.settings.providers.len(), 2);
+        assert_eq!(app.notice, "Deletion cancelled.");
+        press(&mut app, KeyCode::Char('x'));
+        click_text(&mut app, "[ Delete (y)");
         assert_eq!(app.settings.providers.len(), 1);
         assert_eq!(app.settings.providers[0].id, "groq");
     }

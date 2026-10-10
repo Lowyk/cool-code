@@ -2,6 +2,8 @@
 
 use crate::provider::ChatMessage;
 use crate::session::{self, Header, Session, StoredEntry};
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, hint_style, route, window};
+use crate::tui::mouse::{Click, Row as MouseRow, line_rect};
 use crate::tui::render::centered_rect;
 use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
 use anyhow::Result;
@@ -9,7 +11,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use std::path::PathBuf;
 
 /// How the app was asked to start from an earlier session.
@@ -212,8 +214,12 @@ impl App {
             return Ok(());
         };
         if picker.confirm_delete {
+            let pressed = match route(&delete_dialog(picker), &mut self.dialog_focus, key) {
+                Routed::Press(code) => code,
+                Routed::Moved | Routed::Other => return Ok(()),
+            };
             picker.confirm_delete = false;
-            if matches!(key.code, KeyCode::Char('y' | 'Y'))
+            if pressed == KeyCode::Char('y')
                 && let Some(header) = picker.sessions.get(picker.selected).cloned()
             {
                 match session::delete_in(&self.session_dir, &header.id) {
@@ -268,28 +274,50 @@ fn title_of(transcript: &[StoredEntry]) -> String {
     session::title_from(&prompts)
 }
 
+/// The question before a saved session is deleted.
+fn delete_dialog(picker: &SessionPicker) -> Dialog<'static> {
+    let title = picker
+        .sessions
+        .get(picker.selected)
+        .map(|header| header.title.clone())
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| "(untitled)".to_owned());
+    Dialog::confirm(
+        "session-delete",
+        "Delete session",
+        Tone::Danger,
+        vec![
+            Line::from("Delete this session?"),
+            Line::from(Span::styled(title, Style::default().fg(Color::Gray))),
+        ],
+        "Delete",
+        "Cancel",
+    )
+}
+
 pub(in crate::tui) fn draw_session_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
+    app: &App,
     picker: &SessionPicker,
 ) {
     let popup = centered_rect(80, 70, area);
     frame.render_widget(Clear, popup);
     let accent = crate::tui::theme::accent_bright();
-    let block = Block::default()
-        .title(if picker.all_folders {
-            " Resume · all folders "
+    let block = window(
+        if picker.all_folders {
+            "Resume · all folders"
         } else {
-            " Resume · this folder "
-        })
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+            "Resume · this folder"
+        },
+        Tone::Normal,
+    );
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.height < 3 {
         return;
     }
+    app.hits.wheel_arrows(popup);
     let now = now();
     let height = usize::from(inner.height.saturating_sub(2));
     let start = (picker.selected + 1).saturating_sub(height);
@@ -347,27 +375,31 @@ pub(in crate::tui) fn draw_session_picker(
             })
             .collect()
     };
+    let list = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
+    frame.render_widget(Paragraph::new(lines), list);
+    for (row, position) in (start..picker.sessions.len().min(start + height)).enumerate() {
+        app.hits.click(
+            line_rect(list, row),
+            Click::Row(MouseRow::new(position, picker.selected)),
+        );
+    }
     frame.render_widget(
-        Paragraph::new(lines),
-        Rect::new(inner.x, inner.y, inner.width, inner.height - 1),
-    );
-    let hint = if picker.confirm_delete {
-        Span::styled(
-            "Delete this session? y/n",
-            Style::default()
-                .fg(Color::Rgb(235, 80, 80))
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(
+        Paragraph::new(Span::styled(
             "↑↓ move   Enter resume   x delete   Tab all folders   Esc close",
-            Style::default().fg(Color::DarkGray),
-        )
-    };
-    frame.render_widget(
-        Paragraph::new(hint).alignment(Alignment::Center),
+            hint_style(),
+        ))
+        .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),
     );
+    if picker.confirm_delete {
+        draw_dialog(
+            frame,
+            area,
+            &delete_dialog(picker),
+            &app.dialog_focus,
+            &app.hits,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -673,6 +705,42 @@ mod tests {
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].title, "kept");
         assert_eq!(app.session_picker.as_ref().unwrap().sessions.len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_session_selects_it_and_a_second_click_resumes_it() {
+        use crate::tui::mouse::testing::click_text;
+        let mut app = app();
+        put(&app, &stored("s1-aaaa", &here(), 100, "older talk"));
+        put(&app, &stored("s2-bbbb", &here(), 200, "newer talk"));
+        app.start_from(Resume::Pick { all_folders: false });
+        click_text(&mut app, "older talk");
+        assert_eq!(app.session_picker.as_ref().map(|p| p.selected), Some(1));
+        click_text(&mut app, "older talk");
+        assert!(app.session_picker.is_none());
+        assert_eq!(app.session_id, "s1-aaaa");
+    }
+
+    #[test]
+    fn deleting_a_session_asks_in_a_shared_dialog_where_enter_cancels() {
+        use crate::tui::mouse::testing::{click_text, has_button};
+        let mut app = app();
+        put(&app, &stored("s1-aaaa", &here(), 100, "doomed"));
+        put(&app, &stored("s2-bbbb", &here(), 200, "kept"));
+        app.start_from(Resume::Pick { all_folders: false });
+        app.handle_session_picker_key(key(KeyCode::Down)).unwrap();
+        app.handle_session_picker_key(key(KeyCode::Char('x')))
+            .unwrap();
+        assert!(has_button(&app, "Delete"));
+        app.handle_session_picker_key(key(KeyCode::Enter)).unwrap();
+        assert_eq!(session::list_in(&app.session_dir, None).len(), 2);
+        assert!(app.session_picker.is_some(), "the picker stays open");
+        app.handle_session_picker_key(key(KeyCode::Char('x')))
+            .unwrap();
+        click_text(&mut app, "[ Delete (y)");
+        let left = session::list_in(&app.session_dir, None);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].title, "kept");
     }
 
     #[test]

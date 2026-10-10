@@ -54,7 +54,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/stream.rs` | Server-sent-event parsing for each adapter, stream events, and on-the-fly redaction restoring |
 | `src/endpoints.rs` | Provider models and limits endpoints: same-host URL validation, tolerant model-list parsing and merging, usage summaries, and the redirect-refusing fetch |
 | `src/stats.rs` | Opt-in usage recording to `~/.coolcode/stats.jsonl` (metadata only), the pure summary engine (totals, favorite model, streaks, peak hour, heatmap grid), and the fun size comparison |
-| `src/workflow.rs` | Workflows: the `Completer` seam (real providers or scripted replies in tests), the workflow sizes and the per-tier budgets derived from them, the subagent tool loop, the spawner (explorers in a pool bounded by *At once*, implementers one at a time), and the reviewer with its verdict parsing |
+| `src/workflow.rs` | Workflows: the `Completer` seam (real providers or scripted replies in tests), the workflow sizes and the per-tier budgets derived from them, the subagent tool loop, the spawner (explorers in a pool bounded by *At once*, implementers one at a time), the reviewer with its verdict parsing, and the progress events and per-subagent cancel flags behind the tracker (a cancel of the turn is copied onto every subagent's flag) |
 | `src/prompt.rs` | The built-in system prompt, assembled from the live tool registry, the permission mode and the environment (working folder, platform, date) |
 | `src/tools/readtools.rs` | The read-only exploration tools: glob-scoped listing, numbered ranged reads, scoped regex search with context, `git_diff` and `git_log` |
 | `src/effort_support.rs` | Which effort levels each model has, how a level becomes a request parameter per API (with a remembered fallback when a provider rejects it), and the lock on the workflow tiers |
@@ -62,7 +62,11 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/session.rs` | Saved conversations (opt-in): one file per session under `~/.coolcode/sessions/` (header line plus body, written atomically) |
 | `src/tools.rs` | Workspace tools, edit and create proposals |
 | `src/secrets.rs` | OS credential-store access |
-| `src/tui/mod.rs` | Terminal setup and the event loop |
+| `src/tui/mod.rs` | Terminal setup (mouse capture included, and undone on exit and in the panic hook) and the event loop |
+| `src/tui/dialog.rs` | The shared dialog: a wide, short, centered box sized to its text with buttons at the bottom right (←/→ or Tab, Enter, letter shortcuts, Esc for the safe one), plus the window frame and hint style every window uses |
+| `src/tui/approval.rs` | The approval card above the prompt: Auto mode's reason, a scrollable preview of the action and Allow / Deny buttons |
+| `src/tui/mouse.rs` | Mouse handling: while a frame is drawn, clickable and scrollable regions are recorded on the `App`, and clicks and wheel turns are turned into the keys those regions stand for |
+| `src/tui/tracker.rs` | The subagent tracker (Shift+↓): each subagent's status, progress and latest action from the workflow's progress events, and cancelling one subagent |
 | `src/tui/state.rs` | Application state, draft structs, and constants |
 | `src/tui/commands.rs` | Prompt submission and slash-command handling |
 | `src/tui/models.rs` | Model, provider, and chain resolution and activation |
@@ -79,7 +83,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/present.rs` | Puts each frame on the terminal: synchronized update, cursor hidden only while cells are written, nothing written for an unchanged frame |
 | `src/tui/stats_view.rs` | The `/stats` full-screen view: overview, models tab, range selection, and clearing history |
 | `src/tui/sessions.rs` | Saving the live conversation, resuming a saved one, and the `/resume` picker |
-| `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs`, `motion.rs` (text pulse and reduced-motion prompt) |
+| `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs` (the trust, privacy and Ultimate dialogs and the mode and provider pickers), `motion.rs` (text pulse and reduced-motion prompt) |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
 | `src/tui/wordmark.rs` | Welcome wordmark and gradient |
 | `src/tui/backdrop.rs` | The animated backdrop: one kind per theme (snow, stars with a nebula, plain stars, petals, bubbles, leaves, CRT noise, synthwave sun and grid), always drawn first and only into empty cells |

@@ -211,6 +211,13 @@ pub(super) fn draw_auto_mode(
         &state,
         view.focus == Focus::Content,
     );
+    crate::tui::widgets::list::record_list(
+        &app.hits,
+        list_area,
+        &items,
+        &state,
+        super::focus_key(view),
+    );
 }
 
 /// What a key in this section asks for.

@@ -1,8 +1,10 @@
+mod approval;
 mod backdrop;
 mod chatgpt_login;
 mod commands;
 pub(crate) mod context;
 mod creators;
+mod dialog;
 mod editing;
 mod effort;
 mod extensions;
@@ -11,6 +13,7 @@ mod image_setup;
 mod markdown;
 mod mentions;
 pub(crate) mod models;
+mod mouse;
 mod pickers;
 mod plugin_install;
 mod present;
@@ -23,6 +26,7 @@ mod slash;
 mod state;
 mod stats_view;
 mod theme;
+mod tracker;
 mod undo;
 mod usage_view;
 mod usage_warnings;
@@ -30,11 +34,15 @@ mod widgets;
 mod wordmark;
 
 use crate::policy::MODES;
-use crate::tui::render::draw;
-use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+use crate::tui::dialog::{Routed, route};
+use crate::tui::render::{draw, trust_dialog, ultimate_dialog};
+use crate::tui::state::App;
 use crate::{Effort, provider, read_settings, write_settings};
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -50,13 +58,27 @@ pub(crate) fn run(resume: Option<sessions::Resume>) -> Result<()> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
         previous(info);
     }));
     let mut terminal = setup_terminal()?;
     let result = run_app(&mut terminal, resume);
     restore_terminal(&mut terminal)?;
     result
+}
+
+/// Turns mouse reporting on or off, following the Mouse setting.
+fn capture_mouse(on: bool) -> Result<()> {
+    if on {
+        execute!(io::stdout(), EnableMouseCapture).context("turning on the mouse")
+    } else {
+        execute!(io::stdout(), DisableMouseCapture).context("turning off the mouse")
+    }
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
@@ -71,7 +93,12 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode().context("disabling terminal raw mode")?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).context("leaving alternate screen")?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+    .context("leaving alternate screen")?;
     terminal.show_cursor().context("restoring terminal cursor")
 }
 
@@ -87,7 +114,12 @@ fn run_app(
     app.start_mods();
     let animation_start = std::time::Instant::now();
     let mut presenter = present::Presenter::new();
+    let mut mouse_captured = false;
     while app.running {
+        if app.settings.mouse != mouse_captured {
+            capture_mouse(app.settings.mouse)?;
+            mouse_captured = app.settings.mouse;
+        }
         app.poll_response();
         let animation_tick = (animation_start.elapsed().as_millis() / 280) as usize;
         presenter.present(
@@ -114,23 +146,54 @@ fn run_app(
             continue;
         }
         // Everything already waiting is read at once, so a paste can be told apart from typing.
-        let mut presses = Vec::new();
+        let mut inputs = Vec::new();
         loop {
-            if let Event::Key(key) = event::read().context("reading terminal input")?
-                && key.kind == KeyEventKind::Press
-            {
-                presses.push(key);
+            match event::read().context("reading terminal input")? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => inputs.push(Input::Key(key)),
+                Event::Mouse(mouse)
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::Down(MouseButton::Left)
+                            | MouseEventKind::ScrollUp
+                            | MouseEventKind::ScrollDown
+                    ) =>
+                {
+                    inputs.push(Input::Mouse(mouse))
+                }
+                _ => {}
             }
-            if presses.len() >= MAX_BATCH
+            if inputs.len() >= MAX_BATCH
                 || !event::poll(Duration::ZERO).context("waiting for terminal input")?
             {
                 break;
             }
         }
-        handle_batch(&mut app, &presses)?;
+        handle_inputs(&mut app, &inputs)?;
     }
     app.stop_mods();
     Ok(())
+}
+
+enum Input {
+    Key(event::KeyEvent),
+    Mouse(event::MouseEvent),
+}
+
+/// Handles keys and mouse events in the order they arrived; runs of keys go through
+/// [`handle_batch`] together.
+fn handle_inputs(app: &mut App, inputs: &[Input]) -> Result<()> {
+    let mut presses = Vec::new();
+    for input in inputs {
+        match input {
+            Input::Key(key) => presses.push(*key),
+            Input::Mouse(mouse) => {
+                handle_batch(app, &presses)?;
+                presses.clear();
+                mouse::handle_mouse(app, *mouse)?;
+            }
+        }
+    }
+    handle_batch(app, &presses)
 }
 
 impl state::App {
@@ -144,6 +207,7 @@ impl state::App {
             || self.image_setup.is_some()
             || self.wizard.is_some()
             || self.tool_approval.is_some()
+            || self.tracker.open
             || self.confirm_ultimate
             || self.privacy_confirmation.is_some()
             || self.chain_form.is_some()
@@ -183,14 +247,10 @@ fn handle_batch(app: &mut state::App, presses: &[event::KeyEvent]) -> Result<()>
 /// Routes one key press to whichever overlay or screen currently has focus.
 fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     if app.trust_prompt {
-        match key.code {
-            KeyCode::Left => app.trust_choice = 0,
-            KeyCode::Right => app.trust_choice = 1,
-            KeyCode::Char('y' | 'Y') => app.set_workspace_trusted(true)?,
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => app.set_workspace_trusted(false)?,
-            KeyCode::Enter if app.trust_choice == 0 => app.set_workspace_trusted(true)?,
-            KeyCode::Enter => app.set_workspace_trusted(false)?,
-            _ => {}
+        match route(&trust_dialog(), &mut app.dialog_focus, key) {
+            Routed::Press(KeyCode::Char('y')) => app.set_workspace_trusted(true)?,
+            Routed::Press(_) => app.set_workspace_trusted(false)?,
+            Routed::Moved | Routed::Other => {}
         }
     } else if app.chatgpt_login.is_some() {
         app.handle_chatgpt_login_key(key);
@@ -203,108 +263,23 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else if app.wizard.is_some() {
         app.handle_setup_key(key)?;
     } else if app.tool_approval.is_some() {
-        match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-                if let Some(approval) = app.tool_approval.take() {
-                    let _ = approval.response.send(true);
-                    app.transcript.push(TranscriptEntry {
-                        kind: TranscriptKind::CommandOutput,
-                        text: format!("Approved: {}", approval.title),
-                    });
-                }
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                if let Some(approval) = app.tool_approval.take() {
-                    let _ = approval.response.send(false);
-                    app.transcript.push(TranscriptEntry {
-                        kind: TranscriptKind::CommandOutput,
-                        text: format!("Declined: {}", approval.title),
-                    });
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.approval_scroll = app.approval_scroll.saturating_add(1)
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.approval_scroll = app.approval_scroll.saturating_sub(1)
-            }
-            _ => {}
-        }
+        app.handle_approval_key(key);
+    } else if app.tracker.open {
+        app.handle_tracker_key(key);
     } else if app.confirm_ultimate {
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
+        match route(&ultimate_dialog(), &mut app.dialog_focus, key) {
+            Routed::Press(KeyCode::Char('y')) => {
                 app.settings.ultimate_acknowledged = true;
                 app.apply_effort(Effort::Ultimate)?;
             }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+            Routed::Press(_) => {
                 app.confirm_ultimate = false;
                 app.notice = "Ultimate was not selected.".to_owned();
             }
-            _ => {}
+            Routed::Moved | Routed::Other => {}
         }
     } else if app.privacy_confirmation.is_some() {
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
-                let prompt = app
-                    .privacy_confirmation
-                    .as_ref()
-                    .expect("privacy confirmation open");
-                let has_image = app
-                    .pending_privacy_message
-                    .as_ref()
-                    .is_some_and(provider::message_contains_image);
-                if has_image && !prompt.allow_images {
-                    app.notice =
-                        "Image contents remain blocked; check the consent box to include them."
-                            .to_owned();
-                    return Ok(());
-                }
-                let prompt = app
-                    .privacy_confirmation
-                    .take()
-                    .expect("privacy confirmation open");
-                let risk = prompt.risk;
-                let mut changed = false;
-                if !app
-                    .settings
-                    .privacy_acknowledged
-                    .iter()
-                    .any(|ack| ack == &risk)
-                {
-                    app.settings.privacy_acknowledged.push(risk.clone());
-                    changed = true;
-                }
-                if prompt.allow_images
-                    && !app
-                        .settings
-                        .privacy_image_acknowledged
-                        .iter()
-                        .any(|ack| ack == &risk)
-                {
-                    app.settings.privacy_image_acknowledged.push(risk);
-                    changed = true;
-                }
-                if changed {
-                    write_settings(&app.settings)?;
-                }
-                if let Some(message) = app.pending_privacy_message.take() {
-                    app.dispatch_user_message(message)?;
-                }
-            }
-            KeyCode::Char('i' | 'I' | ' ') | KeyCode::Left | KeyCode::Right => {
-                let prompt = app
-                    .privacy_confirmation
-                    .as_mut()
-                    .expect("privacy confirmation open");
-                prompt.allow_images = !prompt.allow_images;
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                app.privacy_confirmation = None;
-                app.pending_privacy_message = None;
-                app.notice = "Request cancelled; nothing was sent.".to_owned();
-            }
-            _ => {}
-        }
+        app.handle_privacy_confirmation_key(key)?;
     } else if app.chain_form.is_some() {
         app.handle_chain_form(key)?;
     } else if app.provider_form.is_some() {
@@ -361,6 +336,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let slash = app.slash.is_open() && app.mention.is_none();
         match key.code {
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.open_tracker(),
             KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
             KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
@@ -401,6 +377,86 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         app.refresh_popups();
     }
     Ok(())
+}
+
+impl App {
+    fn handle_privacy_confirmation_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let Some(prompt) = self.privacy_confirmation.as_ref() else {
+            return Ok(());
+        };
+        let has_image = self
+            .pending_privacy_message
+            .as_ref()
+            .is_some_and(provider::message_contains_image);
+        let dialog = render::privacy_dialog(prompt, has_image);
+        match route(&dialog, &mut self.dialog_focus, key) {
+            Routed::Press(KeyCode::Char('y')) => self.acknowledge_privacy()?,
+            Routed::Press(KeyCode::Char('i')) => self.toggle_privacy_images(),
+            Routed::Press(_) => {
+                self.privacy_confirmation = None;
+                self.pending_privacy_message = None;
+                self.notice = "Request cancelled; nothing was sent.".to_owned();
+            }
+            Routed::Other if key.code == KeyCode::Char(' ') => self.toggle_privacy_images(),
+            Routed::Moved | Routed::Other => {}
+        }
+        Ok(())
+    }
+
+    fn toggle_privacy_images(&mut self) {
+        if let Some(prompt) = self.privacy_confirmation.as_mut() {
+            prompt.allow_images = !prompt.allow_images;
+        }
+    }
+
+    /// Y in the privacy check: records the acknowledgement (and the image consent, if ticked)
+    /// and sends the waiting message. An attached image needs the consent first.
+    fn acknowledge_privacy(&mut self) -> Result<()> {
+        let Some(prompt) = self.privacy_confirmation.as_ref() else {
+            return Ok(());
+        };
+        let has_image = self
+            .pending_privacy_message
+            .as_ref()
+            .is_some_and(provider::message_contains_image);
+        if has_image && !prompt.allow_images {
+            self.notice =
+                "Image contents remain blocked; check the consent box to include them.".to_owned();
+            return Ok(());
+        }
+        let prompt = self
+            .privacy_confirmation
+            .take()
+            .expect("privacy confirmation open");
+        let risk = prompt.risk;
+        let mut changed = false;
+        if !self
+            .settings
+            .privacy_acknowledged
+            .iter()
+            .any(|ack| ack == &risk)
+        {
+            self.settings.privacy_acknowledged.push(risk.clone());
+            changed = true;
+        }
+        if prompt.allow_images
+            && !self
+                .settings
+                .privacy_image_acknowledged
+                .iter()
+                .any(|ack| ack == &risk)
+        {
+            self.settings.privacy_image_acknowledged.push(risk);
+            changed = true;
+        }
+        if changed {
+            write_settings(&self.settings)?;
+        }
+        if let Some(message) = self.pending_privacy_message.take() {
+            self.dispatch_user_message(message)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
