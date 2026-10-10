@@ -499,16 +499,23 @@ impl Staged {
     /// Moves the plugin into place. Refuses to replace anything.
     pub(crate) fn install(self) -> Result<PathBuf> {
         if std::fs::symlink_metadata(&self.target).is_ok() {
-            let _ = std::fs::remove_dir_all(&self.staging);
             bail!("a plugin named {} is already installed", self.manifest.name);
         }
         std::fs::rename(&self.staging, &self.target)
             .with_context(|| format!("moving the plugin to {}", self.target.display()))?;
-        Ok(self.target)
+        Ok(self.target.clone())
     }
 
     /// Deletes the staging folder.
     pub(crate) fn discard(self) {
+        drop(self);
+    }
+}
+
+/// A plugin that was not installed (the user said no, or never answered) leaves nothing
+/// behind. After an install the staging folder no longer exists, so this does nothing.
+impl Drop for Staged {
+    fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.staging);
     }
 }
@@ -704,6 +711,15 @@ events = ["turn_finished", "tool_started"]
         staged.discard();
         assert!(!staging.exists(), "saying no leaves nothing behind");
         assert!(!plugins.join("reviewer").exists());
+    }
+
+    #[test]
+    fn a_staged_plugin_that_is_never_answered_leaves_nothing_behind() {
+        let dirs = dirs();
+        let staged = stage(&dirs, &Source::Local(source_folder())).expect("staged");
+        let staging = staged.staging.clone();
+        drop(staged);
+        assert!(!staging.exists());
     }
 
     #[test]
