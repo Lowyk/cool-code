@@ -489,6 +489,14 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
+    // Each running mod's own status text, already cleaned and cut short.
+    for text in app.extensions.mods.statuses().into_iter().take(3) {
+        status_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+        status_spans.push(Span::styled(
+            text,
+            Style::default().fg(crate::tui::theme::accent_soft()),
+        ));
+    }
     let status = Line::from(status_spans);
     // The one-line message about what just happened sits above the status line.
     frame.render_widget(
@@ -544,6 +552,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     if let Some(prompt) = app.outside_prompt.as_ref() {
         crate::tui::mentions::draw_outside_prompt(frame, area, prompt);
     }
+    crate::tui::plugin_install::draw_plugin_review(frame, area, app);
     if let Some(setup) = app.image_setup.as_ref() {
         crate::tui::image_setup::draw_image_setup(frame, area, setup);
     }
