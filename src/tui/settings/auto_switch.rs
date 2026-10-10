@@ -57,13 +57,9 @@ pub(super) fn draw_auto_switch(
         selected: view.row,
         filter: String::new(),
     };
-    draw_list(
-        frame,
-        area,
-        &chain_items(&app.settings),
-        &state,
-        view.focus == Focus::Content,
-    );
+    let items = chain_items(&app.settings);
+    draw_list(frame, area, &items, &state, view.focus == Focus::Content);
+    crate::tui::widgets::list::record_list(&app.hits, area, &items, &state, super::focus_key(view));
 }
 
 impl App {

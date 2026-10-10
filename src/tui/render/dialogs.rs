@@ -1,11 +1,12 @@
 use crate::policy::MODES;
-use crate::tui::dialog::{Button, Dialog, Tone, draw_dialog};
+use crate::tui::dialog::{Button, Dialog, Tone, draw_dialog, hint_style, window};
+use crate::tui::mouse::{Click, Row as MouseRow, record_wrapped};
 use crate::tui::render::{centered_rect, mode_span};
 use crate::tui::state::{App, PrivacyPrompt};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Padding, Paragraph, Wrap};
 
 /// The one-time privacy acknowledgement before a request to a flagged provider. `i` (or Space)
 /// toggles the separate consent for images.
@@ -135,19 +136,21 @@ pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: R
         .expect("model provider picker open");
     let popup = centered_rect(62, (choices.len() as u16 * 3 + 8).min(70), area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Choose provider ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = window("Choose provider", Tone::Normal).padding(Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    app.hits.wheel_arrows(popup);
     let model = app.pending_model.as_deref().unwrap_or("model");
     let mut lines = vec![
         Line::from(format!("`{model}` is available from multiple providers:")),
         Line::from(""),
     ];
+    let mut clicks = Vec::new();
     for (index, (provider_index, name, _model_id)) in choices.iter().enumerate() {
+        clicks.push((
+            lines.len(),
+            Click::Row(MouseRow::new(index, app.model_choice_index)),
+        ));
         let profile = &app.settings.providers[*provider_index];
         lines.push(Line::from(vec![
             Span::styled(
@@ -168,43 +171,81 @@ pub(super) fn draw_model_provider_picker(frame: &mut ratatui::Frame<'_>, area: R
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "↑/↓ choose · Enter select · Esc cancel",
-        Style::default().fg(Color::DarkGray),
+        hint_style(),
     )));
+    record_wrapped(&app.hits, inner, &lines, &clicks);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
+/// The gap between two modes in the mode picker.
+const MODE_GAP: &str = "   ·   ";
+
 pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    use unicode_width::UnicodeWidthStr as _;
     let popup = centered_rect(72, 34, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Permission mode ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent_bright()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = window("Permission mode", Tone::Normal).padding(Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let auto_unusable = !app.settings.auto_ready();
-    let options = MODES.iter().enumerate().map(|(index, (_, mode))| {
-        let mut span = mode_span(mode, index == app.mode_index);
-        if *mode == "auto" && auto_unusable {
-            span.style = Style::default().fg(Color::DarkGray);
+    let options = MODES
+        .iter()
+        .enumerate()
+        .map(|(index, (_, mode))| {
+            let mut span = mode_span(mode, index == app.mode_index);
+            if *mode == "auto" && auto_unusable {
+                span.style = Style::default().fg(Color::DarkGray);
+            }
+            if index == app.mode_index {
+                span.content = format!("[ {} ]", span.content).into();
+            }
+            span
+        })
+        .collect::<Vec<_>>();
+    // The modes are packed into as few centered rows as fit, so each one's place is known.
+    let mut rows: Vec<Vec<(usize, Span<'static>)>> = vec![Vec::new()];
+    let mut used = 0usize;
+    let gap = MODE_GAP.width();
+    for (index, option) in options.into_iter().enumerate() {
+        let width = option.content.width();
+        let row = rows.last_mut().expect("a row");
+        if !row.is_empty() && used + gap + width > usize::from(inner.width) {
+            rows.push(vec![(index, option)]);
+            used = width;
+        } else {
+            used += if row.is_empty() { width } else { gap + width };
+            row.push((index, option));
         }
-        if index == app.mode_index {
-            span.content = format!("[ {} ]", span.content).into();
+    }
+    let mut lines = vec![Line::from("")];
+    for (row_index, row) in rows.iter().enumerate() {
+        let width = row
+            .iter()
+            .map(|(_, span)| span.content.width())
+            .sum::<usize>()
+            + gap * row.len().saturating_sub(1);
+        let mut x = inner.x + inner.width.saturating_sub(width as u16) / 2;
+        let y = inner.y + 1 + row_index as u16;
+        let mut spans = Vec::new();
+        for (position, (index, span)) in row.iter().enumerate() {
+            if position > 0 {
+                spans.push(Span::raw(MODE_GAP));
+                x += gap as u16;
+            }
+            let span_width = span.content.width() as u16;
+            if y < inner.bottom() {
+                app.hits.click(
+                    Rect::new(x, y, span_width.min(inner.right().saturating_sub(x)), 1),
+                    Click::Row(MouseRow::new(*index, app.mode_index).horizontal()),
+                );
+            }
+            x += span_width;
+            spans.push(span.clone());
         }
-        span
-    });
-    let mut spans = Vec::new();
-    for (index, option) in options.enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("   ·   "));
-        }
-        spans.push(option);
+        lines.push(Line::from(spans));
     }
     let selected = MODES[app.mode_index].1;
-    let lines = vec![
-        Line::from(""),
-        Line::from(spans),
+    lines.extend([
         Line::from(""),
         Line::from(vec![
             Span::styled("Current: ", Style::default().fg(Color::Gray)),
@@ -212,15 +253,10 @@ pub(super) fn draw_mode_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: 
         ]),
         Line::from(Span::styled(
             "←/→ browse   Enter select   Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            hint_style(),
         )),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
+    ]);
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
 }
 
 /// The one-time warning before the Ultimate effort is first chosen.

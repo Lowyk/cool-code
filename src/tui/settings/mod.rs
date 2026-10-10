@@ -10,7 +10,8 @@ mod reset;
 pub(super) mod sync;
 mod workflow_size;
 
-use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, route};
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, hint_style, route, window};
+use crate::tui::mouse::{Click, Hits, Row as MouseRow, line_rect};
 use crate::tui::settings::appearance::draw_appearance;
 use crate::tui::settings::auto_mode::draw_auto_mode;
 use crate::tui::settings::auto_switch::draw_auto_switch;
@@ -28,7 +29,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum Section {
@@ -205,22 +206,21 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         return;
     };
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Settings ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel_alt()));
+    let block = window("Settings", Tone::Normal)
+        .style(Style::default().bg(crate::tui::theme::panel_alt()))
+        .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height < 3 || inner.width < 10 {
         return;
     }
+    app.hits.wheel_arrows(area);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
     let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
 
     let content = if inner.width >= COLLAPSE_BELOW_WIDTH {
         let sidebar = Rect::new(body.x, body.y, SIDEBAR_WIDTH, body.height);
-        draw_sidebar(frame, sidebar, view);
+        draw_sidebar(frame, sidebar, view, &app.hits);
         Rect::new(
             body.x + SIDEBAR_WIDTH + 2,
             body.y,
@@ -269,7 +269,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
             Style::default().fg(Color::Rgb(240, 210, 90)),
         )
     } else {
-        Span::styled(footer_hint(view), Style::default().fg(Color::DarkGray))
+        Span::styled(footer_hint(view), hint_style())
     };
     frame.render_widget(Paragraph::new(footer_line), footer);
     if view.confirm_delete {
@@ -283,7 +283,37 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
     }
 }
 
-fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView) {
+/// A click on row `index` of a section that keeps its highlighted row in `view.row`: it moves
+/// the keyboard focus to the section first if the sidebar has it.
+pub(in crate::tui) fn content_row(view: &SettingsView, index: usize) -> Click {
+    Click::Row(MouseRow::new(index, view.row).focus(focus_key(view)))
+}
+
+/// The key that moves the keyboard focus from the sidebar to the section, while the sidebar
+/// has it.
+pub(in crate::tui) fn focus_key(view: &SettingsView) -> Option<KeyCode> {
+    (view.focus == Focus::Sidebar).then_some(KeyCode::Right)
+}
+
+fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView, hits: &Hits) {
+    // While a sub-screen is open Esc belongs to it, so the sidebar cannot take the focus back.
+    let reachable = view.reset.is_none()
+        && view.workflow_chooser.is_none()
+        && view.model_edit.is_none()
+        && view.privacy_sub.is_none()
+        && !view.confirm_delete;
+    if reachable {
+        for (index, _) in Section::ALL.iter().enumerate() {
+            hits.click(
+                line_rect(area, index),
+                Click::Row(
+                    MouseRow::new(index, view.section.index())
+                        .activate(Some(KeyCode::Right))
+                        .focus((view.focus == Focus::Content).then_some(KeyCode::Esc)),
+                ),
+            );
+        }
+    }
     let lines = Section::ALL
         .iter()
         .map(|section| {
@@ -528,6 +558,7 @@ mod tests {
             "Global CLAUDE.md",
             "Dynamic workflows",
             "Usage warnings",
+            "Mouse",
             "Reset",
         ] {
             assert!(
@@ -566,6 +597,28 @@ mod tests {
             "dropped out of Ultimate"
         );
         assert!(app.notice.contains("locked"), "{}", app.notice);
+    }
+
+    #[test]
+    fn the_mouse_row_switches_mouse_capture_and_is_saved() {
+        let mut app = app();
+        assert!(app.settings.mouse, "on by default");
+        app.open_settings(Section::General);
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..14 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        assert!(screen(&app, 100, 30).contains("Mouse"));
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("off");
+        assert!(!app.settings.mouse);
+        assert!(!crate::read_settings().expect("saved").mouse);
+        assert!(app.notice.contains("Shift"), "{}", app.notice);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("on");
+        assert!(app.settings.mouse);
     }
 
     #[test]
