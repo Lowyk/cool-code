@@ -708,6 +708,20 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_session_selects_it_and_a_second_click_resumes_it() {
+        use crate::tui::mouse::testing::click_text;
+        let mut app = app();
+        put(&app, &stored("s1-aaaa", &here(), 100, "older talk"));
+        put(&app, &stored("s2-bbbb", &here(), 200, "newer talk"));
+        app.start_from(Resume::Pick { all_folders: false });
+        click_text(&mut app, "older talk");
+        assert_eq!(app.session_picker.as_ref().map(|p| p.selected), Some(1));
+        click_text(&mut app, "older talk");
+        assert!(app.session_picker.is_none());
+        assert_eq!(app.session_id, "s1-aaaa");
+    }
+
+    #[test]
     fn deleting_a_session_asks_in_a_shared_dialog_where_enter_cancels() {
         use crate::tui::mouse::testing::{click_text, has_button};
         let mut app = app();
