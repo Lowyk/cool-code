@@ -276,7 +276,28 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else if app.provider_form.is_some() {
         app.handle_provider_form(key)?;
     } else if app.model_choices.is_some() {
-        handle_model_choice_key(app, key)?;
+        let choices = app.model_choices.as_ref().expect("model choices open");
+        match key.code {
+            KeyCode::Up | KeyCode::Left => {
+                app.model_choice_index = app.model_choice_index.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Right => {
+                app.model_choice_index =
+                    (app.model_choice_index + 1).min(choices.len().saturating_sub(1))
+            }
+            KeyCode::Enter => {
+                if let Some((provider_index, _, model)) =
+                    choices.get(app.model_choice_index).cloned()
+                {
+                    app.activate_model(provider_index, &model)?;
+                }
+            }
+            KeyCode::Esc => {
+                app.model_choices = None;
+                app.pending_model = None;
+            }
+            _ => {}
+        }
     } else if app.session_picker.is_some() {
         app.handle_session_picker_key(key)?;
     } else if app.model_picker.is_some() {
@@ -298,125 +319,6 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else if app.settings_view.is_some() {
         app.handle_settings_view_key(key)?;
     } else {
-        handle_prompt_key(app, key)?;
-    }
-    Ok(())
-}
-
-impl App {
-    fn handle_privacy_confirmation_key(&mut self, key: event::KeyEvent) -> Result<()> {
-        let Some(prompt) = self.privacy_confirmation.as_ref() else {
-            return Ok(());
-        };
-        let has_image = self
-            .pending_privacy_message
-            .as_ref()
-            .is_some_and(provider::message_contains_image);
-        let dialog = render::privacy_dialog(prompt, has_image);
-        match route(&dialog, &mut self.dialog_focus, key) {
-            Routed::Press(KeyCode::Char('y')) => self.acknowledge_privacy()?,
-            Routed::Press(KeyCode::Char('i')) => self.toggle_privacy_images(),
-            Routed::Press(_) => {
-                self.privacy_confirmation = None;
-                self.pending_privacy_message = None;
-                self.notice = "Request cancelled; nothing was sent.".to_owned();
-            }
-            Routed::Other if key.code == KeyCode::Char(' ') => self.toggle_privacy_images(),
-            Routed::Moved | Routed::Other => {}
-        }
-        Ok(())
-    }
-
-    fn toggle_privacy_images(&mut self) {
-        if let Some(prompt) = self.privacy_confirmation.as_mut() {
-            prompt.allow_images = !prompt.allow_images;
-        }
-    }
-
-    fn acknowledge_privacy(&mut self) -> Result<()> {
-        let app = self;
-        {
-            {
-                let prompt = app
-                    .privacy_confirmation
-                    .as_ref()
-                    .expect("privacy confirmation open");
-                let has_image = app
-                    .pending_privacy_message
-                    .as_ref()
-                    .is_some_and(provider::message_contains_image);
-                if has_image && !prompt.allow_images {
-                    app.notice =
-                        "Image contents remain blocked; check the consent box to include them."
-                            .to_owned();
-                    return Ok(());
-                }
-                let prompt = app
-                    .privacy_confirmation
-                    .take()
-                    .expect("privacy confirmation open");
-                let risk = prompt.risk;
-                let mut changed = false;
-                if !app
-                    .settings
-                    .privacy_acknowledged
-                    .iter()
-                    .any(|ack| ack == &risk)
-                {
-                    app.settings.privacy_acknowledged.push(risk.clone());
-                    changed = true;
-                }
-                if prompt.allow_images
-                    && !app
-                        .settings
-                        .privacy_image_acknowledged
-                        .iter()
-                        .any(|ack| ack == &risk)
-                {
-                    app.settings.privacy_image_acknowledged.push(risk);
-                    changed = true;
-                }
-                if changed {
-                    write_settings(&app.settings)?;
-                }
-                if let Some(message) = app.pending_privacy_message.take() {
-                    app.dispatch_user_message(message)?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-fn handle_model_choice_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
-    let Some(choices) = app.model_choices.as_ref() else {
-        return Ok(());
-    };
-    match key.code {
-        KeyCode::Up | KeyCode::Left => {
-            app.model_choice_index = app.model_choice_index.saturating_sub(1)
-        }
-        KeyCode::Down | KeyCode::Right => {
-            app.model_choice_index =
-                (app.model_choice_index + 1).min(choices.len().saturating_sub(1))
-        }
-        KeyCode::Enter => {
-            if let Some((provider_index, _, model)) = choices.get(app.model_choice_index).cloned() {
-                app.activate_model(provider_index, &model)?;
-            }
-        }
-        KeyCode::Esc => {
-            app.model_choices = None;
-            app.pending_model = None;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-/// Keys while nothing is open: typing, sending, the `@` suggestions and scrolling.
-fn handle_prompt_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
-    {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.open_tracker(),
@@ -458,6 +360,86 @@ fn handle_prompt_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         app.refresh_mentions();
     }
     Ok(())
+}
+
+impl App {
+    fn handle_privacy_confirmation_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let Some(prompt) = self.privacy_confirmation.as_ref() else {
+            return Ok(());
+        };
+        let has_image = self
+            .pending_privacy_message
+            .as_ref()
+            .is_some_and(provider::message_contains_image);
+        let dialog = render::privacy_dialog(prompt, has_image);
+        match route(&dialog, &mut self.dialog_focus, key) {
+            Routed::Press(KeyCode::Char('y')) => self.acknowledge_privacy()?,
+            Routed::Press(KeyCode::Char('i')) => self.toggle_privacy_images(),
+            Routed::Press(_) => {
+                self.privacy_confirmation = None;
+                self.pending_privacy_message = None;
+                self.notice = "Request cancelled; nothing was sent.".to_owned();
+            }
+            Routed::Other if key.code == KeyCode::Char(' ') => self.toggle_privacy_images(),
+            Routed::Moved | Routed::Other => {}
+        }
+        Ok(())
+    }
+
+    fn toggle_privacy_images(&mut self) {
+        if let Some(prompt) = self.privacy_confirmation.as_mut() {
+            prompt.allow_images = !prompt.allow_images;
+        }
+    }
+
+    /// Y in the privacy check: records the acknowledgement (and the image consent, if ticked)
+    /// and sends the waiting message. An attached image needs the consent first.
+    fn acknowledge_privacy(&mut self) -> Result<()> {
+        let Some(prompt) = self.privacy_confirmation.as_ref() else {
+            return Ok(());
+        };
+        let has_image = self
+            .pending_privacy_message
+            .as_ref()
+            .is_some_and(provider::message_contains_image);
+        if has_image && !prompt.allow_images {
+            self.notice =
+                "Image contents remain blocked; check the consent box to include them.".to_owned();
+            return Ok(());
+        }
+        let prompt = self
+            .privacy_confirmation
+            .take()
+            .expect("privacy confirmation open");
+        let risk = prompt.risk;
+        let mut changed = false;
+        if !self
+            .settings
+            .privacy_acknowledged
+            .iter()
+            .any(|ack| ack == &risk)
+        {
+            self.settings.privacy_acknowledged.push(risk.clone());
+            changed = true;
+        }
+        if prompt.allow_images
+            && !self
+                .settings
+                .privacy_image_acknowledged
+                .iter()
+                .any(|ack| ack == &risk)
+        {
+            self.settings.privacy_image_acknowledged.push(risk);
+            changed = true;
+        }
+        if changed {
+            write_settings(&self.settings)?;
+        }
+        if let Some(message) = self.pending_privacy_message.take() {
+            self.dispatch_user_message(message)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
