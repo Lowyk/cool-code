@@ -27,9 +27,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 /// Something that can answer a request for the next model reply. Production uses the real
 /// providers; tests script the replies.
@@ -292,7 +292,53 @@ struct Report {
     text: String,
     /// It edited files or ran a command.
     changed: bool,
+    /// The whole turn was cancelled.
     cancelled: bool,
+    outcome: SubagentOutcome,
+}
+
+/// The report of a subagent the user cancelled on its own; the turn goes on without it.
+const CANCELLED_BY_USER: &str = "The subagent was cancelled by the user.";
+
+/// What one subagent is doing, for the tracker in the interface. `id` tells the subagents of a
+/// turn apart.
+pub(crate) enum SubagentEvent {
+    /// It has its task and waits for a free place. Setting `cancel` stops this subagent only.
+    Queued {
+        id: usize,
+        name: String,
+        kind: &'static str,
+        task: String,
+        cancel: Arc<AtomicBool>,
+    },
+    Started {
+        id: usize,
+    },
+    /// It asks the model for its next step; rounds count from 1.
+    Round {
+        id: usize,
+        round: usize,
+    },
+    /// It used a tool; `calls` counts its tool calls so far.
+    Action {
+        id: usize,
+        calls: usize,
+        action: String,
+    },
+    Finished {
+        id: usize,
+        outcome: SubagentOutcome,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubagentOutcome {
+    /// It answered.
+    Done,
+    /// It stopped on an error, or ran out of steps or tool calls before answering.
+    Failed,
+    /// The user cancelled it, or the whole turn.
+    Cancelled,
 }
 
 /// The delegation state of one turn.
@@ -302,6 +348,78 @@ pub(crate) struct Run {
     reviews_done: usize,
     /// Something was changed since the last review.
     changed: bool,
+    /// Subagents announced to the interface so far, which numbers the next one.
+    tracked: usize,
+}
+
+/// Copies a cancel of the whole turn onto each subagent's own flag until `done`, so it reaches
+/// the requests and commands that only watch their own subagent's flag.
+fn forward_cancel(turn: &AtomicBool, flags: &[Arc<AtomicBool>], done: &AtomicBool) {
+    while !done.load(Ordering::SeqCst) {
+        if turn.load(Ordering::Relaxed) {
+            for flag in flags {
+                flag.store(true, Ordering::SeqCst);
+            }
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Where a subagent reports to and what stops it.
+#[derive(Clone, Copy)]
+struct Tracking<'a> {
+    id: usize,
+    events: &'a Sender<PendingEvent>,
+    /// Set when the whole turn is cancelled.
+    turn: &'a AtomicBool,
+    /// Set when this subagent is cancelled, by the user or by a cancel of the turn.
+    own: &'a AtomicBool,
+}
+
+impl Tracking<'_> {
+    fn send(&self, event: SubagentEvent) {
+        let _ = self.events.send(PendingEvent::Subagent(event));
+    }
+
+    /// The report when a stop was asked for: a cancelled turn ends everything, while a subagent
+    /// cancelled on its own leaves a note and the turn goes on.
+    fn stopped(&self, changed: bool) -> Option<Report> {
+        if self.turn.load(Ordering::Relaxed) {
+            Some(Report {
+                text: "cancelled".to_owned(),
+                changed,
+                cancelled: true,
+                outcome: SubagentOutcome::Cancelled,
+            })
+        } else if self.own.load(Ordering::Relaxed) {
+            Some(Report {
+                text: CANCELLED_BY_USER.to_owned(),
+                changed,
+                cancelled: false,
+                outcome: SubagentOutcome::Cancelled,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Runs a subagent and tells the interface how it ended, panics included.
+fn run_tracked(
+    completer: &dyn Completer,
+    settings: &Settings,
+    root: &Path,
+    task: &Task,
+    budget: &Budget,
+    tracking: Tracking<'_>,
+) -> Report {
+    let report = guarded_run(|| run_subagent(completer, settings, root, task, budget, tracking));
+    tracking.send(SubagentEvent::Finished {
+        id: tracking.id,
+        outcome: report.outcome,
+    });
+    report
 }
 
 /// What the reviewer concluded.
@@ -320,6 +438,7 @@ impl Run {
             runs_used: 0,
             reviews_done: 0,
             changed: false,
+            tracked: 0,
         }
     }
 
@@ -371,6 +490,27 @@ impl Run {
         )));
         let sub_settings = settings.for_subagent();
         let mut reports: Vec<Option<Report>> = tasks.iter().map(|_| None).collect();
+        let first = self.tracked;
+        self.tracked += tasks.len();
+        let flags = tasks
+            .iter()
+            .map(|_| Arc::new(AtomicBool::new(false)))
+            .collect::<Vec<_>>();
+        for (index, task) in tasks.iter().enumerate() {
+            let _ = events.send(PendingEvent::Subagent(SubagentEvent::Queued {
+                id: first + index,
+                name: task.name.clone(),
+                kind: task.role.word(),
+                task: task.instructions.clone(),
+                cancel: flags[index].clone(),
+            }));
+        }
+        let tracking = |index: usize| Tracking {
+            id: first + index,
+            events,
+            turn: cancel,
+            own: &flags[index],
+        };
         // Explorers only read, so they run side by side: a pool of at most `at_once` workers,
         // each taking the next waiting explorer until none are left.
         let explorers = tasks
@@ -380,47 +520,67 @@ impl Run {
             .collect::<Vec<_>>();
         let next = AtomicUsize::new(0);
         let finished = Mutex::new(Vec::new());
+        let done = AtomicBool::new(false);
         std::thread::scope(|scope| {
-            for _ in 0..budget.at_once.min(explorers.len()) {
-                let (settings, events) = (&sub_settings, events.clone());
-                let (explorers, next, finished) = (&explorers, &next, &finished);
-                scope.spawn(move || {
-                    while let Some((index, task)) =
-                        explorers.get(next.fetch_add(1, Ordering::SeqCst)).copied()
-                    {
-                        let report = guarded_run(|| {
-                            run_subagent(completer, settings, root, task, &budget, &events, cancel)
-                        });
-                        finished
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .push((index, report));
-                    }
-                });
+            scope.spawn(|| forward_cancel(cancel, &flags, &done));
+            let workers = (0..budget.at_once.min(explorers.len()))
+                .map(|_| {
+                    let settings = &sub_settings;
+                    let (explorers, next, finished) = (&explorers, &next, &finished);
+                    let tracking = &tracking;
+                    scope.spawn(move || {
+                        while let Some((index, task)) =
+                            explorers.get(next.fetch_add(1, Ordering::SeqCst)).copied()
+                        {
+                            let report = run_tracked(
+                                completer,
+                                settings,
+                                root,
+                                task,
+                                &budget,
+                                tracking(index),
+                            );
+                            finished
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push((index, report));
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                let _ = worker.join();
             }
-        });
-        for (index, report) in finished
-            .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-        {
-            reports[index] = Some(report);
-        }
-        // Implementers can edit and need approvals, so they take turns.
-        for (index, task) in tasks.iter().enumerate() {
-            if task.role == Role::Implement && !cancel.load(Ordering::Relaxed) {
-                reports[index] = Some(guarded_run(|| {
-                    run_subagent(
+            for (index, report) in std::mem::take(
+                &mut *finished
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            ) {
+                reports[index] = Some(report);
+            }
+            // Implementers can edit and need approvals, so they take turns.
+            for (index, task) in tasks.iter().enumerate() {
+                if task.role != Role::Implement {
+                    continue;
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    tracking(index).send(SubagentEvent::Finished {
+                        id: first + index,
+                        outcome: SubagentOutcome::Cancelled,
+                    });
+                } else {
+                    reports[index] = Some(run_tracked(
                         completer,
                         &sub_settings,
                         root,
                         task,
                         &budget,
-                        events,
-                        cancel,
-                    )
-                }));
+                        tracking(index),
+                    ));
+                }
             }
-        }
+            done.store(true, Ordering::SeqCst);
+        });
         if cancel.load(Ordering::Relaxed) || reports.iter().flatten().any(|r| r.cancelled) {
             bail!("cancelled");
         }
@@ -430,6 +590,7 @@ impl Run {
                 text: "Not run.".to_owned(),
                 changed: false,
                 cancelled: false,
+                outcome: SubagentOutcome::Cancelled,
             });
             self.changed |= report.changed;
             output.push(format!(
@@ -465,13 +626,15 @@ impl Run {
         let _ = events.send(PendingEvent::ToolStarted(
             "reviewing the changes".to_owned(),
         ));
+        let id = self.tracked;
+        self.tracked += 1;
         let outcome = review(
             completer,
             &settings.for_subagent(),
             root,
             request,
             &budget,
-            events,
+            (id, events),
             cancel,
         )?;
         let note = match &outcome {
@@ -493,6 +656,7 @@ fn guarded_run(run: impl FnOnce() -> Report) -> Report {
         text: "The subagent stopped unexpectedly.".to_owned(),
         changed: false,
         cancelled: false,
+        outcome: SubagentOutcome::Failed,
     })
 }
 
@@ -572,17 +736,21 @@ fn system_prompt(role: Role, root: &Path) -> String {
     )
 }
 
-/// Runs one subagent's tool loop to a report. Failures become the report text; only a cancel is
-/// flagged for the caller to stop on.
+/// Runs one subagent's tool loop to a report. Failures become the report text; only a cancel of
+/// the turn is flagged for the caller to stop on.
 fn run_subagent(
     completer: &dyn Completer,
     settings: &Settings,
     root: &Path,
     task: &Task,
     budget: &Budget,
-    events: &Sender<PendingEvent>,
-    cancel: &AtomicBool,
+    tracking: Tracking<'_>,
 ) -> Report {
+    if let Some(report) = tracking.stopped(false) {
+        return report;
+    }
+    tracking.send(SubagentEvent::Started { id: tracking.id });
+    let (events, cancel) = (tracking.events, tracking.own);
     let tools = task.role.tools();
     let mut messages = vec![
         ChatMessage::system(system_prompt(task.role, root)),
@@ -596,19 +764,22 @@ fn run_subagent(
     let turn_id = uuid::Uuid::new_v4().simple().to_string();
     let mut changed = false;
     let mut calls = 0usize;
-    let finish = |text: String, changed: bool| Report {
+    // Tool calls that have run, for the tracker (`calls` also counts the ones about to run).
+    let mut tool_calls = 0usize;
+    let finish = |text: String, changed: bool, outcome: SubagentOutcome| Report {
         text: text.chars().take(budget.report_chars).collect(),
         changed,
         cancelled: false,
+        outcome,
     };
-    for _ in 0..=budget.rounds {
-        if cancel.load(Ordering::Relaxed) {
-            return Report {
-                text: "cancelled".to_owned(),
-                changed,
-                cancelled: true,
-            };
+    for round in 1..=budget.rounds + 1 {
+        if let Some(report) = tracking.stopped(changed) {
+            return report;
         }
+        tracking.send(SubagentEvent::Round {
+            id: tracking.id,
+            round,
+        });
         let tally = std::cell::RefCell::new(Tally::default());
         let forward = |event: StreamEvent| tally.borrow_mut().observe(&event);
         let stream = Stream {
@@ -633,18 +804,18 @@ fn run_subagent(
         let completion = match result {
             Ok(completion) => completion,
             Err(error) => {
-                if cancel.load(Ordering::Relaxed) {
-                    return Report {
-                        text: "cancelled".to_owned(),
-                        changed,
-                        cancelled: true,
-                    };
+                if let Some(report) = tracking.stopped(changed) {
+                    return report;
                 }
-                return finish(format!("The subagent stopped: {error:#}"), changed);
+                return finish(
+                    format!("The subagent stopped: {error:#}"),
+                    changed,
+                    SubagentOutcome::Failed,
+                );
             }
         };
         if completion.tool_calls.is_empty() {
-            return finish(completion.text, changed);
+            return finish(completion.text, changed, SubagentOutcome::Done);
         }
         if completion.tool_calls.len() > 4
             || calls + completion.tool_calls.len() > budget.rounds * 4
@@ -655,6 +826,7 @@ fn run_subagent(
                     completion.text
                 ),
                 changed,
+                SubagentOutcome::Failed,
             );
         }
         calls += completion.tool_calls.len();
@@ -709,17 +881,23 @@ fn run_subagent(
                     && !result.starts_with("Tool error");
                 changed |= edit || ran;
             }
+            let action = format!("{} · {}", call.name, summarize_tool_result(&result));
             let _ = events.send(PendingEvent::ToolAction(format!(
-                "Subagent · {label} · {} · {}",
-                call.name,
-                summarize_tool_result(&result)
+                "Subagent · {label} · {action}"
             )));
+            tool_calls += 1;
+            tracking.send(SubagentEvent::Action {
+                id: tracking.id,
+                calls: tool_calls,
+                action,
+            });
             messages.push(ChatMessage::tool_result(call.id, call.name, result));
         }
     }
     finish(
         "The subagent ran out of steps before finishing.".to_owned(),
         changed,
+        SubagentOutcome::Failed,
     )
 }
 
@@ -730,7 +908,7 @@ fn review(
     root: &Path,
     request: &str,
     budget: &Budget,
-    events: &Sender<PendingEvent>,
+    (id, events): (usize, &Sender<PendingEvent>),
     cancel: &AtomicBool,
 ) -> Result<Review> {
     let task = Task {
@@ -740,7 +918,27 @@ fn review(
             "The user asked for this:\n\n{request}\n\nThe main assistant says it is finished. Review its uncommitted changes against that request."
         ),
     };
-    let report = run_subagent(completer, settings, root, &task, budget, events, cancel);
+    let own = Arc::new(AtomicBool::new(false));
+    let _ = events.send(PendingEvent::Subagent(SubagentEvent::Queued {
+        id,
+        name: task.name.clone(),
+        kind: task.role.word(),
+        task: "Review the uncommitted changes against the request.".to_owned(),
+        cancel: own.clone(),
+    }));
+    let done = AtomicBool::new(false);
+    let report = std::thread::scope(|scope| {
+        scope.spawn(|| forward_cancel(cancel, std::slice::from_ref(&own), &done));
+        let tracking = Tracking {
+            id,
+            events,
+            turn: cancel,
+            own: &own,
+        };
+        let report = run_tracked(completer, settings, root, &task, budget, tracking);
+        done.store(true, Ordering::SeqCst);
+        report
+    });
     if report.cancelled {
         bail!("cancelled");
     }
@@ -1728,6 +1926,212 @@ mod tests {
         });
         let text = run(&sneaky, &plain, &root, &cancel).0.unwrap().text;
         assert!(text.contains("unknown or unauthorized tool"), "{text}");
+    }
+
+    // ---- progress and cancelling one subagent ----
+
+    /// Collects the subagent events of a turn. `cancel_when` sees each event and says whether to
+    /// set that subagent's own cancel flag right then.
+    fn run_tracked(
+        completer: &Scripted,
+        settings: &Settings,
+        root: &Path,
+        cancel_when: impl Fn(&SubagentEvent, &[(usize, String)]) -> bool + Send + 'static,
+    ) -> (Result<Completion>, Vec<String>) {
+        let (sender, receiver) = mpsc::channel();
+        let seen = std::thread::spawn(move || {
+            let mut log = Vec::new();
+            let mut names = Vec::new();
+            let mut flags = std::collections::HashMap::new();
+            while let Ok(event) = receiver.recv() {
+                match event {
+                    PendingEvent::ApprovalRequest(approval) => {
+                        let _ = approval.response.send(true);
+                    }
+                    PendingEvent::Subagent(event) => {
+                        let id = match &event {
+                            SubagentEvent::Queued {
+                                id,
+                                name,
+                                kind,
+                                task,
+                                cancel,
+                            } => {
+                                names.push((*id, name.clone()));
+                                flags.insert(*id, cancel.clone());
+                                log.push(format!("{id} queued {kind} {name}: {task}"));
+                                *id
+                            }
+                            SubagentEvent::Started { id } => {
+                                log.push(format!("{id} started"));
+                                *id
+                            }
+                            SubagentEvent::Round { id, round } => {
+                                log.push(format!("{id} round {round}"));
+                                *id
+                            }
+                            SubagentEvent::Action { id, calls, action } => {
+                                log.push(format!("{id} action {calls} {action}"));
+                                *id
+                            }
+                            SubagentEvent::Finished { id, outcome } => {
+                                log.push(format!("{id} finished {outcome:?}"));
+                                *id
+                            }
+                        };
+                        if cancel_when(&event, &names)
+                            && let Some(flag) = flags.get(&id)
+                        {
+                            flag.store(true, Ordering::SeqCst);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            log
+        });
+        let cancel = AtomicBool::new(false);
+        let result = run_loop(
+            completer,
+            settings,
+            vec![user("Please fix it")],
+            root,
+            true,
+            &sender,
+            &cancel,
+        );
+        drop(sender);
+        (result, seen.join().unwrap())
+    }
+
+    #[test]
+    fn subagents_report_each_step_from_queued_to_done() {
+        let root = workspace();
+        let model = Scripted::new(|messages, _| {
+            if is_subagent(messages) {
+                return match last_tool_result(messages) {
+                    None => call("list_files", serde_json::json!({})),
+                    Some(_) => say("found it"),
+                };
+            }
+            match last_tool_result(messages) {
+                None => call(
+                    "spawn_subagents",
+                    serde_json::json!({"tasks": [
+                        {"kind": "explore", "instructions": "look at auth", "name": "auth"}
+                    ]}),
+                ),
+                Some(reports) => say(&reports),
+            }
+        });
+        let (result, log) = run_tracked(&model, &settings(Effort::Super), &root, |_, _| false);
+        result.unwrap();
+        assert_eq!(
+            log,
+            [
+                "0 queued explore auth: look at auth",
+                "0 started",
+                "0 round 1",
+                "0 action 1 list_files · a.txt",
+                "0 round 2",
+                "0 finished Done",
+            ],
+            "{log:#?}"
+        );
+    }
+
+    #[test]
+    fn cancelling_one_subagent_stops_only_that_one() {
+        let root = workspace();
+        let mut one_at_a_time = settings(Effort::Ultimate);
+        one_at_a_time.workflow_at_once = 1;
+        let model = Scripted::new(|messages, _| {
+            if is_subagent(messages) {
+                if messages[1].display.contains("VERDICT") {
+                    return say("VERDICT: PASS");
+                }
+                // Each subagent keeps looking until it is stopped or out of steps.
+                return match last_tool_result(messages) {
+                    Some(_) if messages.len() > 6 => say("finished looking"),
+                    _ => call("list_files", serde_json::json!({})),
+                };
+            }
+            match last_tool_result(messages) {
+                None => call(
+                    "spawn_subagents",
+                    serde_json::json!({"tasks": [
+                        {"kind": "explore", "instructions": "waiting", "name": "queued one"},
+                        {"kind": "explore", "instructions": "working", "name": "busy one"},
+                        {"kind": "explore", "instructions": "kept", "name": "kept one"}
+                    ]}),
+                ),
+                Some(reports) => say(&reports),
+            }
+        })
+        .slow(std::time::Duration::from_millis(20));
+        // The first is cancelled while it waits; the second once it has started its work.
+        let (result, log) = run_tracked(&model, &one_at_a_time, &root, |event, names| {
+            let name_of = |id: &usize| {
+                names
+                    .iter()
+                    .find(|(known, _)| known == id)
+                    .map(|(_, name)| name.as_str())
+            };
+            match event {
+                SubagentEvent::Queued { id, .. } => name_of(id) == Some("queued one"),
+                SubagentEvent::Round { id, round } => {
+                    name_of(id) == Some("busy one") && *round == 2
+                }
+                _ => false,
+            }
+        });
+        let answer = result.expect("the turn goes on").text;
+        assert!(log.contains(&"0 finished Cancelled".to_owned()), "{log:#?}");
+        assert!(log.contains(&"1 finished Cancelled".to_owned()), "{log:#?}");
+        assert!(log.contains(&"2 finished Done".to_owned()), "{log:#?}");
+        assert!(
+            !log.contains(&"0 started".to_owned()),
+            "a cancelled subagent that was still waiting never starts: {log:#?}"
+        );
+        assert_eq!(
+            answer.matches("cancelled by the user").count(),
+            2,
+            "{answer}"
+        );
+        assert!(answer.contains("finished looking"), "{answer}");
+    }
+
+    #[test]
+    fn the_reviewer_is_tracked_too() {
+        let root = workspace();
+        let model = editing_model(vec!["VERDICT: PASS"]);
+        let (result, log) = run_tracked(&model, &settings(Effort::Super), &root, |_, _| false);
+        result.unwrap();
+        assert!(
+            log.iter()
+                .any(|line| line.starts_with("0 queued review reviewer")),
+            "{log:#?}"
+        );
+        assert!(log.contains(&"0 finished Done".to_owned()), "{log:#?}");
+    }
+
+    #[test]
+    fn a_failing_subagent_is_reported_as_failed() {
+        let root = workspace();
+        let model = Scripted::new(|messages, _| {
+            if is_subagent(messages) {
+                return Err(anyhow::anyhow!("provider exploded"));
+            }
+            match last_tool_result(messages) {
+                None => call(
+                    "spawn_subagents",
+                    serde_json::json!({"tasks": [{"kind": "explore", "instructions": "x"}]}),
+                ),
+                Some(report) => say(&report),
+            }
+        });
+        let (_, log) = run_tracked(&model, &settings(Effort::Super), &root, |_, _| false);
+        assert!(log.contains(&"0 finished Failed".to_owned()), "{log:#?}");
     }
 
     // ---- stopping ----

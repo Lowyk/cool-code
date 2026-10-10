@@ -38,6 +38,8 @@ pub(crate) enum PendingEvent {
     /// A `/compact` finished (or failed); there is no answer to show.
     CompactFinished(std::result::Result<(), String>),
     ApprovalRequest(ToolApproval),
+    /// Progress of one workflow subagent, for the tracker.
+    Subagent(crate::workflow::SubagentEvent),
     Finished(std::result::Result<provider::Completion, String>),
 }
 

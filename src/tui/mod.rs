@@ -22,6 +22,7 @@ mod setup;
 mod state;
 mod stats_view;
 mod theme;
+mod tracker;
 mod undo;
 mod usage_view;
 mod usage_warnings;
@@ -199,6 +200,7 @@ impl state::App {
             || self.image_setup.is_some()
             || self.wizard.is_some()
             || self.tool_approval.is_some()
+            || self.tracker.open
             || self.confirm_ultimate
             || self.privacy_confirmation.is_some()
             || self.chain_form.is_some()
@@ -253,6 +255,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         app.handle_setup_key(key)?;
     } else if app.tool_approval.is_some() {
         app.handle_approval_key(key);
+    } else if app.tracker.open {
+        app.handle_tracker_key(key);
     } else if app.confirm_ultimate {
         match route(&ultimate_dialog(), &mut app.dialog_focus, key) {
             Routed::Press(KeyCode::Char('y')) => {
@@ -415,6 +419,7 @@ fn handle_prompt_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.open_tracker(),
             KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
             KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
