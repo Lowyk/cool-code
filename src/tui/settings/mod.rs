@@ -8,6 +8,7 @@ mod providers;
 pub(in crate::tui) use providers::remaining_bar;
 mod reset;
 pub(super) mod sync;
+mod workflow_size;
 
 use crate::tui::settings::appearance::draw_appearance;
 use crate::tui::settings::auto_mode::draw_auto_mode;
@@ -19,6 +20,7 @@ use crate::tui::settings::privacy::{
 };
 use crate::tui::settings::providers::draw_providers;
 use crate::tui::settings::reset::{ResetStage, draw_reset, reset_hint};
+use crate::tui::settings::workflow_size::{WorkflowChooser, chooser_hint, draw_workflow_chooser};
 use crate::tui::state::App;
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
@@ -87,6 +89,8 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) model_edit: Option<ModelEdit>,
     /// The Reset menu, while it is open (it replaces the General rows).
     pub(in crate::tui) reset: Option<ResetStage>,
+    /// The Dynamic workflows size chooser, while it is open (it replaces the General rows).
+    pub(in crate::tui) workflow_chooser: Option<WorkflowChooser>,
     pub(in crate::tui) tree: crate::tui::widgets::tree::TreeState,
     pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
 }
@@ -100,6 +104,7 @@ impl SettingsView {
             confirm_delete: false,
             model_edit: None,
             reset: None,
+            workflow_chooser: None,
             tree: crate::tui::widgets::tree::TreeState::default(),
             privacy_sub: None,
         }
@@ -138,6 +143,9 @@ impl App {
         };
         if view.reset.is_some() {
             return self.handle_reset_key(key);
+        }
+        if view.workflow_chooser.is_some() {
+            return self.handle_workflow_chooser_key(key);
         }
         if view.confirm_delete || view.model_edit.is_some() || view.privacy_sub.is_some() {
             let section = view.section;
@@ -226,6 +234,9 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
 
     match view.section {
         Section::General if view.reset.is_some() => draw_reset(frame, content, app, view),
+        Section::General if view.workflow_chooser.is_some() => {
+            draw_workflow_chooser(frame, content, app, view)
+        }
         Section::General => draw_general(frame, content, app, view),
         Section::Appearance => draw_appearance(frame, content, app, view),
         Section::Providers => draw_providers(frame, content, app, view),
@@ -331,6 +342,9 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
 fn footer_hint(view: &SettingsView) -> &'static str {
     if let Some(stage) = &view.reset {
         return reset_hint(stage);
+    }
+    if let Some(chooser) = &view.workflow_chooser {
+        return chooser_hint(chooser);
     }
     if view.model_edit.is_some() {
         return "Enter confirm   Esc cancel";
@@ -492,9 +506,9 @@ mod tests {
     }
 
     #[test]
-    fn the_dynamic_workflows_switch_unlocks_and_relocks_the_tiers() {
+    fn the_dynamic_workflows_row_unlocks_and_relocks_the_tiers() {
         let mut app = app();
-        assert!(!app.settings.dynamic_workflows);
+        assert!(!app.settings.workflows_unlocked());
         app.open_settings(Section::General);
         app.handle_settings_view_key(key(KeyCode::Right))
             .expect("focus");
@@ -502,14 +516,17 @@ mod tests {
             app.handle_settings_view_key(key(KeyCode::Down))
                 .expect("down");
         }
-        app.handle_settings_view_key(key(KeyCode::Enter))
-            .expect("unlock");
-        assert!(app.settings.dynamic_workflows);
+        for code in [KeyCode::Enter, KeyCode::Down, KeyCode::Enter] {
+            app.handle_settings_view_key(key(code))
+                .expect("choose Small");
+        }
+        assert!(app.settings.workflows_unlocked());
         assert!(app.notice.contains("unlocked"), "{}", app.notice);
         app.settings.effort = crate::Effort::Ultimate;
-        app.handle_settings_view_key(key(KeyCode::Enter))
-            .expect("lock again");
-        assert!(!app.settings.dynamic_workflows);
+        for code in [KeyCode::Enter, KeyCode::Up, KeyCode::Enter] {
+            app.handle_settings_view_key(key(code)).expect("choose Off");
+        }
+        assert!(!app.settings.workflows_unlocked());
         assert_eq!(
             app.settings.effort,
             crate::Effort::Max,

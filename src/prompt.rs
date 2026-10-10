@@ -86,9 +86,10 @@ const OTHER_MODES: &str = "The harness, not you, enforces the permission mode: e
 
 fn workflows_section(budget: &crate::workflow::Budget) -> String {
     format!(
-        "Workflows are on. You can call `spawn_subagents` to delegate independent work: use `explore` subagents to investigate several areas in parallel, and `implement` subagents for clearly separate changes (they run one after another and ask for approval like you do). Subagents do not see this conversation, so write complete instructions: the goal, where to look, constraints, and what to report. Do small tasks yourself. You may start at most {} subagents at once and {} in all this turn. When you finish a change, a separate reviewer checks it (up to {} time{}); fix the real problems it reports, and say so if you disagree with one.",
+        "Workflows are on. You can call `spawn_subagents` to delegate independent work: use `explore` subagents to investigate several areas in parallel, and `implement` subagents for clearly separate changes (they run one after another and ask for approval like you do). Subagents do not see this conversation, so write complete instructions: the goal, where to look, constraints, and what to report. Do small tasks yourself. You may start at most {} subagents in one call and {} in all this turn; explorers beyond {} wait for a free place. When you finish a change, a separate reviewer checks it (up to {} time{}); fix the real problems it reports, and say so if you disagree with one.",
         budget.per_call,
         budget.total_runs,
+        budget.at_once,
         budget.review_cycles,
         if budget.review_cycles == 1 { "" } else { "s" }
     )
@@ -109,9 +110,7 @@ pub(crate) fn assemble(
     use crate::tui::context::{
         InstructionFiles, instruction_sections, read_cool_file, read_user_instructions,
     };
-    let workflows = settings
-        .workflows_active()
-        .then(|| crate::workflow::Budget::for_effort(settings.effort));
+    let workflows = crate::workflow::Budget::for_settings(settings);
     let tool_names = crate::tools::ToolSet::Main {
         plan_mode: settings.permission_mode == "plan",
         workflows: workflows.is_some(),
@@ -348,27 +347,28 @@ mod tests {
         use crate::workflow::Budget;
         let off = prompt("auto", true);
         assert!(!off.contains("Workflows are on") && !off.contains("spawn_subagents"));
-        let super_tier = prompt_with("auto", true, Some(Budget::for_effort(crate::Effort::Super)));
+        let super_tier = prompt_with("auto", true, Some(Budget::new(crate::Effort::Super, 15, 8)));
         assert!(super_tier.contains("Workflows are on"), "{super_tier}");
         assert!(
-            super_tier.contains("at most 4 subagents at once and 8 in all"),
+            super_tier.contains("at most 4 subagents in one call and 8 in all"),
             "{super_tier}"
         );
         assert!(super_tier.contains("(up to 1 time)"), "{super_tier}");
         let ultimate = prompt_with(
             "auto",
             true,
-            Some(Budget::for_effort(crate::Effort::Ultimate)),
+            Some(Budget::new(crate::Effort::Ultimate, 15, 3)),
         );
         assert!(
-            ultimate.contains("at most 6 subagents at once and 20 in all"),
+            ultimate.contains("at most 5 subagents in one call and 15 in all"),
             "{ultimate}"
         );
         assert!(ultimate.contains("(up to 2 times)"), "{ultimate}");
+        assert!(ultimate.contains("explorers beyond 3 wait"), "{ultimate}");
         let untrusted = prompt_with(
             "auto",
             false,
-            Some(Budget::for_effort(crate::Effort::Super)),
+            Some(Budget::new(crate::Effort::Super, 15, 8)),
         );
         assert!(
             !untrusted.contains("Workflows are on"),
