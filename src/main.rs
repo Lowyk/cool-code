@@ -16,6 +16,7 @@ mod chatgpt_auth;
 mod context;
 mod effort_support;
 mod endpoints;
+mod extensions;
 mod guard;
 mod headless;
 mod imagegen;
@@ -186,6 +187,8 @@ struct Settings {
     default_load_agents_md: bool,
     /// Load the user's own `~/.claude/CLAUDE.md` in every project.
     load_global_claude_md: bool,
+    /// Also load skills from `~/.claude/skills`.
+    load_claude_skills: bool,
     instructions_prompt_answered: bool,
     /// The most subagents a whole turn may start. Anything but Off unlocks the Super and
     /// Ultimate effort tiers (and workflows on lower levels); Off by default because workflows
@@ -223,6 +226,15 @@ struct Settings {
     /// The image API `generate_image` uses (its key is in the credential store). Off when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image_generation: Option<imagegen::ImageConfig>,
+    /// Installed plugins the user switched off (their skills, commands and mods do not load).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    disabled_plugins: Vec<String>,
+    /// Mods the user approved, each with the hash of the manifest that was shown.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    approved_mods: std::collections::BTreeMap<String, String>,
+    /// Approved mods the user switched off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    disabled_mods: Vec<String>,
     effort: Effort,
     permission_mode: String,
 }
@@ -339,6 +351,7 @@ impl Default for Settings {
             default_load_claude_md: false,
             default_load_agents_md: false,
             load_global_claude_md: false,
+            load_claude_skills: false,
             instructions_prompt_answered: false,
             workflow_size: workflow::WorkflowSize::Off,
             workflow_custom_size: workflow::DEFAULT_CUSTOM_SIZE,
@@ -353,6 +366,9 @@ impl Default for Settings {
             outside_files: false,
             outside_files_no_prompt: false,
             image_generation: None,
+            disabled_plugins: Vec::new(),
+            approved_mods: std::collections::BTreeMap::new(),
+            disabled_mods: Vec::new(),
             effort: Effort::High,
             permission_mode: "plan".to_owned(),
         }
@@ -761,6 +777,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(round_trip.pulse, PulseMode::Characters);
+    }
+
+    #[test]
+    fn plugin_and_skill_settings_default_off_and_survive_a_round_trip() {
+        let old: Settings = toml::from_str("permission_mode = \"plan\"\n").expect("parse");
+        assert!(!old.load_claude_skills);
+        assert!(old.disabled_plugins.is_empty() && old.approved_mods.is_empty());
+        assert!(old.disabled_mods.is_empty());
+        let mut changed = old;
+        changed.load_claude_skills = true;
+        changed.disabled_plugins.push("kit".to_owned());
+        changed
+            .approved_mods
+            .insert("kit/watch".to_owned(), "abc".to_owned());
+        changed.disabled_mods.push("clock".to_owned());
+        let text = toml::to_string(&changed).expect("write");
+        let back: Settings = toml::from_str(&text).expect("read");
+        assert!(back.load_claude_skills);
+        assert_eq!(back.disabled_plugins, ["kit"]);
+        assert_eq!(
+            back.approved_mods.get("kit/watch").map(String::as_str),
+            Some("abc")
+        );
+        assert_eq!(back.disabled_mods, ["clock"]);
     }
 
     #[test]

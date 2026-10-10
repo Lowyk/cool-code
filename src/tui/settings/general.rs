@@ -14,7 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-pub(super) const ROWS: usize = 15;
+pub(super) const ROWS: usize = 16;
 
 fn switch(on: bool) -> Span<'static> {
     if on {
@@ -103,6 +103,7 @@ pub(super) fn draw_general(
         vec![switch(app.settings.default_load_claude_md)],
         vec![switch(app.settings.default_load_agents_md)],
         vec![switch(app.settings.load_global_claude_md)],
+        vec![switch(app.settings.load_claude_skills)],
         vec![workflow_size_value(&app.settings)],
         vec![switch(app.settings.usage_warnings)],
         vec![switch(app.settings.auto_compact)],
@@ -127,6 +128,7 @@ pub(super) fn draw_general(
         "Load CLAUDE.md",
         "Load AGENTS.md",
         "Global CLAUDE.md",
+        "Load Claude skills",
         "Dynamic workflows",
         "Usage warnings",
         "Auto-compact",
@@ -203,16 +205,26 @@ impl App {
                     write_settings(&self.settings)?;
                 }
                 10 => {
-                    view.workflow_chooser = Some(WorkflowChooser::open(&self.settings));
+                    self.settings.load_claude_skills = !self.settings.load_claude_skills;
+                    self.notice = if self.settings.load_claude_skills {
+                        "Skills in ~/.claude/skills are loaded too."
+                    } else {
+                        "Skills in ~/.claude/skills are no longer loaded."
+                    }
+                    .to_owned();
+                    write_settings(&self.settings)?;
                 }
                 11 => {
+                    view.workflow_chooser = Some(WorkflowChooser::open(&self.settings));
+                }
+                12 => {
                     self.settings.usage_warnings = !self.settings.usage_warnings;
                     if !self.settings.usage_warnings {
                         self.usage_warning = None;
                     }
                     write_settings(&self.settings)?;
                 }
-                12 => {
+                13 => {
                     self.settings.auto_compact = !self.settings.auto_compact;
                     self.notice = if self.settings.auto_compact {
                         "Long conversations are condensed automatically before they fill the context window."
@@ -222,8 +234,8 @@ impl App {
                     .to_owned();
                     write_settings(&self.settings)?;
                 }
-                13 => self.open_image_setup(),
-                14 => view.reset = Some(ResetStage::Menu { row: 0 }),
+                14 => self.open_image_setup(),
+                15 => view.reset = Some(ResetStage::Menu { row: 0 }),
                 6 => {
                     self.settings.sessions_enabled = !self.settings.sessions_enabled;
                     self.settings.sessions_prompt_answered = true;

@@ -29,6 +29,7 @@ sha2 = "0.10"
 toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 unicode-width = "0.2"
+unicode-segmentation = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

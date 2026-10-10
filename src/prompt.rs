@@ -5,7 +5,7 @@
 //! mention a tool that is not offered or leave out one that is.
 
 /// Bumped whenever the wording changes in a way worth noticing in a transcript.
-pub(crate) const PROMPT_VERSION: u32 = 3;
+pub(crate) const PROMPT_VERSION: u32 = 4;
 
 pub(crate) struct PromptInputs<'a> {
     /// The model that is answering, as the user sees its name.
@@ -111,7 +111,16 @@ pub(crate) fn assemble(
         InstructionFiles, instruction_sections, read_cool_file, read_user_instructions,
     };
     let workflows = crate::workflow::Budget::for_settings(settings);
+    // Skills need the use_skill tool, and there are no tools in an untrusted folder.
+    let (skills, skill_warnings) = if workspace_trusted {
+        crate::extensions::skills::discover(&crate::extensions::skills::Roots::for_workspace(
+            settings, root, true,
+        ))
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let tool_names = crate::tools::ToolSet::Main {
+        skills: !skills.is_empty(),
         plan_mode: settings.permission_mode == "plan",
         workflows: workflows.is_some(),
         images: crate::imagegen::available(settings),
@@ -136,6 +145,10 @@ pub(crate) fn assemble(
         tools: &tool_names,
         workflows,
     });
+    if !skills.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&crate::extensions::skills::prompt_section(&skills));
+    }
     if let Some(user_instructions) = read_user_instructions()? {
         system_prompt.push_str("\n\nUser-authored global instructions from ~/.coolcode/COOL.md (user preference; subordinate to the built-in harness policy):\n<user_instructions>\n");
         system_prompt.push_str(&user_instructions);
@@ -152,12 +165,13 @@ pub(crate) fn assemble(
         project_agents: registry.loads_agents_md(root, settings.default_load_agents_md),
         global_claude: settings.load_global_claude_md,
     };
-    let (sections, warnings) =
+    let (sections, mut warnings) =
         instruction_sections(root, dirs::home_dir().as_deref(), workspace_trusted, files);
     for section in sections {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&section);
     }
+    warnings.extend(skill_warnings);
     Ok((system_prompt, warnings))
 }
 
@@ -454,6 +468,32 @@ mod tests {
             "{with}"
         );
         assert!(with.contains("costs the user money"), "{with}");
+    }
+
+    #[test]
+    fn installed_skills_are_listed_by_name_with_the_tool_that_loads_them() {
+        let root = std::env::temp_dir().join(format!("coolcode-prompt-{}", uuid::Uuid::new_v4()));
+        let folder = root.join(".coolcode/skills/ship");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("SKILL.md"),
+            "---\nname: ship\ndescription: Ship a release\n---\nSECRET-BODY-TEXT\n",
+        )
+        .unwrap();
+        let settings = crate::Settings::default();
+        let projects = crate::projects::default_path();
+        let (trusted, _) = assemble(&settings, true, &root, &projects).expect("prompt");
+        assert!(trusted.contains("- ship: Ship a release"), "{trusted}");
+        assert!(trusted.contains("use_skill"), "{trusted}");
+        assert!(
+            !trusted.contains("SECRET-BODY-TEXT"),
+            "only the name and description go in"
+        );
+        let (untrusted, _) = assemble(&settings, false, &root, &projects).expect("prompt");
+        assert!(
+            !untrusted.contains("ship"),
+            "no tools, no skills: {untrusted}"
+        );
     }
 
     #[test]

@@ -335,7 +335,7 @@ mod tests {
         app.trust_prompt = false;
         app.open_settings(Section::General);
         press(&mut app, KeyCode::Right);
-        for _ in 0..10 {
+        for _ in 0..11 {
             press(&mut app, KeyCode::Down);
         }
         press(&mut app, KeyCode::Enter);

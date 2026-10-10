@@ -3,19 +3,23 @@ mod chatgpt_login;
 mod commands;
 pub(crate) mod context;
 mod creators;
+mod editing;
 mod effort;
+mod extensions;
 mod forms;
 mod image_setup;
 mod markdown;
 mod mentions;
 pub(crate) mod models;
 mod pickers;
+mod plugin_install;
 mod present;
 mod render;
 mod series;
 pub(crate) mod sessions;
 mod settings;
 mod setup;
+mod slash;
 mod state;
 mod stats_view;
 mod theme;
@@ -80,6 +84,7 @@ fn run_app(
         app.start_from(resume);
     }
     app.start_setup();
+    app.start_mods();
     let animation_start = std::time::Instant::now();
     let mut presenter = present::Presenter::new();
     while app.running {
@@ -124,6 +129,7 @@ fn run_app(
         }
         handle_batch(&mut app, &presses)?;
     }
+    app.stop_mods();
     Ok(())
 }
 
@@ -134,6 +140,7 @@ impl state::App {
         !(self.trust_prompt
             || self.chatgpt_login.is_some()
             || self.outside_prompt.is_some()
+            || self.plugin_review_open()
             || self.image_setup.is_some()
             || self.wizard.is_some()
             || self.tool_approval.is_some()
@@ -165,7 +172,7 @@ fn handle_batch(app: &mut state::App, presses: &[event::KeyEvent]) -> Result<()>
                 .iter()
                 .any(|next| matches!(next.code, KeyCode::Char(_)));
         if pasted_line_break && app.typing_in_prompt() {
-            app.input.push('\n');
+            app.insert_input("\n");
             continue;
         }
         handle_key(app, *key)?;
@@ -189,6 +196,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         app.handle_chatgpt_login_key(key);
     } else if app.outside_prompt.is_some() {
         app.handle_outside_prompt_key(key)?;
+    } else if app.plugin_review_open() {
+        app.handle_plugin_review_key(key)?;
     } else if app.image_setup.is_some() {
         app.handle_image_setup_key(key)?;
     } else if app.wizard.is_some() {
@@ -344,19 +353,30 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else if app.settings_view.is_some() {
         app.handle_settings_view_key(key)?;
     } else {
+        if let Some(edit) = editing::edit_key(key) {
+            app.edit_input(edit);
+            app.refresh_popups();
+            return Ok(());
+        }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let slash = app.slash.is_open() && app.mention.is_none();
         match key.code {
             KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
             KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
+            KeyCode::Up if slash && !control => app.slash_move(-1),
+            KeyCode::Down if slash && !control => app.slash_move(1),
+            KeyCode::Tab if slash => app.accept_slash(),
+            KeyCode::Esc if slash => app.dismiss_slash(),
             KeyCode::Enter
                 if key
                     .modifiers
                     .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
             {
-                app.input.push('\n')
+                app.insert_input("\n")
             }
             KeyCode::Enter if app.mention_takes_enter() => app.accept_mention(),
+            KeyCode::Enter if slash && app.slash_takes_enter() => app.accept_slash(),
             KeyCode::Esc if app.mention.is_some() => app.dismiss_mention(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.running = false;
@@ -373,15 +393,12 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.history_scroll = app.history_scroll.saturating_sub(3)
             }
-            KeyCode::Backspace => {
-                app.input.pop();
-            }
             KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.input.push(character);
+                app.insert_input(character.encode_utf8(&mut [0; 4]));
             }
             _ => {}
         }
-        app.refresh_mentions();
+        app.refresh_popups();
     }
     Ok(())
 }
@@ -461,6 +478,68 @@ mod tests {
             handle_key(&mut app, KeyEvent::new(KeyCode::Enter, modifier)).unwrap();
         }
         assert_eq!(app.input, "first\n\n");
+    }
+
+    fn with(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn arrows_move_the_cursor_and_typing_inserts_there() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        super::handle_batch(&mut app, &typed("fix bug")).unwrap();
+        for _ in 0..3 {
+            handle_key(&mut app, key_press(KeyCode::Left)).unwrap();
+        }
+        super::handle_batch(&mut app, &typed("the ")).unwrap();
+        assert_eq!(app.input, "fix the bug");
+        handle_key(&mut app, key_press(KeyCode::Delete)).unwrap();
+        assert_eq!(app.input, "fix the ug");
+        handle_key(&mut app, key_press(KeyCode::Backspace)).unwrap();
+        assert_eq!(app.input, "fix theug");
+        handle_key(&mut app, with(KeyCode::Char('a'), KeyModifiers::CONTROL)).unwrap();
+        super::handle_batch(&mut app, &typed(">")).unwrap();
+        handle_key(&mut app, with(KeyCode::Char('e'), KeyModifiers::CONTROL)).unwrap();
+        super::handle_batch(&mut app, &typed("<")).unwrap();
+        assert_eq!(app.input, ">fix theug<");
+        handle_key(&mut app, with(KeyCode::Left, KeyModifiers::CONTROL)).unwrap();
+        handle_key(&mut app, with(KeyCode::Backspace, KeyModifiers::CONTROL)).unwrap();
+        assert_eq!(
+            app.input, ">theug<",
+            "Ctrl+Backspace deletes the word before"
+        );
+        handle_key(&mut app, with(KeyCode::Char('w'), KeyModifiers::CONTROL)).unwrap();
+        assert_eq!(app.input, "theug<", "Ctrl+W deletes back to the space");
+        assert!(app.running && app.transcript.is_empty(), "nothing was sent");
+    }
+
+    #[test]
+    fn new_lines_and_pasted_lines_go_in_at_the_cursor() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.set_input("ab");
+        handle_key(&mut app, key_press(KeyCode::Left)).unwrap();
+        handle_key(&mut app, with(KeyCode::Enter, KeyModifiers::SHIFT)).unwrap();
+        assert_eq!(app.input, "a\nb");
+        super::handle_batch(&mut app, &typed("x\ny")).unwrap();
+        assert_eq!(app.input, "a\nx\nyb");
+        assert!(app.transcript.is_empty());
+    }
+
+    #[test]
+    fn multi_byte_text_is_never_split_by_the_keys() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        super::handle_batch(&mut app, &typed("привет 👍🏽 мир")).unwrap();
+        handle_key(&mut app, with(KeyCode::Char('b'), KeyModifiers::ALT)).unwrap();
+        handle_key(&mut app, key_press(KeyCode::Left)).unwrap();
+        handle_key(&mut app, key_press(KeyCode::Backspace)).unwrap();
+        assert_eq!(app.input, "привет  мир", "the emoji went in one piece");
+        handle_key(&mut app, key_press(KeyCode::Home)).unwrap();
+        handle_key(&mut app, with(KeyCode::Char('f'), KeyModifiers::ALT)).unwrap();
+        handle_key(&mut app, key_press(KeyCode::Backspace)).unwrap();
+        assert_eq!(app.input, "приве  мир");
     }
 
     #[test]

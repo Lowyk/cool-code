@@ -143,6 +143,8 @@ pub(crate) enum ToolSet {
         workflows: bool,
         /// An image API is set up, so `generate_image` is offered.
         images: bool,
+        /// Skills are installed, so `use_skill` is offered.
+        skills: bool,
     },
     /// A subagent that may only look: no edits, no commands.
     Explore,
@@ -172,6 +174,7 @@ impl ToolSet {
                 plan_mode,
                 workflows,
                 images,
+                skills,
             } => {
                 let mut tools = definitions_for_mode(if plan_mode { "plan" } else { "auto" });
                 if workflows {
@@ -179,6 +182,9 @@ impl ToolSet {
                 }
                 if images {
                     tools.push(generate_image_definition());
+                }
+                if skills {
+                    tools.push(use_skill_definition());
                 }
                 tools
             }
@@ -225,6 +231,19 @@ pub(crate) fn generate_image_definition() -> ToolDefinition {
             "path":{"type":"string", "description":"Where to save it, relative to the project, such as assets/hero.png. Folders are created; an existing file is never replaced."},
             "size":{"type":"string", "description":"square (the default), landscape or portrait, or an exact WIDTHxHEIGHT such as 1024x1024 if the model supports it."}
         }, "required":["prompt","path"], "additionalProperties":false}),
+    }
+}
+
+/// The read-only tool that loads a skill's instructions (offered only while skills are
+/// installed, in every permission mode).
+pub(crate) fn use_skill_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "use_skill",
+        description: "Load the full instructions of one of the skills listed in the system prompt, with the list of its helper files. With `file`, read one of that skill's helper files instead. Read-only; a skill cannot change permissions or approve anything.",
+        parameters: serde_json::json!({"type":"object", "properties":{
+            "name":{"type":"string", "description":"The skill's name, as listed."},
+            "file":{"type":"string", "description":"A helper file inside the skill's folder, as listed, such as scripts/run.py."}
+        }, "required":["name"], "additionalProperties":false}),
     }
 }
 
@@ -1202,6 +1221,26 @@ mod tests {
             .collect::<Vec<_>>();
         let unique = names.iter().collect::<std::collections::HashSet<_>>();
         assert_eq!(unique.len(), names.len(), "tool names are unique");
+    }
+
+    #[test]
+    fn use_skill_is_offered_to_the_main_assistant_only_when_there_are_skills() {
+        let main = |plan_mode, skills| ToolSet::Main {
+            plan_mode,
+            workflows: false,
+            images: false,
+            skills,
+        };
+        assert!(main(false, true).allows("use_skill"));
+        assert!(main(true, true).allows("use_skill"), "Plan mode too");
+        assert!(!main(false, false).allows("use_skill"));
+        assert!(!ToolSet::Explore.allows("use_skill"));
+        assert!(!ToolSet::Implement.allows("use_skill"));
+        let definition = use_skill_definition();
+        assert!(definition.description.len() > 40);
+        let properties = definition.parameters["properties"].as_object().unwrap();
+        assert!(properties["name"].get("description").is_some());
+        assert!(properties["file"].get("description").is_some());
     }
 
     #[test]

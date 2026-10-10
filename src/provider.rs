@@ -1429,6 +1429,7 @@ mod tests {
         );
         assert!(!names.iter().any(|name| name.contains("exec")));
         let openai_outside_plan = openai_tool_specs(crate::tools::ToolSet::Main {
+            skills: false,
             images: false,
             plan_mode: false,
             workflows: false,
@@ -1438,6 +1439,7 @@ mod tests {
         }));
         assert!(
             openai_tool_specs(crate::tools::ToolSet::Main {
+                skills: false,
                 images: false,
                 plan_mode: true,
                 workflows: false
@@ -1452,6 +1454,7 @@ mod tests {
         );
         assert_eq!(
             anthropic_tool_specs(crate::tools::ToolSet::Main {
+                skills: false,
                 images: false,
                 plan_mode: true,
                 workflows: false
@@ -1463,6 +1466,7 @@ mod tests {
         );
         assert_eq!(
             anthropic_tool_specs(crate::tools::ToolSet::Main {
+                skills: false,
                 images: false,
                 plan_mode: false,
                 workflows: false
@@ -1474,6 +1478,7 @@ mod tests {
         );
         assert_eq!(
             google_tool_specs(crate::tools::ToolSet::Main {
+                skills: false,
                 images: false,
                 plan_mode: true,
                 workflows: false
@@ -1485,6 +1490,7 @@ mod tests {
         );
         assert_eq!(
             google_tool_specs(crate::tools::ToolSet::Main {
+                skills: false,
                 images: false,
                 plan_mode: false,
                 workflows: false
@@ -1495,6 +1501,7 @@ mod tests {
             names.len() - 1
         );
         let google_specs = google_tool_specs(crate::tools::ToolSet::Main {
+            skills: false,
             images: false,
             plan_mode: true,
             workflows: false,
