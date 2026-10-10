@@ -293,8 +293,10 @@ pub(in crate::tui) fn help_summary(catalog: &[SlashItem]) -> String {
 impl App {
     /// Everything that can follow a slash: the built-in commands, then skills and plugin
     /// commands.
-    pub(in crate::tui) fn slash_catalog(&self) -> Vec<SlashItem> {
-        builtin_items()
+    pub(in crate::tui) fn slash_catalog(&mut self) -> Vec<SlashItem> {
+        let mut catalog = builtin_items();
+        catalog.extend(self.extension_items());
+        catalog
     }
 
     /// Recomputes both suggestion lists after the input or the cursor changed.

@@ -105,6 +105,8 @@ pub(super) struct App {
     pub(super) mention_dismissed_at: Option<usize>,
     /// The `/` command suggestions.
     pub(super) slash: crate::tui::slash::SlashPopup,
+    /// Skills, plugins and mods.
+    pub(super) extensions: crate::tui::extensions::Extensions,
     /// The project's files for suggestions, and when they were read.
     pub(super) project_files: Option<(std::time::Instant, Vec<String>)>,
     /// A message waiting for files outside the project to be confirmed.
@@ -501,6 +503,7 @@ impl App {
             mention: None,
             mention_dismissed_at: None,
             slash: Default::default(),
+            extensions: Default::default(),
             project_files: None,
             outside_prompt: None,
             image_setup: None,

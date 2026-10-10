@@ -5,6 +5,7 @@ pub(crate) mod context;
 mod creators;
 mod editing;
 mod effort;
+mod extensions;
 mod forms;
 mod image_setup;
 mod markdown;
