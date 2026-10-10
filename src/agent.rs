@@ -819,10 +819,13 @@ fn review(
     }
 }
 
+/// Starts the details of an approval that Auto mode's guards sent to the user.
+pub(crate) const AUTO_REASON_PREFIX: &str = "Auto mode is asking because: ";
+
 /// The line that tells the user why Auto mode is asking.
 fn review_prefix(note: &Option<String>) -> String {
     match note {
-        Some(reason) => format!("Auto mode is asking because: {reason}\n\n"),
+        Some(reason) => format!("{AUTO_REASON_PREFIX}{reason}\n\n"),
         None => String::new(),
     }
 }

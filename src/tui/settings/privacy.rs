@@ -185,11 +185,20 @@ impl App {
     }
 }
 
-pub(super) fn privacy_confirm_question(row: usize) -> &'static str {
+/// The title, question and confirming button of the Privacy row's confirmation.
+pub(super) fn privacy_confirm_question(row: usize) -> (&'static str, &'static str, &'static str) {
     if row == 1 {
-        "Clear all custom redaction values? y/n"
+        (
+            "Clear redaction values",
+            "Clear all custom redaction values?",
+            "Clear",
+        )
     } else {
-        "Revoke all privacy acknowledgements and image grants? y/n"
+        (
+            "Revoke acknowledgements",
+            "Revoke all privacy acknowledgements and image grants?",
+            "Revoke",
+        )
     }
 }
 

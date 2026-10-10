@@ -4,8 +4,9 @@
 //! Sizes above 100 subagents ask once for confirmation that they can be very expensive, like the
 //! Ultimate effort does; the answer is remembered in the settings.
 
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, route};
 use crate::tui::effort::effort_name;
-use crate::tui::render::centered_rect;
+use crate::tui::mouse::{Click, Row as MouseRow, record_wrapped};
 use crate::tui::settings::SettingsView;
 use crate::tui::state::App;
 use crate::workflow::{CUSTOM_CEILING, MAX_AT_ONCE, WorkflowSize};
@@ -15,7 +16,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 /// The row below the sizes.
 const AT_ONCE_ROW: usize = WorkflowSize::ALL.len();
@@ -118,12 +119,17 @@ pub(super) fn draw_workflow_chooser(
         )),
         Line::from(""),
     ];
+    let mut clicks = Vec::new();
     for (index, size) in WorkflowSize::ALL.iter().copied().enumerate() {
         lines.push(row(
             index,
             size.label(),
             size_detail(size, chooser),
             size == app.settings.workflow_size,
+        ));
+        clicks.push((
+            lines.len() - 1,
+            Click::Row(MouseRow::new(index, chooser.row)),
         ));
     }
     lines.push(row(
@@ -135,6 +141,11 @@ pub(super) fn draw_workflow_chooser(
         ),
         false,
     ));
+    clicks.push((
+        lines.len() - 1,
+        Click::Row(MouseRow::new(AT_ONCE_ROW, chooser.row).activate(None)),
+    ));
+    record_wrapped(&app.hits, area, &lines, &clicks);
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Ultimate may use the whole size, Super half, and Low, Medium or High with workflows a quarter. Every subagent makes its own requests to your provider.",
@@ -142,43 +153,29 @@ pub(super) fn draw_workflow_chooser(
     )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
     if let Some((size, custom)) = chooser.confirm {
-        draw_confirmation(frame, area, size, custom);
+        draw_dialog(
+            frame,
+            frame.area(),
+            &confirmation(size, custom),
+            &app.dialog_focus,
+            &app.hits,
+        );
     }
 }
 
 /// The one-time warning before a size above 100 subagents.
-fn draw_confirmation(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    size: WorkflowSize,
-    custom: usize,
-) {
+fn confirmation(size: WorkflowSize, custom: usize) -> Dialog<'static> {
     let limit = size.preset_limit().unwrap_or(custom);
-    let popup = centered_rect(80, 60, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(format!(" Confirm {} workflows ", size.label()))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red))
-        .style(Style::default().bg(crate::tui::theme::dialog()));
-    let body = Paragraph::new(vec![
-        Line::from(format!(
+    Dialog::confirm(
+        "workflow-size",
+        format!("Confirm {} workflows", size.label()),
+        Tone::Danger,
+        vec![Line::from(format!(
             "This lets one turn start up to {limit} subagents. That can be very expensive: each one makes its own requests, and one turn can use many times the tokens of a normal one."
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Y",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" confirm    "),
-            Span::styled("N / Esc", Style::default().fg(Color::White)),
-            Span::raw(" cancel"),
-        ]),
-    ])
-    .wrap(Wrap { trim: true })
-    .block(block);
-    frame.render_widget(body, popup);
+        ))],
+        "Confirm",
+        "Cancel",
+    )
 }
 
 impl App {
@@ -191,16 +188,16 @@ impl App {
             return Ok(());
         };
         if let Some((size, custom)) = chooser.confirm {
-            match key.code {
-                KeyCode::Char('y' | 'Y') => {
+            match route(&confirmation(size, custom), &mut self.dialog_focus, key) {
+                Routed::Press(KeyCode::Char('y')) => {
                     self.settings.large_workflows_acknowledged = true;
                     return self.choose_workflow_size(size, custom);
                 }
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                Routed::Press(_) => {
                     chooser.confirm = None;
                     self.notice = "Workflow size unchanged.".to_owned();
                 }
-                _ => {}
+                Routed::Moved | Routed::Other => {}
             }
             self.keep_chooser(Some(chooser));
             return Ok(());
@@ -470,6 +467,24 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(!asking(&app), "asked only once");
         assert_eq!(app.settings.workflow_size, WorkflowSize::Extreme);
+    }
+
+    #[test]
+    fn the_large_size_warning_is_a_shared_dialog_where_enter_cancels() {
+        use crate::tui::mouse::testing::{click_text, has_button};
+        let mut app = chooser(Settings::default());
+        go_to(&mut app, WorkflowSize::Massive);
+        press(&mut app, KeyCode::Enter);
+        assert!(asking(&app));
+        assert!(has_button(&app, "Confirm"));
+        press(&mut app, KeyCode::Enter);
+        assert!(!asking(&app) && open(&app), "Enter is on Cancel");
+        assert_eq!(app.settings.workflow_size, WorkflowSize::Off);
+        assert_eq!(app.notice, "Workflow size unchanged.");
+        press(&mut app, KeyCode::Enter);
+        click_text(&mut app, "[ Confirm (y)");
+        assert_eq!(app.settings.workflow_size, WorkflowSize::Massive);
+        assert!(app.settings.large_workflows_acknowledged);
     }
 
     #[test]

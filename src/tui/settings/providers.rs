@@ -426,6 +426,32 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_provider_asks_in_a_shared_dialog_where_enter_cancels() {
+        use crate::tui::mouse::testing::{click_text, drawn, has_button, rows};
+        let mut app = app_with(
+            vec![
+                profile("google", false, false),
+                profile("groq", false, false),
+            ],
+            Some("google"),
+        );
+        press(&mut app, KeyCode::Char('x'));
+        assert!(has_button(&app, "Delete"));
+        let shown = rows(&drawn(&app, 100, 30)).join("\n");
+        assert!(
+            shown.contains("Delete google and its saved API key?"),
+            "{shown}"
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.settings.providers.len(), 2);
+        assert_eq!(app.notice, "Deletion cancelled.");
+        press(&mut app, KeyCode::Char('x'));
+        click_text(&mut app, "[ Delete (y)");
+        assert_eq!(app.settings.providers.len(), 1);
+        assert_eq!(app.settings.providers[0].id, "groq");
+    }
+
+    #[test]
     fn deleting_last_provider_leaves_no_default() {
         let mut app = app_with(vec![profile("groq", false, true)], Some("groq"));
         press(&mut app, KeyCode::Char('x'));

@@ -10,6 +10,7 @@ mod reset;
 pub(super) mod sync;
 mod workflow_size;
 
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, route};
 use crate::tui::settings::appearance::draw_appearance;
 use crate::tui::settings::auto_mode::draw_auto_mode;
 use crate::tui::settings::auto_switch::draw_auto_switch;
@@ -147,7 +148,20 @@ impl App {
         if view.workflow_chooser.is_some() {
             return self.handle_workflow_chooser_key(key);
         }
-        if view.confirm_delete || view.model_edit.is_some() || view.privacy_sub.is_some() {
+        if view.confirm_delete {
+            // The dialog turns a key or a click into y or n, which the section then handles as it
+            // always has: y deletes, anything else cancels.
+            let section = view.section;
+            let view = view.clone();
+            let dialog = delete_dialog(self, &view);
+            return match route(&dialog, &mut self.dialog_focus, key) {
+                Routed::Press(code) => {
+                    self.handle_section_key(section, event::KeyEvent::from(code))
+                }
+                Routed::Moved | Routed::Other => Ok(()),
+            };
+        }
+        if view.model_edit.is_some() || view.privacy_sub.is_some() {
             let section = view.section;
             return self.handle_section_key(section, key);
         }
@@ -248,15 +262,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
             None => draw_privacy(frame, content, app, view),
         },
     }
-    let footer_line = if view.confirm_delete {
-        let question = confirm_question(app, view);
-        Span::styled(
-            question,
-            Style::default()
-                .fg(Color::Rgb(235, 80, 80))
-                .add_modifier(Modifier::BOLD),
-        )
-    } else if !app.notice.is_empty() {
+    let footer_line = if !app.notice.is_empty() {
         // The settings screen covers the notice line, so what just happened is shown here.
         Span::styled(
             app.notice.clone(),
@@ -266,6 +272,15 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
         Span::styled(footer_hint(view), Style::default().fg(Color::DarkGray))
     };
     frame.render_widget(Paragraph::new(footer_line), footer);
+    if view.confirm_delete {
+        draw_dialog(
+            frame,
+            area,
+            &delete_dialog(app, view),
+            &app.dialog_focus,
+            &app.hits,
+        );
+    }
 }
 
 fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView) {
@@ -301,8 +316,10 @@ fn draw_sidebar(frame: &mut ratatui::Frame<'_>, area: Rect, view: &SettingsView)
     }
 }
 
-fn confirm_question(app: &App, view: &SettingsView) -> String {
-    match view.section {
+/// The confirmation before something in Settings is deleted: its title, question and the label
+/// of the button that deletes.
+fn delete_dialog(app: &App, view: &SettingsView) -> Dialog<'static> {
+    let (title, question, yes) = match view.section {
         Section::Models => {
             let rows = view.tree.rows(&app.settings, false);
             let id = view
@@ -311,7 +328,7 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
                 .and_then(|row| row.target.as_ref())
                 .map(|target| target.id.clone())
                 .unwrap_or_default();
-            format!("Remove {id}? y/n")
+            ("Remove model", format!("Remove {id}?"), "Remove")
         }
         Section::AutoSwitch => {
             let id = app
@@ -320,23 +337,39 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
                 .get(view.row)
                 .map(|chain| chain.id.as_str())
                 .unwrap_or("this chain");
-            format!("Delete chain {id}? y/n")
+            ("Delete chain", format!("Delete chain {id}?"), "Delete")
         }
-        Section::Privacy if view.privacy_sub.is_some() => {
-            "Remove this redaction value? y/n".to_owned()
+        Section::Privacy if view.privacy_sub.is_some() => (
+            "Remove redaction value",
+            "Remove this redaction value?".to_owned(),
+            "Remove",
+        ),
+        Section::Privacy => {
+            let (title, question, yes) = privacy_confirm_question(view.row);
+            (title, question.to_owned(), yes)
         }
-        Section::Privacy => privacy_confirm_question(view.row).to_owned(),
-        Section::AutoMode => String::new(),
-        Section::General | Section::Appearance | Section::Providers => {
+        Section::General | Section::Appearance | Section::Providers | Section::AutoMode => {
             let name = app
                 .settings
                 .providers
                 .get(view.row)
                 .map(|profile| profile.name.as_str())
                 .unwrap_or("this provider");
-            format!("Delete {name} and its saved API key? y/n")
+            (
+                "Delete provider",
+                format!("Delete {name} and its saved API key?"),
+                "Delete",
+            )
         }
-    }
+    };
+    Dialog::confirm(
+        "settings-delete",
+        title,
+        Tone::Danger,
+        vec![Line::from(question)],
+        yes,
+        "Cancel",
+    )
 }
 
 fn footer_hint(view: &SettingsView) -> &'static str {
