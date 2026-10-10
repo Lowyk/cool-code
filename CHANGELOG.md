@@ -5,6 +5,23 @@ All notable changes are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Workflow sizes: Settings → General → Dynamic workflows now chooses the most subagents a turn
+  may start (Off, Small 5, Medium 15, Big 30, Large 50, Massive 100, Extreme 200, or a Custom
+  number up to 500). Ultimate may use the whole size, Super half and lower levels with workflows a
+  quarter. Massive, Extreme and Custom sizes above 100 are confirmed once.
+- An "At once" setting (8 by default, 1 to 32) for how many subagents run at the same time.
+- Low, High and Max effort for DeepSeek V4 (`deepseek-flash`, `deepseek-v4-pro`) and Kimi K3
+  (`kimi-k3`, and `k3`, `k3-256k` and `kimi-for-coding` on Kimi Code), sent as `reasoning_effort`.
+
+### Changed
+
+- The Dynamic workflows switch became a size. Settings files with `dynamic_workflows = true` load
+  as Medium, `false` as Off. Medium keeps Super's old limits (4 per call, 8 per turn); Ultimate on
+  Medium allows 5 per call and 15 per turn (it was 6 and 20).
+- Explorer subagents in one call wait for a free place instead of all starting at once.
+
 ## [0.1.0] - 2026-10-08
 
 The first release.
