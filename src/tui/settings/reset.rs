@@ -391,6 +391,7 @@ mod tests {
         settings.sessions_enabled = true;
         settings.default_load_claude_md = true;
         settings.load_global_claude_md = true;
+        settings.load_claude_skills = true;
         settings.ultimate_acknowledged = true;
         settings.theme_prompt_answered = true;
         settings.motion_prompt_answered = true;
@@ -565,6 +566,7 @@ mod tests {
         assert_eq!(settings.pulse, PulseMode::Words);
         assert!(!settings.stats_enabled && !settings.sessions_enabled);
         assert!(!settings.default_load_claude_md && !settings.load_global_claude_md);
+        assert!(!settings.load_claude_skills);
         assert!(!settings.ultimate_acknowledged);
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.model.as_deref(), Some("m"));

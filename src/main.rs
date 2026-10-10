@@ -16,6 +16,7 @@ mod chatgpt_auth;
 mod context;
 mod effort_support;
 mod endpoints;
+mod extensions;
 mod guard;
 mod headless;
 mod imagegen;
@@ -186,6 +187,8 @@ struct Settings {
     default_load_agents_md: bool,
     /// Load the user's own `~/.claude/CLAUDE.md` in every project.
     load_global_claude_md: bool,
+    /// Also load skills from `~/.claude/skills`.
+    load_claude_skills: bool,
     instructions_prompt_answered: bool,
     /// Unlocks the Super and Ultimate effort tiers (and workflows on lower levels). Off by
     /// default because workflows can spend many times more tokens.
@@ -327,6 +330,7 @@ impl Default for Settings {
             default_load_claude_md: false,
             default_load_agents_md: false,
             load_global_claude_md: false,
+            load_claude_skills: false,
             instructions_prompt_answered: false,
             dynamic_workflows: false,
             workflows: false,

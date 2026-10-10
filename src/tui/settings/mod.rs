@@ -492,13 +492,40 @@ mod tests {
     }
 
     #[test]
+    fn load_claude_skills_sits_with_the_claude_md_switches_and_is_off_by_default() {
+        let mut app = app();
+        assert!(!app.settings.load_claude_skills);
+        app.open_settings(Section::General);
+        let shown = screen(&app, 80, 24);
+        let rows = shown.lines().collect::<Vec<_>>();
+        let global = rows.iter().position(|row| row.contains("Global CLAUDE.md"));
+        let skills = rows
+            .iter()
+            .position(|row| row.contains("Load Claude skills"));
+        assert_eq!(skills, global.map(|row| row + 1), "{shown}");
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..10 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("on");
+        assert!(app.settings.load_claude_skills);
+        assert!(app.notice.contains("~/.claude/skills"), "{}", app.notice);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("off");
+        assert!(!app.settings.load_claude_skills);
+    }
+
+    #[test]
     fn the_dynamic_workflows_switch_unlocks_and_relocks_the_tiers() {
         let mut app = app();
         assert!(!app.settings.dynamic_workflows);
         app.open_settings(Section::General);
         app.handle_settings_view_key(key(KeyCode::Right))
             .expect("focus");
-        for _ in 0..10 {
+        for _ in 0..11 {
             app.handle_settings_view_key(key(KeyCode::Down))
                 .expect("down");
         }
