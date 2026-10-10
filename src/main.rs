@@ -738,6 +738,30 @@ mod tests {
     }
 
     #[test]
+    fn plugin_and_skill_settings_default_off_and_survive_a_round_trip() {
+        let old: Settings = toml::from_str("permission_mode = \"plan\"\n").expect("parse");
+        assert!(!old.load_claude_skills);
+        assert!(old.disabled_plugins.is_empty() && old.approved_mods.is_empty());
+        assert!(old.disabled_mods.is_empty());
+        let mut changed = old;
+        changed.load_claude_skills = true;
+        changed.disabled_plugins.push("kit".to_owned());
+        changed
+            .approved_mods
+            .insert("kit/watch".to_owned(), "abc".to_owned());
+        changed.disabled_mods.push("clock".to_owned());
+        let text = toml::to_string(&changed).expect("write");
+        let back: Settings = toml::from_str(&text).expect("read");
+        assert!(back.load_claude_skills);
+        assert_eq!(back.disabled_plugins, ["kit"]);
+        assert_eq!(
+            back.approved_mods.get("kit/watch").map(String::as_str),
+            Some("abc")
+        );
+        assert_eq!(back.disabled_mods, ["clock"]);
+    }
+
+    #[test]
     fn tests_never_touch_the_real_config_file() {
         let path = settings_path().expect("settings path");
         assert!(
