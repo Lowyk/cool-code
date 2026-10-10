@@ -12,7 +12,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 pub(in crate::tui) struct UsageView {
     scroll: u16,
@@ -149,16 +149,14 @@ pub(in crate::tui) fn draw_usage(frame: &mut ratatui::Frame<'_>, area: Rect, app
     };
     let popup = centered_rect(82, 80, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Usage ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent_bright()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = crate::tui::dialog::window("Usage", crate::tui::dialog::Tone::Normal)
+        .padding(ratatui::widgets::Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.height < 3 {
         return;
     }
+    app.hits.wheel_arrows(popup);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
     frame.render_widget(
         Paragraph::new(usage_lines(app))
@@ -168,7 +166,7 @@ pub(in crate::tui) fn draw_usage(frame: &mut ratatui::Frame<'_>, area: Rect, app
     );
     frame.render_widget(
         Paragraph::new("↑/↓ scroll · r refresh · Esc close")
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(crate::tui::dialog::hint_style()),
         Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
     );
 }

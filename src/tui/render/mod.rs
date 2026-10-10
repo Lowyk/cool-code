@@ -540,7 +540,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         crate::tui::sessions::draw_session_picker(frame, area, app, picker);
     }
     if let Some(login) = app.chatgpt_login.as_ref() {
-        crate::tui::chatgpt_login::draw_chatgpt_login(frame, area, login);
+        crate::tui::chatgpt_login::draw_chatgpt_login(frame, area, login, &app.hits);
     }
     if let Some(prompt) = app.outside_prompt.as_ref() {
         crate::tui::mentions::draw_outside_prompt(

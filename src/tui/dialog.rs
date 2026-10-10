@@ -324,6 +324,96 @@ pub(in crate::tui) fn hint_style() -> Style {
 }
 
 #[cfg(test)]
+mod window_tests {
+    use crate::Settings;
+    use crate::tui::mouse::testing::{drawn, rows};
+    use crate::tui::state::App;
+
+    fn app() -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app
+    }
+
+    /// Whether a window titled `title` is drawn with the shared frame: a rounded corner, then
+    /// the title.
+    fn framed(app: &App, title: &str) -> bool {
+        rows(&drawn(app, 100, 30))
+            .iter()
+            .any(|row| row.contains(&format!("╭ {title} ")))
+    }
+
+    /// Opens a window on the app.
+    type Opener = Box<dyn Fn(&mut App)>;
+
+    #[test]
+    fn every_window_shares_the_dialog_frame() {
+        let windows: Vec<(&str, Opener)> = vec![
+            (
+                "Settings",
+                Box::new(|app| app.open_settings(crate::tui::settings::Section::General)),
+            ),
+            ("Usage", Box::new(|app| app.open_usage())),
+            ("Stats", Box::new(|app| app.open_stats(false))),
+            ("Image generation", Box::new(|app| app.open_image_setup())),
+            (
+                "Model",
+                Box::new(|app| {
+                    app.model_picker =
+                        Some(crate::tui::pickers::model::ModelPicker::new(&app.settings))
+                }),
+            ),
+            ("Permission mode", Box::new(|app| app.mode_picker = true)),
+            ("Select effort", Box::new(|app| app.open_effort_picker())),
+            ("Subagents · this turn", Box::new(|app| app.open_tracker())),
+            (
+                "Setup · 1 of 1",
+                Box::new(|app| {
+                    app.settings.theme_prompt_answered = true;
+                    app.settings.motion_prompt_answered = true;
+                    app.settings.stats_prompt_answered = true;
+                    app.settings.sessions_prompt_answered = true;
+                    app.start_setup();
+                }),
+            ),
+            (
+                "Trust this workspace?",
+                Box::new(|app| app.trust_prompt = true),
+            ),
+        ];
+        for (title, open) in windows {
+            let mut app = app();
+            open(&mut app);
+            assert!(
+                framed(&app, title),
+                "{title}:\n{}",
+                rows(&drawn(&app, 100, 30)).join("\n")
+            );
+        }
+    }
+
+    #[test]
+    fn the_new_windows_draw_on_tiny_terminals() {
+        let mut app = app();
+        app.transcript.push(crate::tui::state::TranscriptEntry {
+            kind: crate::tui::state::TranscriptKind::User,
+            text: "hi".to_owned(),
+        });
+        let (response, _decision) = std::sync::mpsc::sync_channel(1);
+        app.tool_approval = Some(crate::agent::ToolApproval {
+            title: "Run shell command".to_owned(),
+            details: "Auto mode is asking because: why\n\nline\n".repeat(30),
+            response,
+        });
+        app.tracker.open = true;
+        app.confirm_ultimate = true;
+        for (width, height) in [(1, 1), (8, 3), (20, 5), (30, 8), (44, 12), (70, 16)] {
+            drawn(&app, width, height);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{Button, Dialog, DialogFocus, Routed, Tone, dialog_area, draw_dialog, route};
     use crate::tui::mouse::{Click, Hits};
