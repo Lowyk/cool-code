@@ -5,6 +5,30 @@ All notable changes are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The prompt has a cursor: ←/→ move by character, Ctrl or Alt+←/→ (and Alt+B/F) by word,
+  Home/End and Ctrl+A/E to the start and end of the line. Delete removes forward, and
+  Ctrl+Backspace, Alt+Backspace, Ctrl+H and Ctrl+W delete the previous word. Typing, pasting and
+  new lines go in at the cursor, which is drawn in the right place in wrapped and multi-line text.
+- Typing `/` lists the commands with a line about each; ↑/↓ choose, Tab or Enter complete.
+- Skills in the Claude Code `SKILL.md` format, from `~/.coolcode/skills`, a trusted project's
+  `.coolcode/skills`, plugins, and (with the new Load Claude skills setting) `~/.claude/skills`.
+  The model sees their names and descriptions and loads one with the read-only `use_skill` tool,
+  in every mode; `/<skill> [text]` runs one.
+- Plugins: `/plugin install <git-url or folder>` shows everything a plugin adds, every mod command
+  line included, and installs nothing until you confirm. `/plugin list`, `/plugin remove` and
+  Settings → Plugins manage them.
+- Mods: small programs that receive events as JSON lines and can show a status-line text or a
+  notice. They run only once approved (again after any change), cannot approve or change
+  anything, get no API keys from the environment, and are stopped on exit.
+
+### Changed
+
+- `/help` and the command list come from one table, and an unknown command names the closest
+  ones.
+- The system prompt is at version 4: it lists installed skills.
+
 ## [0.1.0] - 2026-10-08
 
 The first release.

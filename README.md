@@ -15,6 +15,7 @@ Cool Code is a terminal UI where an AI model reads your repository, proposes edi
 - **Know what you are spending.** `/usage` shows every provider's remaining usage, and running-low warnings appear before a balance or limit runs out.
 - **Private by default.** Sessions and usage stats are opt-in, project data lives outside your repositories, and outbound text can be redacted for providers that need it.
 - **Looks good.** Answers are drawn as Markdown (headings, code blocks, lists, tables), there are eight themes with animated backdrops and a light mode, and a synchronized renderer with no flicker.
+- **Extensible, within the rules.** Skills (in the Claude Code `SKILL.md` format), plugins and small status-line mods, none of which can change a permission or approve anything.
 
 ## Install
 
@@ -105,7 +106,7 @@ The mode is enforced by the harness, not by what the model recommends. Edits are
 
 ### Tools
 
-The model has twelve tools. **Reading:** `list_files`, `read_file`, `search_text` (literal or regex), `git_status`, `git_diff`, `git_log`. **Changing:** `replace_text` (preferred), `replace_in_file`, `write_to_file`, `create_file` (never overwrites), `run_command` (PowerShell on Windows, `sh -lc` elsewhere). **Planning:** `request_plan_approval` in Plan mode. The system prompt is generated from this list and your mode, so it never describes a tool the model does not have.
+The model has twelve tools. **Reading:** `list_files`, `read_file`, `search_text` (literal or regex), `git_status`, `git_diff`, `git_log`. **Changing:** `replace_text` (preferred), `replace_in_file`, `write_to_file`, `create_file` (never overwrites), `run_command` (PowerShell on Windows, `sh -lc` elsewhere). **Planning:** `request_plan_approval` in Plan mode. While skills are installed it also has the read-only `use_skill` (see [Skills](#skills)). The system prompt is generated from this list and your mode, so it never describes a tool the model does not have.
 
 ### Effort and workflows
 
@@ -124,6 +125,24 @@ If you add an image API, the model can make placeholder pictures while it builds
 Type `@` to attach a file to your message. A list of the project's files appears as you type (best matches first, build output and anything that looks like a secret left out); **↑/↓** choose, **Tab** or **Enter** insert, **Esc** closes it. A path with a separator browses that folder (`@src/`), and names with spaces are quoted (`@"my notes.txt"`). Images attach too. References inside the project work in a trusted folder as before, and `@./x` or `@src/../x` are fine as long as they stay inside.
 
 Files **outside** the project (`@../x`, `@~/x`, a full path, or a link that leads out) are refused until you turn on **Settings → Privacy → Outside files**. Even then, every such file is shown to you and has to be confirmed with **y** before it is read, one at a time, and answering **n** sends nothing and gives you your text back. A path that looks like it may hold secrets (`.env`, keys, `.ssh`, anything named like credentials) is flagged in red. There is also a hidden second option that stops the confirmations for ordinary files (secret-looking paths always still ask); it appears if you switch the Outside files setting on and off six times in quick succession.
+
+### Editing the prompt
+
+The prompt has a cursor. **←/→** move by character (an emoji or an accented letter is one step), **Ctrl+←/→** or **Alt+←/→** by word (many macOS terminals send Option+←/→ as **Alt+B/F**, which work too), **Home/End** or **Ctrl+A/E** to the start or end of the line. **Backspace** deletes before the cursor and **Delete** after it. **Ctrl+Backspace** and **Alt+Backspace** delete the word before the cursor; terminals report Ctrl+Backspace differently (Windows and terminals with the enhanced keyboard protocol send Backspace with Ctrl, many Unix terminals send **Ctrl+H**, which therefore also deletes a word, and some send a plain Backspace, which deletes one character). **Ctrl+W** deletes back to the previous space, as in a shell. Typing, pasting and **Shift+Enter** / **Alt+Enter** insert at the cursor, and `@` suggestions work on the word at the cursor.
+
+### Slash commands
+
+Typing `/` at the start of the prompt lists the commands, with a line about each, and narrows the list as you type (names that start with what you typed first, then names that contain it). **↑/↓** choose, **Tab** or **Enter** complete, **Esc** closes the list; **Enter** on a complete command runs it. Skills and plugin commands are in the list too. The list and `/help` come from the same table, and a mistyped command names the closest ones: `Unknown command /hepl. Did you mean /help?`.
+
+### Skills
+
+A skill is a folder with a `SKILL.md` (a `name` and a `description` in its frontmatter, then instructions) and optional helper files, in the same format as Claude Code. Cool Code reads skills from `~/.coolcode/skills/`, from the project's `.coolcode/skills/` in a trusted folder, from enabled plugins, and from `~/.claude/skills/` when **Settings → General → Load Claude skills** is on (off by default). Only names and descriptions go into the system prompt; the model loads a skill's instructions with `use_skill` when a task matches, in every mode including Plan. Run one yourself with `/<skill-name> [what to add]`. A skill is instructions only: it cannot change the permission mode, approve an action or skip a check. Details: [docs/extensions.md](docs/extensions.md).
+
+### Plugins and mods
+
+A **plugin** is a folder or Git repository with a `plugin.toml` that can add skills, slash commands that expand to a prompt, and mods. `/plugin install <git-url or folder>` fetches it into a staging folder and shows exactly what it adds, including every mod's command line; nothing is installed or run until you press **y**. `/plugin list` and `/plugin remove <name>` manage them, and **Settings → Plugins** switches plugins and mods on and off.
+
+A **mod** is a small program (from a plugin or `~/.coolcode/mods/<name>/mod.toml`) that receives events such as "turn finished" as JSON lines and can put a short text in the status line or show a notice. It runs only after you approved its manifest, again whenever the manifest changes, without your environment's API keys, and it is stopped when Cool Code exits. Mods only watch: they cannot approve, block or change anything. A mod that crashes, hangs or prints garbage is reported and ignored. The formats and the protocol are in [docs/extensions.md](docs/extensions.md).
 
 ### Undo
 
@@ -156,13 +175,16 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/init` | Create a starter `COOL.md` |
 | `/claudemd`, `/agentsmd` | Toggle those files for this project |
 | `/privacy [add\|clear\|revoke]` | Local redaction values and acknowledgements |
+| `/plugin [install <source>\|list\|remove <name>]` | Install, list or remove plugins |
+| `/<skill or plugin command> [text]` | Run a skill or a plugin's command |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
-Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation. The command line also has `coolcode run`, `coolcode config`, `coolcode effort`, `coolcode init`, `coolcode --resume`, `coolcode --latest` and `--all-folders`.
+Type `/` for a list of these. Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation. The command line also has `coolcode run`, `coolcode config`, `coolcode effort`, `coolcode init`, `coolcode --resume`, `coolcode --latest` and `--all-folders`.
 
 ## Privacy and data
 
-- **Everything lives in `~/.coolcode/`**, never inside your projects: `config.toml`, `projects.toml` (which folders you trust, so a repository cannot trust itself), optional `sessions/`, and optional `stats.jsonl`. API keys and sign-in tokens use the OS credential store.
+- **Everything lives in `~/.coolcode/`**, never inside your projects: `config.toml`, `projects.toml` (which folders you trust, so a repository cannot trust itself), optional `sessions/`, optional `stats.jsonl`, and your `skills/`, `plugins/` and `mods/`. API keys and sign-in tokens use the OS credential store.
+- **Mods see little.** They get event names and counts (never your messages, command lines or files) and a minimal environment without your API keys.
 - **Sessions are opt-in.** They are plain files holding the full conversation exactly as typed, before redaction. Resume with `/resume` or `coolcode --resume`.
 - **Usage stats are opt-in** and record only timestamps, provider and model names, token counts, durations and outcomes. Never prompts or answers, and nothing is sent anywhere. `/stats` shows a summary and a heatmap.
 - **Redaction.** For providers that require it, common API keys, emails, phone-like numbers and your custom values are replaced by placeholders before sending, and restored locally in the reply. This is best-effort, not a guarantee, and images cannot be inspected, so they need their own consent.
