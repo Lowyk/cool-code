@@ -5,14 +5,14 @@
 //! Privacy. Each outside file is still confirmed before it is read.
 
 use crate::tui::context::{Built, OutsideFile, OutsidePolicy, build_user_message_in, plain};
-use crate::tui::render::centered_rect;
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, route};
 use crate::tui::state::App;
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -477,8 +477,12 @@ impl App {
         let Some(prompt) = self.outside_prompt.as_mut() else {
             return Ok(());
         };
-        match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+        let pressed = match route(&outside_dialog(prompt), &mut self.dialog_focus, key) {
+            Routed::Press(code) => code,
+            Routed::Moved | Routed::Other => return Ok(()),
+        };
+        match pressed {
+            KeyCode::Char('y') => {
                 let file = prompt.files[prompt.index].path.clone();
                 prompt.approved.insert(file);
                 prompt.index += 1;
@@ -487,13 +491,12 @@ impl App {
                     self.send_prompt_in(&done.root, done.prompt, &done.approved)?;
                 }
             }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+            _ => {
                 let cancelled = self.outside_prompt.take().expect("prompt is open");
                 self.input = cancelled.prompt;
                 self.notice =
                     "Nothing was sent: a file outside the project was not allowed.".to_owned();
             }
-            _ => {}
         }
         Ok(())
     }
@@ -570,24 +573,24 @@ pub(in crate::tui) fn draw_mentions(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The question about a file outside the project.
-pub(in crate::tui) fn draw_outside_prompt(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    prompt: &OutsidePrompt,
-) {
-    let popup = centered_rect(70, 45, area);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" A file outside the project ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
-        .style(Style::default().bg(crate::tui::theme::dialog()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+/// The question about a file outside the project. Allow starts highlighted, as Enter has always
+/// allowed the file.
+fn outside_dialog(prompt: &OutsidePrompt) -> Dialog<'static> {
+    let mut dialog = Dialog::confirm(
+        "outside",
+        "A file outside the project",
+        Tone::Warning,
+        Vec::new(),
+        "Allow this file",
+        "Cancel",
+    )
+    .default_button(0);
     let Some(file) = prompt.files.get(prompt.index) else {
-        return;
+        return dialog;
     };
+    if file.sensitive {
+        dialog.tone = Tone::Danger;
+    }
     let dim = Style::default().fg(Color::DarkGray);
     let mut lines = vec![
         Line::from("Let the model read this file?"),
@@ -612,16 +615,26 @@ pub(in crate::tui) fn draw_outside_prompt(
         "Its contents are sent to your model provider with the message.",
         dim,
     )));
-    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!(
-            "y allow this file · n cancel, nothing is sent · file {} of {}",
+            "Cancel sends nothing · file {} of {}",
             prompt.index + 1,
             prompt.files.len()
         ),
         dim,
     )));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    dialog.body = lines;
+    dialog
+}
+
+pub(in crate::tui) fn draw_outside_prompt(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    prompt: &OutsidePrompt,
+    focus: &crate::tui::dialog::DialogFocus,
+    hits: &crate::tui::mouse::Hits,
+) {
+    draw_dialog(frame, area, &outside_dialog(prompt), focus, hits);
 }
 
 #[cfg(test)]
@@ -1065,7 +1078,7 @@ mod tests {
         let shown = screen(&app);
         assert!(shown.contains("A file outside the project"), "{shown}");
         assert!(
-            shown.contains("sibling.txt") && shown.contains("y allow this file"),
+            shown.contains("sibling.txt") && shown.contains("Allow this file (y)"),
             "{shown}"
         );
         app.handle_outside_prompt_key(key(KeyCode::Char('y')))
@@ -1083,6 +1096,47 @@ mod tests {
             sent.content.as_str().unwrap().contains("x"),
             "its contents are attached"
         );
+    }
+
+    #[test]
+    fn the_outside_file_question_is_a_shared_dialog_with_the_same_answers() {
+        use crate::tui::mouse::testing::{click_text, has_button};
+        let asking = || {
+            let (project, _) = tree();
+            let mut app = trusted_app();
+            app.settings.outside_files = true;
+            app.send_prompt_in(
+                &project,
+                "summarize @../sibling.txt".to_owned(),
+                &HashSet::new(),
+            )
+            .expect("send");
+            app
+        };
+        assert!(has_button(&asking(), "Allow this file"));
+        assert!(has_button(&asking(), "Cancel"));
+        for how in ["Enter", "click"] {
+            let mut app = asking();
+            match how {
+                "Enter" => app.handle_outside_prompt_key(key(KeyCode::Enter)).unwrap(),
+                _ => click_text(&mut app, "Allow this file"),
+            }
+            assert!(app.outside_prompt.is_none(), "{how}");
+            assert!(app.pending.is_some(), "{how}: the message went out");
+        }
+        for how in ["Esc", "click"] {
+            let mut app = asking();
+            match how {
+                "Esc" => app.handle_outside_prompt_key(key(KeyCode::Esc)).unwrap(),
+                _ => click_text(&mut app, "[ Cancel"),
+            }
+            assert!(
+                app.outside_prompt.is_none() && app.pending.is_none(),
+                "{how}"
+            );
+            assert!(app.messages.is_empty(), "{how}: nothing was sent");
+            assert_eq!(app.input, "summarize @../sibling.txt", "{how}");
+        }
     }
 
     #[test]

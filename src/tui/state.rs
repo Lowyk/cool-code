@@ -67,9 +67,10 @@ pub(super) struct App {
     pub(super) workspace_trusted: bool,
     /// Where the per-project choices (trust, CLAUDE.md / AGENTS.md loading) are kept.
     pub(super) projects_path: std::path::PathBuf,
-    pub(super) trust_choice: usize,
     pub(super) tool_approval: Option<ToolApproval>,
     pub(super) approval_scroll: u16,
+    /// The approval card shows all of its details instead of the first few rows.
+    pub(super) approval_expanded: bool,
     pub(super) messages: Vec<provider::ChatMessage>,
     pub(super) transcript: Vec<TranscriptEntry>,
     pub(super) pending: Option<Receiver<PendingEvent>>,
@@ -130,6 +131,10 @@ pub(super) struct App {
     pub(super) session_picker: Option<crate::tui::sessions::SessionPicker>,
     /// Where the prompt cursor belongs after the latest draw (`None`: hidden).
     pub(super) cursor: std::cell::Cell<Option<ratatui::layout::Position>>,
+    /// What the mouse can click and scroll in the latest frame.
+    pub(super) hits: crate::tui::mouse::Hits,
+    /// The highlighted button of the open dialog.
+    pub(super) dialog_focus: crate::tui::dialog::DialogFocus,
     pub(super) session_id: String,
     pub(super) session_created: i64,
     pub(super) session_dir: std::path::PathBuf,
@@ -477,9 +482,9 @@ impl App {
             wizard: None,
             workspace_trusted,
             projects_path,
-            trust_choice: 1,
             tool_approval: None,
             approval_scroll: 0,
+            approval_expanded: false,
             messages: Vec::new(),
             transcript: Vec::new(),
             pending: None,
@@ -520,6 +525,8 @@ impl App {
             announced_warnings: std::collections::HashSet::new(),
             peak_balances: std::collections::HashMap::new(),
             cursor: std::cell::Cell::new(None),
+            hits: crate::tui::mouse::Hits::default(),
+            dialog_focus: crate::tui::dialog::DialogFocus::default(),
             session_id: crate::session::new_id(session_created),
             session_created,
             session_dir: crate::tui::sessions::default_session_dir(),

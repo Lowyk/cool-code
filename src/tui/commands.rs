@@ -702,6 +702,7 @@ impl App {
             }
             Ok(PendingEvent::ApprovalRequest(request)) => {
                 self.approval_scroll = 0;
+                self.approval_expanded = false;
                 self.tool_approval = Some(request);
                 self.notice = "The assistant is waiting for your approval.".to_owned();
             }
