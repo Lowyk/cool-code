@@ -3,6 +3,7 @@ pub(in crate::tui) mod auto_mode;
 mod auto_switch;
 mod general;
 mod models;
+mod plugins;
 mod privacy;
 mod providers;
 pub(in crate::tui) use providers::remaining_bar;
@@ -36,10 +37,11 @@ pub(in crate::tui) enum Section {
     AutoMode,
     AutoSwitch,
     Privacy,
+    Plugins,
 }
 
 impl Section {
-    pub(in crate::tui) const ALL: [Section; 7] = [
+    pub(in crate::tui) const ALL: [Section; 8] = [
         Section::General,
         Section::Appearance,
         Section::Providers,
@@ -47,6 +49,7 @@ impl Section {
         Section::AutoMode,
         Section::AutoSwitch,
         Section::Privacy,
+        Section::Plugins,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -58,6 +61,7 @@ impl Section {
             Section::AutoMode => "Auto Mode",
             Section::AutoSwitch => "Auto-switch",
             Section::Privacy => "Privacy",
+            Section::Plugins => "Plugins",
         }
     }
 
@@ -89,6 +93,8 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) reset: Option<ResetStage>,
     pub(in crate::tui) tree: crate::tui::widgets::tree::TreeState,
     pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
+    /// A yes-or-no question in Settings > Plugins.
+    pub(in crate::tui) plugin_confirm: Option<plugins::PluginConfirm>,
 }
 
 impl SettingsView {
@@ -102,6 +108,7 @@ impl SettingsView {
             reset: None,
             tree: crate::tui::widgets::tree::TreeState::default(),
             privacy_sub: None,
+            plugin_confirm: None,
         }
     }
 }
@@ -120,6 +127,7 @@ impl App {
             Section::AutoMode => self.handle_auto_mode_key(key),
             Section::AutoSwitch => self.handle_auto_switch_key(key),
             Section::Privacy => self.handle_privacy_key(key),
+            Section::Plugins => self.handle_plugins_key(key),
         }
     }
 
@@ -139,7 +147,11 @@ impl App {
         if view.reset.is_some() {
             return self.handle_reset_key(key);
         }
-        if view.confirm_delete || view.model_edit.is_some() || view.privacy_sub.is_some() {
+        if view.confirm_delete
+            || view.model_edit.is_some()
+            || view.privacy_sub.is_some()
+            || view.plugin_confirm.is_some()
+        {
             let section = view.section;
             return self.handle_section_key(section, key);
         }
@@ -236,6 +248,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
             Some(sub) => draw_privacy_sub(frame, content, app, sub),
             None => draw_privacy(frame, content, app, view),
         },
+        Section::Plugins => plugins::draw_plugins(frame, content, app, view),
     }
     let footer_line = if view.confirm_delete {
         let question = confirm_question(app, view);
@@ -315,7 +328,7 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
             "Remove this redaction value? y/n".to_owned()
         }
         Section::Privacy => privacy_confirm_question(view.row).to_owned(),
-        Section::AutoMode => String::new(),
+        Section::AutoMode | Section::Plugins => String::new(),
         Section::General | Section::Appearance | Section::Providers => {
             let name = app
                 .settings
@@ -338,6 +351,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
     if let Some(sub) = &view.privacy_sub {
         return privacy_sub_hint(sub);
     }
+    if view.section == Section::Plugins && view.focus == Focus::Content {
+        return plugins::plugins_hint(view);
+    }
     match (view.focus, view.section) {
         (Focus::Sidebar, _) => "↑↓ section   →/Enter open   Esc close",
         (Focus::Content, Section::Models) => {
@@ -356,6 +372,7 @@ fn footer_hint(view: &SettingsView) -> &'static str {
             "↑↓ move   Enter edit   n new   Space activate   x delete   Esc back"
         }
         (Focus::Content, Section::Privacy) => "↑↓ move   Enter change   ← sections   Esc back",
+        (Focus::Content, Section::Plugins) => plugins::plugins_hint(view),
     }
 }
 
