@@ -5,14 +5,15 @@
 //! Privacy. Each outside file is still confirmed before it is read.
 
 use crate::tui::context::{Built, OutsideFile, OutsidePolicy, build_user_message_in, plain};
-use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, route};
+use crate::tui::dialog::{Dialog, Routed, Tone, draw_dialog, hint_style, route, window};
+use crate::tui::mouse::{Click, Hits, Row as MouseRow, line_rect};
 use crate::tui::state::App;
 use anyhow::Result;
 use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -507,6 +508,7 @@ pub(in crate::tui) fn draw_mentions(
     frame: &mut ratatui::Frame<'_>,
     prompt_area: Rect,
     state: &MentionState,
+    hits: &Hits,
 ) {
     let shown = state.items.len().min(VISIBLE_SUGGESTIONS);
     let height = (shown as u16 + 2).min(prompt_area.y);
@@ -520,11 +522,11 @@ pub(in crate::tui) fn draw_mentions(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel()))
-        .title(" Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ")
+    let block = window("Files", Tone::Normal)
+        .title_bottom(Line::from(Span::styled(
+            " ↑/↓ choose · Tab or Enter to insert · Esc closes ",
+            hint_style(),
+        )))
         .title_bottom(
             Line::from(format!(" {}/{} ", state.selected + 1, state.items.len())).right_aligned(),
         );
@@ -536,6 +538,23 @@ pub(in crate::tui) fn draw_mentions(
         .offset
         .max((state.selected + 1).saturating_sub(rows))
         .min(state.selected);
+    // ↑/↓ skip the explanations, so a row's place counts only the choosable rows.
+    let choosable = |end: usize| {
+        state.items[..end.min(state.items.len())]
+            .iter()
+            .filter(|item| !item.disabled)
+            .count()
+    };
+    let current = choosable(state.selected);
+    hits.wheel_arrows(popup);
+    for (row, index) in (first..state.items.len().min(first + rows)).enumerate() {
+        if !state.items[index].disabled {
+            hits.click(
+                line_rect(inner, row),
+                Click::Row(MouseRow::new(choosable(index), current).activate(Some(KeyCode::Tab))),
+            );
+        }
+    }
     let lines = state
         .items
         .iter()
@@ -1137,6 +1156,28 @@ mod tests {
             assert!(app.messages.is_empty(), "{how}: nothing was sent");
             assert_eq!(app.input, "summarize @../sibling.txt", "{how}");
         }
+    }
+
+    #[test]
+    fn clicking_a_suggestion_picks_it_and_a_second_click_inserts_it() {
+        use crate::tui::mouse::testing::click_text;
+        let mut app = trusted_app();
+        app.project_files = Some((
+            Instant::now(),
+            vec![
+                "alpha_notes.txt".to_owned(),
+                "bravo_notes.txt".to_owned(),
+                "charlie_notes.txt".to_owned(),
+            ],
+        ));
+        app.input = "@_notes".to_owned();
+        app.refresh_mentions();
+        assert!(app.mention.is_some(), "the suggestions are open");
+        click_text(&mut app, "charlie_notes.txt");
+        assert_eq!(app.input, "@_notes", "the first click only picks it");
+        click_text(&mut app, "charlie_notes.txt");
+        assert_eq!(app.input, "@charlie_notes.txt ");
+        assert!(app.mention.is_none());
     }
 
     #[test]

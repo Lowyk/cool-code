@@ -73,6 +73,10 @@ pub(super) fn draw_models(
             let mut lines = vec![Line::from("Add a model to which provider?"), Line::from("")];
             for (position, index) in provider_choices(&app.settings).into_iter().enumerate() {
                 let selected = position == *choice;
+                app.hits.click(
+                    crate::tui::mouse::line_rect(area, lines.len()),
+                    crate::tui::mouse::Click::Row(crate::tui::mouse::Row::new(position, *choice)),
+                );
                 lines.push(Line::from(vec![
                     Span::styled(
                         if selected { "▸ " } else { "  " },
@@ -98,6 +102,13 @@ pub(super) fn draw_models(
                 &rows,
                 view.tree.selected,
                 view.focus == Focus::Content,
+            );
+            crate::tui::widgets::tree::record_tree(
+                &app.hits,
+                area,
+                rows.len(),
+                view.tree.selected,
+                super::focus_key(view),
             );
             return;
         }

@@ -335,6 +335,168 @@ pub(in crate::tui) mod testing {
 }
 
 #[cfg(test)]
+mod frame_tests {
+    use super::handle_mouse;
+    use super::testing::{click, click_text, drawn, find, wheel};
+    use crate::tui::settings::{Focus, Section};
+    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use crate::{ModelProfile, ProviderProfile, Settings};
+
+    fn app() -> App {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app
+    }
+
+    fn provider(id: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            adapter: "openai-compatible".to_owned(),
+            model: format!("{id}-model"),
+            models: vec![ModelProfile {
+                id: format!("{id}-model"),
+                name: String::new(),
+            }],
+            auto_switch: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_click_selects_a_settings_row_and_a_second_click_changes_it() {
+        let mut app = app();
+        app.open_settings(Section::General);
+        click_text(&mut app, "Usage warnings");
+        let view = app.settings_view.as_ref().expect("open");
+        assert_eq!((view.focus, view.row), (Focus::Content, 11));
+        assert!(app.settings.usage_warnings, "the first click only selects");
+        click_text(&mut app, "Usage warnings");
+        assert!(
+            !app.settings.usage_warnings,
+            "clicking the selected row changes it"
+        );
+        click_text(&mut app, "Model");
+        assert_eq!(app.settings_view.as_ref().unwrap().row, 0);
+        assert!(app.model_picker.is_none(), "moving never opens anything");
+    }
+
+    #[test]
+    fn a_click_in_the_sidebar_opens_that_section() {
+        let mut app = app();
+        app.open_settings(Section::General);
+        click_text(&mut app, "Usage warnings");
+        click_text(&mut app, "Privacy");
+        let view = app.settings_view.as_ref().expect("open");
+        assert_eq!(view.section, Section::Privacy);
+        assert_eq!(view.focus, Focus::Sidebar);
+        click_text(&mut app, "Privacy");
+        assert_eq!(app.settings_view.as_ref().unwrap().focus, Focus::Content);
+    }
+
+    #[test]
+    fn rows_of_a_settings_list_and_of_the_model_picker_are_clickable() {
+        let mut app = app();
+        app.settings.providers = vec![provider("alpha"), provider("bravo")];
+        app.open_settings(Section::Providers);
+        click_text(&mut app, "bravo");
+        assert_eq!(app.settings_view.as_ref().unwrap().row, 1);
+        click_text(&mut app, "+ Add provider");
+        assert_eq!(app.settings_view.as_ref().unwrap().row, 2);
+
+        let mut app = self::app();
+        app.settings.providers = vec![provider("alpha"), provider("bravo")];
+        app.model_picker = Some(crate::tui::pickers::model::ModelPicker::new(&app.settings));
+        click_text(&mut app, "bravo");
+        click_text(&mut app, "bravo");
+        assert!(app.model_picker.is_some(), "a provider row unfolds instead");
+        click_text(&mut app, "bravo-model");
+        click_text(&mut app, "bravo-model");
+        assert!(app.model_picker.is_none(), "the second click used it");
+        assert_eq!(app.settings.model.as_deref(), Some("bravo-model"));
+    }
+
+    #[test]
+    fn the_mode_picker_and_the_effort_picker_take_clicks() {
+        let mut app = app();
+        app.mode_picker = true;
+        app.mode_index = crate::policy::mode_index("plan");
+        click_text(&mut app, "Manual");
+        assert_eq!(app.mode_index, crate::policy::mode_index("manual"));
+        assert!(app.mode_picker, "the first click only selects");
+        click_text(&mut app, "Manual");
+        assert_eq!(app.settings.permission_mode, "manual");
+        assert!(!app.mode_picker);
+
+        let mut app = self::app();
+        app.open_effort_picker();
+        let before = app.picker_index;
+        let terminal = drawn(&app, 100, 30);
+        let (x, y) = find(&terminal, "Low");
+        handle_mouse(&mut app, click(x, y)).expect("click");
+        assert!(app.picker && app.picker_index < before, "moved to Low");
+        handle_mouse(&mut app, click(x, y)).expect("click");
+        assert!(!app.picker, "the second click chose it");
+        assert_eq!(app.settings.effort, crate::Effort::Low);
+    }
+
+    #[test]
+    fn the_setup_wizard_and_the_session_picker_take_clicks() {
+        let mut app = app();
+        app.settings.motion_prompt_answered = true;
+        app.settings.stats_prompt_answered = true;
+        app.settings.sessions_prompt_answered = true;
+        app.settings.instructions_prompt_answered = true;
+        app.start_setup();
+        let first = crate::tui::theme::THEMES[1].name;
+        click_text(&mut app, first);
+        assert_eq!(
+            app.settings.theme,
+            crate::tui::theme::THEMES[1].id,
+            "previewed"
+        );
+        click_text(&mut app, first);
+        assert!(app.wizard.is_none() && app.settings.theme_prompt_answered);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_conversation_and_moves_through_lists() {
+        let mut app = app();
+        for index in 0..60 {
+            app.transcript.push(TranscriptEntry {
+                kind: TranscriptKind::Assistant,
+                text: format!("answer line {index}"),
+            });
+        }
+        drawn(&app, 100, 30);
+        handle_mouse(&mut app, wheel(10, 5, true)).expect("wheel");
+        assert_eq!(app.history_scroll, 3);
+        handle_mouse(&mut app, wheel(10, 5, false)).expect("wheel");
+        assert_eq!(app.history_scroll, 0);
+
+        app.open_settings(Section::General);
+        click_text(&mut app, "Model");
+        drawn(&app, 100, 30);
+        handle_mouse(&mut app, wheel(50, 10, false)).expect("wheel");
+        assert_eq!(app.settings_view.as_ref().unwrap().row, 1);
+        assert_eq!(app.history_scroll, 0, "the conversation behind stays put");
+    }
+
+    #[test]
+    fn a_double_click_in_one_batch_lands_on_the_row_it_was_aimed_at() {
+        let mut app = app();
+        app.open_settings(Section::General);
+        click_text(&mut app, "Model");
+        let terminal = drawn(&app, 100, 30);
+        let (x, y) = find(&terminal, "Usage warnings");
+        handle_mouse(&mut app, click(x, y)).expect("first");
+        handle_mouse(&mut app, click(x, y)).expect("second, before a redraw");
+        assert_eq!(app.settings_view.as_ref().unwrap().row, 11);
+        assert!(!app.settings.usage_warnings, "the double-click changed it");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{Click, Hits, Row};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

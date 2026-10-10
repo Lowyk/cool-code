@@ -3,7 +3,7 @@ use crate::tui::state::App;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 const GLYPHS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 // Rows used by everything except the bar: padding, labels, mappings, gaps, the workflows
@@ -533,11 +533,7 @@ pub(super) fn draw_effort_picker(
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Select effort ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::tui::theme::accent()))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = crate::tui::dialog::window("Select effort", crate::tui::dialog::Tone::Normal);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.width < levels.len() as u16 || inner.height == 0 {
@@ -553,6 +549,14 @@ pub(super) fn draw_effort_picker(
         let right = area.x + area.width * (index as u16 + 1) / count;
         Rect::new(left, area.y, right - left, area.height)
     };
+    for index in 0..levels.len() {
+        app.hits.click(
+            column(index, inner),
+            crate::tui::mouse::Click::Row(
+                crate::tui::mouse::Row::new(index, selected_index).horizontal(),
+            ),
+        );
+    }
     for (index, effort) in levels.iter().copied().enumerate() {
         let selected = index == selected_index;
         let locked = effort.is_workflow_tier() && !unlocked;

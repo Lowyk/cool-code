@@ -1,13 +1,14 @@
 use crate::Settings;
+use crate::tui::dialog::{Tone, hint_style, window};
 use crate::tui::render::centered_rect;
 use crate::tui::state::App;
-use crate::tui::widgets::tree::{RowKind, TreeState, draw_tree};
+use crate::tui::widgets::tree::{RowKind, TreeState, draw_tree, record_tree};
 use anyhow::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph};
 
 pub(in crate::tui) struct ModelPicker {
     pub(in crate::tui) tree: TreeState,
@@ -68,21 +69,19 @@ pub(in crate::tui) fn draw_model_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     picker: &ModelPicker,
-    settings: &Settings,
+    app: &App,
 ) {
+    let settings = &app.settings;
     let popup = centered_rect(72, 76, area);
     frame.render_widget(Clear, popup);
     let accent = crate::tui::theme::accent_bright();
-    let block = Block::default()
-        .title(" Model ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = window("Model", Tone::Normal).padding(Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.height < 4 {
         return;
     }
+    app.hits.wheel_arrows(popup);
     let filter = Line::from(vec![
         Span::styled("> ", Style::default().fg(accent)),
         Span::raw(picker.tree.filter.clone()),
@@ -95,10 +94,11 @@ pub(in crate::tui) fn draw_model_picker(
     let list_area = Rect::new(inner.x, inner.y + 2, inner.width, inner.height - 3);
     let rows = picker.tree.rows(settings, true);
     draw_tree(frame, list_area, &rows, picker.tree.selected, true);
+    record_tree(&app.hits, list_area, rows.len(), picker.tree.selected, None);
     frame.render_widget(
         Paragraph::new(Span::styled(
             "type to filter   ↑↓ move   ←→ fold   Enter use or fold   Esc close",
-            Style::default().fg(Color::DarkGray),
+            hint_style(),
         ))
         .alignment(Alignment::Center),
         Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1),

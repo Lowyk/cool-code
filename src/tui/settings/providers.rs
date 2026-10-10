@@ -63,12 +63,20 @@ pub(super) fn draw_providers(
         selected: view.row,
         filter: String::new(),
     };
+    let list_area = Rect::new(area.x, area.y, area.width, list_height);
     draw_list(
         frame,
-        Rect::new(area.x, area.y, area.width, list_height),
+        list_area,
         &items,
         &state,
         view.focus == Focus::Content,
+    );
+    crate::tui::widgets::list::record_list(
+        &app.hits,
+        list_area,
+        &items,
+        &state,
+        super::focus_key(view),
     );
     let details_y = area.y + list_height + 1;
     if details_y >= area.bottom() {

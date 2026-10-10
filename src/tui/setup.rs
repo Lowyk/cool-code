@@ -4,6 +4,8 @@
 //! earlier version sees just the new ones. Every answer is saved as it is given, and everything
 //! can be changed later in Settings.
 
+use crate::tui::dialog::{Tone, hint_style, window};
+use crate::tui::mouse::{Click, Hits, Row as MouseRow, record_wrapped};
 use crate::tui::state::App;
 use crate::tui::theme::{self, THEMES};
 use crate::{Settings, ThemeId, write_settings};
@@ -12,7 +14,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum SetupStep {
@@ -234,7 +236,12 @@ fn prompt(step: SetupStep) -> Prompt {
     }
 }
 
-pub(in crate::tui) fn draw_setup(frame: &mut ratatui::Frame<'_>, area: Rect, wizard: &SetupWizard) {
+pub(in crate::tui) fn draw_setup(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    wizard: &SetupWizard,
+    hits: &Hits,
+) {
     let step = wizard.step();
     let prompt = prompt(step);
     let accent = theme::accent();
@@ -250,18 +257,11 @@ pub(in crate::tui) fn draw_setup(frame: &mut ratatui::Frame<'_>, area: Rect, wiz
         height,
     );
     frame.render_widget(Clear, popup);
-    let title = format!(
-        " Setup · {} of {} ",
-        wizard.position + 1,
-        wizard.steps.len()
-    );
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(theme::panel()));
+    let title = format!("Setup · {} of {}", wizard.position + 1, wizard.steps.len());
+    let block = window(title, Tone::Normal);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    hits.wheel_arrows(popup);
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
@@ -277,8 +277,18 @@ pub(in crate::tui) fn draw_setup(frame: &mut ratatui::Frame<'_>, area: Rect, wiz
         )),
         Line::from(""),
     ];
+    let mut clicks = Vec::new();
     for (index, label) in prompt.options.iter().enumerate() {
         let chosen = index == wizard.choice;
+        let ticks = step == SetupStep::Instructions;
+        clicks.push((
+            lines.len(),
+            Click::Row(MouseRow::new(index, wizard.choice).activate(Some(if ticks {
+                KeyCode::Char(' ')
+            } else {
+                KeyCode::Enter
+            }))),
+        ));
         if step == SetupStep::Instructions {
             let ticked = wizard.checks[index];
             lines.push(Line::from(vec![
@@ -337,8 +347,9 @@ pub(in crate::tui) fn draw_setup(frame: &mut ratatui::Frame<'_>, area: Rect, wiz
         } else {
             "↑/↓ choose   Enter confirm   Esc skip setup"
         },
-        Style::default().fg(Color::DarkGray),
+        hint_style(),
     )));
+    record_wrapped(hits, inner, &lines, &clicks);
     frame.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)

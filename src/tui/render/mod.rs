@@ -415,7 +415,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     }
 
     if let Some(state) = app.mention.as_ref() {
-        crate::tui::mentions::draw_mentions(frame, prompt_area, state);
+        crate::tui::mentions::draw_mentions(frame, prompt_area, state, &app.hits);
     }
 
     let help = Line::from(vec![
@@ -546,12 +546,12 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         crate::tui::image_setup::draw_image_setup(frame, area, setup);
     }
     if let Some(picker) = app.model_picker.as_ref() {
-        draw_model_picker(frame, area, picker, &app.settings);
+        draw_model_picker(frame, area, picker, app);
     }
     if let Some(wizard) = app.wizard.as_ref()
         && !app.trust_prompt
     {
-        crate::tui::setup::draw_setup(frame, area, wizard);
+        crate::tui::setup::draw_setup(frame, area, wizard, &app.hits);
     }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);
