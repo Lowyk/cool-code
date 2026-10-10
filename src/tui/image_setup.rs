@@ -421,7 +421,7 @@ mod tests {
         app.open_settings(Section::General);
         app.handle_settings_view_key(key(KeyCode::Right)).unwrap();
         // The row just above Reset.
-        let row = 13;
+        let row = 14;
         for _ in 0..row {
             app.handle_settings_view_key(key(KeyCode::Down)).unwrap();
         }

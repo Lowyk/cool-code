@@ -3,6 +3,7 @@ pub(in crate::tui) mod auto_mode;
 mod auto_switch;
 mod general;
 mod models;
+mod plugins;
 mod privacy;
 mod providers;
 pub(in crate::tui) use providers::remaining_bar;
@@ -38,10 +39,11 @@ pub(in crate::tui) enum Section {
     AutoMode,
     AutoSwitch,
     Privacy,
+    Plugins,
 }
 
 impl Section {
-    pub(in crate::tui) const ALL: [Section; 7] = [
+    pub(in crate::tui) const ALL: [Section; 8] = [
         Section::General,
         Section::Appearance,
         Section::Providers,
@@ -49,6 +51,7 @@ impl Section {
         Section::AutoMode,
         Section::AutoSwitch,
         Section::Privacy,
+        Section::Plugins,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -60,6 +63,7 @@ impl Section {
             Section::AutoMode => "Auto Mode",
             Section::AutoSwitch => "Auto-switch",
             Section::Privacy => "Privacy",
+            Section::Plugins => "Plugins",
         }
     }
 
@@ -93,6 +97,8 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) workflow_chooser: Option<WorkflowChooser>,
     pub(in crate::tui) tree: crate::tui::widgets::tree::TreeState,
     pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
+    /// A yes-or-no question in Settings > Plugins.
+    pub(in crate::tui) plugin_confirm: Option<plugins::PluginConfirm>,
 }
 
 impl SettingsView {
@@ -107,6 +113,7 @@ impl SettingsView {
             workflow_chooser: None,
             tree: crate::tui::widgets::tree::TreeState::default(),
             privacy_sub: None,
+            plugin_confirm: None,
         }
     }
 }
@@ -125,6 +132,7 @@ impl App {
             Section::AutoMode => self.handle_auto_mode_key(key),
             Section::AutoSwitch => self.handle_auto_switch_key(key),
             Section::Privacy => self.handle_privacy_key(key),
+            Section::Plugins => self.handle_plugins_key(key),
         }
     }
 
@@ -147,7 +155,11 @@ impl App {
         if view.workflow_chooser.is_some() {
             return self.handle_workflow_chooser_key(key);
         }
-        if view.confirm_delete || view.model_edit.is_some() || view.privacy_sub.is_some() {
+        if view.confirm_delete
+            || view.model_edit.is_some()
+            || view.privacy_sub.is_some()
+            || view.plugin_confirm.is_some()
+        {
             let section = view.section;
             return self.handle_section_key(section, key);
         }
@@ -247,6 +259,7 @@ pub(in crate::tui) fn draw_settings_view(frame: &mut ratatui::Frame<'_>, area: R
             Some(sub) => draw_privacy_sub(frame, content, app, sub),
             None => draw_privacy(frame, content, app, view),
         },
+        Section::Plugins => plugins::draw_plugins(frame, content, app, view),
     }
     let footer_line = if view.confirm_delete {
         let question = confirm_question(app, view);
@@ -326,7 +339,7 @@ fn confirm_question(app: &App, view: &SettingsView) -> String {
             "Remove this redaction value? y/n".to_owned()
         }
         Section::Privacy => privacy_confirm_question(view.row).to_owned(),
-        Section::AutoMode => String::new(),
+        Section::AutoMode | Section::Plugins => String::new(),
         Section::General | Section::Appearance | Section::Providers => {
             let name = app
                 .settings
@@ -352,6 +365,9 @@ fn footer_hint(view: &SettingsView) -> &'static str {
     if let Some(sub) = &view.privacy_sub {
         return privacy_sub_hint(sub);
     }
+    if view.section == Section::Plugins && view.focus == Focus::Content {
+        return plugins::plugins_hint(view);
+    }
     match (view.focus, view.section) {
         (Focus::Sidebar, _) => "↑↓ section   →/Enter open   Esc close",
         (Focus::Content, Section::Models) => {
@@ -370,6 +386,7 @@ fn footer_hint(view: &SettingsView) -> &'static str {
             "↑↓ move   Enter edit   n new   Space activate   x delete   Esc back"
         }
         (Focus::Content, Section::Privacy) => "↑↓ move   Enter change   ← sections   Esc back",
+        (Focus::Content, Section::Plugins) => plugins::plugins_hint(view),
     }
 }
 
@@ -506,13 +523,40 @@ mod tests {
     }
 
     #[test]
+    fn load_claude_skills_sits_with_the_claude_md_switches_and_is_off_by_default() {
+        let mut app = app();
+        assert!(!app.settings.load_claude_skills);
+        app.open_settings(Section::General);
+        let shown = screen(&app, 80, 24);
+        let rows = shown.lines().collect::<Vec<_>>();
+        let global = rows.iter().position(|row| row.contains("Global CLAUDE.md"));
+        let skills = rows
+            .iter()
+            .position(|row| row.contains("Load Claude skills"));
+        assert_eq!(skills, global.map(|row| row + 1), "{shown}");
+        app.handle_settings_view_key(key(KeyCode::Right))
+            .expect("focus");
+        for _ in 0..10 {
+            app.handle_settings_view_key(key(KeyCode::Down))
+                .expect("down");
+        }
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("on");
+        assert!(app.settings.load_claude_skills);
+        assert!(app.notice.contains("~/.claude/skills"), "{}", app.notice);
+        app.handle_settings_view_key(key(KeyCode::Enter))
+            .expect("off");
+        assert!(!app.settings.load_claude_skills);
+    }
+
+    #[test]
     fn the_dynamic_workflows_row_unlocks_and_relocks_the_tiers() {
         let mut app = app();
         assert!(!app.settings.workflows_unlocked());
         app.open_settings(Section::General);
         app.handle_settings_view_key(key(KeyCode::Right))
             .expect("focus");
-        for _ in 0..10 {
+        for _ in 0..11 {
             app.handle_settings_view_key(key(KeyCode::Down))
                 .expect("down");
         }

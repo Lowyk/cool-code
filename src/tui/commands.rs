@@ -74,7 +74,11 @@ impl App {
             self.notice = "Waiting for the current model response.".to_owned();
             return Ok(());
         }
-        self.input.clear();
+        self.set_input(String::new());
+        // Skills and plugin commands send a message of their own, so they are not echoed here.
+        if value.starts_with('/') && self.run_extension_command(&value)? {
+            return Ok(());
+        }
 
         if value.starts_with('/') {
             self.transcript.push(TranscriptEntry {
@@ -249,8 +253,9 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /compact, /undo, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
-            self.finish_command(self.notice.clone());
+            let catalog = self.slash_catalog();
+            self.notice = crate::tui::slash::help_summary(&catalog);
+            self.finish_command(crate::tui::slash::help_text(&catalog));
             return Ok(());
         }
         if value == "/files"
@@ -309,6 +314,14 @@ impl App {
             self.finish_command(self.notice.clone());
             return Ok(());
         }
+        if let Some(arguments) = value
+            .strip_prefix("/plugin")
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            let output = self.plugin_command(arguments.trim())?;
+            self.finish_command(output);
+            return Ok(());
+        }
         if value == "/undo" {
             let message = self.undo_last();
             self.finish_command(message.clone());
@@ -335,9 +348,9 @@ impl App {
             self.notice = "Conversation cleared.".to_owned();
             return Ok(());
         }
-        if value.starts_with('/') {
-            self.notice =
-                "Try /help, /settings, /model, /mode, /effort, /init, /clear, or /quit.".to_owned();
+        if let Some(command) = value.strip_prefix('/') {
+            let word = command.split_whitespace().next().unwrap_or_default();
+            self.notice = crate::tui::slash::unknown_notice(word, &self.slash_catalog());
             self.finish_command(self.notice.clone());
             return Ok(());
         }
@@ -424,6 +437,9 @@ impl App {
         self.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: user_message.display.clone(),
+        });
+        self.mod_event(crate::extensions::mods::Event::PromptSubmitted {
+            chars: user_message.display.chars().count(),
         });
         self.messages.push(user_message);
         self.save_session();
@@ -545,6 +561,9 @@ impl App {
         self.answer_unfinished_tool_calls();
         self.keep_partial_answer(&turn.text, true);
         self.notice = "Turn cancelled.".to_owned();
+        self.mod_event(crate::extensions::mods::Event::TurnFinished {
+            outcome: "cancelled",
+        });
     }
 
     /// Gives every tool call without a result a cancelled result, so the next request stays valid.
@@ -599,6 +618,7 @@ impl App {
     /// Applies every event the worker has sent since the last frame.
     pub(super) fn poll_response(&mut self) {
         self.poll_tasks();
+        self.poll_extensions();
         if let Some(turn) = self.streaming.as_mut() {
             turn.prune_arrivals(std::time::Instant::now());
         }
@@ -627,6 +647,7 @@ impl App {
     }
 
     fn apply_pending_event(&mut self, event: Result<PendingEvent, TryRecvError>) {
+        self.observe_for_mods(&event);
         let now = std::time::Instant::now();
         match event {
             Ok(PendingEvent::TextDelta(delta)) => {

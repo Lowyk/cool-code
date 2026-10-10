@@ -61,8 +61,8 @@ pub(in crate::tui) struct OutsidePrompt {
     approved: HashSet<PathBuf>,
 }
 
-/// The `@` word being typed at the end of `input`: where it starts and what follows the `@`.
-/// `None` when the cursor is not inside a reference.
+/// The `@` word being typed at the end of `input` (the text before the cursor): where it starts
+/// and what follows the `@`. `None` when the cursor is not inside a reference.
 pub(in crate::tui) fn mention_query(input: &str) -> Option<(usize, String)> {
     let at = input
         .rmatch_indices('@')
@@ -288,18 +288,60 @@ fn browse(root: &Path, query: &str, outside_allowed: bool, home: Option<&Path>) 
         .collect()
 }
 
+/// Where the reference that starts at `start` ends, given the cursor inside it: the rest of the
+/// word after the cursor, or up to the closing quote of a quoted name.
+fn reference_end(input: &str, start: usize, cursor: usize) -> usize {
+    let rest = &input[cursor..];
+    if input[start + 1..].starts_with('"')
+        && let Some(quote) = rest.find('"')
+        && !rest[..quote].contains('\n')
+    {
+        return cursor + quote + 1;
+    }
+    cursor + rest.find(char::is_whitespace).unwrap_or(rest.len())
+}
+
+/// Moves a popup's highlight by `step`, wrapping around and skipping rows that `skip` rejects,
+/// and scrolls just enough to keep it in view. Returns the new (selected, offset).
+pub(in crate::tui) fn step_selection(
+    selected: usize,
+    offset: usize,
+    count: usize,
+    step: isize,
+    skip: impl Fn(usize) -> bool,
+) -> (usize, usize) {
+    let mut chosen = selected;
+    let mut next = selected as isize;
+    for _ in 0..count {
+        next = (next + step).rem_euclid(count as isize);
+        if !skip(next as usize) {
+            chosen = next as usize;
+            break;
+        }
+    }
+    let offset = if chosen < offset {
+        chosen
+    } else if chosen >= offset + VISIBLE_SUGGESTIONS {
+        chosen + 1 - VISIBLE_SUGGESTIONS
+    } else {
+        offset
+    };
+    (chosen, offset)
+}
+
 const OUTSIDE_HINT: &str =
     "Outside the project: turn on \"Reference files outside the project\" in Settings → Privacy";
 
 impl App {
     /// Recomputes the suggestions for the `@` word at the end of the input.
     pub(in crate::tui) fn refresh_mentions(&mut self) {
-        let Some((start, query)) = mention_query(&self.input) else {
+        let cursor = self.input_cursor();
+        let Some((start, query)) = mention_query(&self.input[..cursor]) else {
             self.mention = None;
             self.mention_dismissed_at = None;
             return;
         };
-        if self.mention_dismissed_at == Some(self.input.len()) {
+        if self.mention_dismissed_at == Some(cursor) {
             self.mention = None;
             return;
         }
@@ -346,21 +388,14 @@ impl App {
 
     pub(in crate::tui) fn mention_move(&mut self, step: isize) {
         if let Some(state) = self.mention.as_mut() {
-            let count = state.items.len() as isize;
-            let mut next = state.selected as isize;
-            // Skip explanations, which cannot be chosen.
-            for _ in 0..count {
-                next = (next + step).rem_euclid(count);
-                if !state.items[next as usize].disabled {
-                    state.selected = next as usize;
-                    break;
-                }
-            }
-            if state.selected < state.offset {
-                state.offset = state.selected;
-            } else if state.selected >= state.offset + VISIBLE_SUGGESTIONS {
-                state.offset = state.selected + 1 - VISIBLE_SUGGESTIONS;
-            }
+            // Explanations cannot be chosen, so the highlight skips them.
+            (state.selected, state.offset) = step_selection(
+                state.selected,
+                state.offset,
+                state.items.len(),
+                step,
+                |index| state.items[index].disabled,
+            );
         }
     }
 
@@ -377,7 +412,8 @@ impl App {
         else {
             return false;
         };
-        mention_query(&self.input).is_some_and(|(_, typed)| typed.replace('\\', "/") != item.insert)
+        mention_query(&self.input[..self.input_cursor()])
+            .is_some_and(|(_, typed)| typed.replace('\\', "/") != item.insert)
     }
 
     pub(in crate::tui) fn accept_mention(&mut self) {
@@ -398,20 +434,28 @@ impl App {
             token.push('"');
         }
         token.push_str(&item.insert);
+        let end = reference_end(&self.input, state.start, self.input_cursor());
+        let followed_by_space = self.input[end..].starts_with(char::is_whitespace);
+        let mut cursor = state.start + token.len();
         if !item.dir {
             if quoted {
                 token.push('"');
+                cursor += 1;
             }
-            token.push(' ');
+            if !followed_by_space {
+                token.push(' ');
+            }
+            // The cursor goes past the space, whether it was added or already there.
+            cursor += 1;
         }
-        self.input.truncate(state.start);
-        self.input.push_str(&token);
+        self.input.replace_range(state.start..end, &token);
+        self.set_input_cursor(cursor);
         self.refresh_mentions();
     }
 
     pub(in crate::tui) fn dismiss_mention(&mut self) {
         self.mention = None;
-        self.mention_dismissed_at = Some(self.input.len());
+        self.mention_dismissed_at = Some(self.input_cursor());
     }
 
     /// Notes that the outside-files setting was switched; six quick switches unlock the option
@@ -505,7 +549,69 @@ pub(in crate::tui) fn draw_mentions(
     prompt_area: Rect,
     state: &MentionState,
 ) {
-    let shown = state.items.len().min(VISIBLE_SUGGESTIONS);
+    let rows = state
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            if item.disabled {
+                return Line::from(Span::styled(
+                    item.insert.clone(),
+                    Style::default().fg(Color::Rgb(255, 197, 92)),
+                ));
+            }
+            let current = index == state.selected;
+            Line::from(vec![
+                popup_marker(current),
+                Span::styled(
+                    item.insert.clone(),
+                    if current {
+                        popup_current()
+                    } else if item.dir {
+                        Style::default().fg(crate::tui::theme::accent_soft())
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
+                ),
+            ])
+        })
+        .collect();
+    draw_list_popup(
+        frame,
+        prompt_area,
+        " Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ",
+        rows,
+        state.selected,
+        state.offset,
+    );
+}
+
+/// The "› " in front of the highlighted row of a popup list.
+pub(in crate::tui) fn popup_marker(current: bool) -> Span<'static> {
+    Span::styled(
+        if current { "› " } else { "  " },
+        Style::default().fg(crate::tui::theme::accent()),
+    )
+}
+
+/// The style of the highlighted row's main text.
+pub(in crate::tui) fn popup_current() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// A scrolling list drawn just above the prompt, with the position of the highlight at the
+/// bottom. Used for `@` files and for `/` commands.
+pub(in crate::tui) fn draw_list_popup(
+    frame: &mut ratatui::Frame<'_>,
+    prompt_area: Rect,
+    title: &str,
+    rows: Vec<Line<'static>>,
+    selected: usize,
+    offset: usize,
+) {
+    let shown = rows.len().min(VISIBLE_SUGGESTIONS);
     let height = (shown as u16 + 2).min(prompt_area.y);
     if height < 3 {
         return;
@@ -521,51 +627,19 @@ pub(in crate::tui) fn draw_mentions(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(crate::tui::theme::accent()))
         .style(Style::default().bg(crate::tui::theme::panel()))
-        .title(" Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ")
-        .title_bottom(
-            Line::from(format!(" {}/{} ", state.selected + 1, state.items.len())).right_aligned(),
-        );
+        .title(title.to_owned())
+        .title_bottom(Line::from(format!(" {}/{} ", selected + 1, rows.len())).right_aligned());
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let rows = inner.height as usize;
+    let visible = inner.height as usize;
     // Keep the highlighted row inside the visible window, even if the popup is shorter than usual.
-    let first = state
-        .offset
-        .max((state.selected + 1).saturating_sub(rows))
-        .min(state.selected);
-    let lines = state
-        .items
-        .iter()
-        .enumerate()
+    let first = offset
+        .max((selected + 1).saturating_sub(visible))
+        .min(selected);
+    let lines = rows
+        .into_iter()
         .skip(first)
-        .take(rows)
-        .map(|(index, item)| {
-            if item.disabled {
-                return Line::from(Span::styled(
-                    item.insert.clone(),
-                    Style::default().fg(Color::Rgb(255, 197, 92)),
-                ));
-            }
-            let current = index == state.selected;
-            Line::from(vec![
-                Span::styled(
-                    if current { "› " } else { "  " },
-                    Style::default().fg(crate::tui::theme::accent()),
-                ),
-                Span::styled(
-                    item.insert.clone(),
-                    if current {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else if item.dir {
-                        Style::default().fg(crate::tui::theme::accent_soft())
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    },
-                ),
-            ])
-        })
+        .take(visible)
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -1164,6 +1238,83 @@ mod tests {
             app.messages.is_empty(),
             "choosing a file did not send the message"
         );
+    }
+
+    fn file(insert: &str) -> Suggestion {
+        Suggestion {
+            insert: insert.to_owned(),
+            dir: false,
+            disabled: false,
+        }
+    }
+
+    #[test]
+    fn a_reference_in_the_middle_of_the_text_is_completed_where_the_cursor_is() {
+        let mut app = trusted_app();
+        app.set_input("explain @src/ma and more");
+        app.set_input_cursor("explain @src/ma".len());
+        app.mention = Some(MentionState {
+            start: 8,
+            items: vec![file("src/main.rs")],
+            selected: 0,
+            offset: 0,
+        });
+        assert!(app.mention_takes_enter());
+        app.accept_mention();
+        assert_eq!(
+            app.input, "explain @src/main.rs and more",
+            "no doubled space"
+        );
+        assert_eq!(app.input_cursor(), "explain @src/main.rs ".len());
+        // The part of the word after the cursor is replaced too.
+        app.set_input("see @src/main.rs now");
+        app.set_input_cursor("see @src/m".len());
+        app.mention = Some(MentionState {
+            start: 4,
+            items: vec![file("src/tui/mod.rs")],
+            selected: 0,
+            offset: 0,
+        });
+        app.accept_mention();
+        assert_eq!(app.input, "see @src/tui/mod.rs now");
+        // A quoted name is replaced up to its closing quote.
+        app.set_input("see @\"my no\" now");
+        app.set_input_cursor("see @\"my".len());
+        app.mention = Some(MentionState {
+            start: 4,
+            items: vec![file("my notes.txt")],
+            selected: 0,
+            offset: 0,
+        });
+        app.accept_mention();
+        assert_eq!(app.input, "see @\"my notes.txt\" now");
+    }
+
+    #[test]
+    fn the_word_is_read_up_to_the_cursor_not_the_end_of_the_input() {
+        let mut app = trusted_app();
+        app.set_input("look at  please");
+        app.set_input_cursor("look at ".len());
+        for character in "@Cargo.t".chars() {
+            crate::tui::handle_key(
+                &mut app,
+                event::KeyEvent::new(KeyCode::Char(character), event::KeyModifiers::NONE),
+            )
+            .expect("type");
+        }
+        assert_eq!(app.input, "look at @Cargo.t please");
+        let shown = screen(&app);
+        assert!(shown.contains("Cargo.toml"), "{shown}");
+        crate::tui::handle_key(&mut app, key(KeyCode::Tab)).expect("tab");
+        assert_eq!(app.input, "look at @Cargo.toml please");
+        assert!(app.mention.is_none());
+        // Moving the cursor out of the word closes the list; moving back opens it again.
+        app.set_input("@Cargo and");
+        app.set_input_cursor("@Cargo".len());
+        app.refresh_mentions();
+        assert!(app.mention.is_some());
+        crate::tui::handle_key(&mut app, key(KeyCode::End)).expect("end");
+        assert!(app.mention.is_none());
     }
 
     #[test]

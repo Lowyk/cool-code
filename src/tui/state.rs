@@ -53,6 +53,8 @@ impl StreamingTurn {
 pub(super) struct App {
     pub(super) settings: Settings,
     pub(super) input: String,
+    /// Bytes between the prompt cursor and the end of the input (see `editing`).
+    pub(super) input_tail: usize,
     pub(super) picker: bool,
     pub(super) picker_index: usize,
     /// The workflows checkbox in the effort picker, before it is confirmed.
@@ -99,8 +101,12 @@ pub(super) struct App {
     pub(super) pending_note: Option<String>,
     /// The `@` suggestions for the word being typed.
     pub(super) mention: Option<crate::tui::mentions::MentionState>,
-    /// The input length at which the user closed the suggestions.
+    /// The cursor position at which the user closed the suggestions.
     pub(super) mention_dismissed_at: Option<usize>,
+    /// The `/` command suggestions.
+    pub(super) slash: crate::tui::slash::SlashPopup,
+    /// Skills, plugins and mods.
+    pub(super) extensions: crate::tui::extensions::Extensions,
     /// The project's files for suggestions, and when they were read.
     pub(super) project_files: Option<(std::time::Instant, Vec<String>)>,
     /// A message waiting for files outside the project to be confirmed.
@@ -466,6 +472,7 @@ impl App {
         Self {
             settings,
             input: String::new(),
+            input_tail: 0,
             picker: false,
             picker_index,
             picker_workflows: false,
@@ -495,6 +502,8 @@ impl App {
             pending_note: None,
             mention: None,
             mention_dismissed_at: None,
+            slash: Default::default(),
+            extensions: Default::default(),
             project_files: None,
             outside_prompt: None,
             image_setup: None,

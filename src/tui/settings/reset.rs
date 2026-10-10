@@ -76,6 +76,10 @@ pub(in crate::tui) fn reset_preferences(settings: &Settings) -> Settings {
         providers: settings.providers.clone(),
         auto_guards: settings.auto_guards.clone(),
         image_generation: settings.image_generation.clone(),
+        // Installed plugins and approved mods are managed in Settings > Plugins.
+        disabled_plugins: settings.disabled_plugins.clone(),
+        approved_mods: settings.approved_mods.clone(),
+        disabled_mods: settings.disabled_mods.clone(),
         active_provider_id: settings.active_provider_id.clone(),
         default_provider_id: settings.default_provider_id.clone(),
         model_chains: settings.model_chains.clone(),
@@ -113,7 +117,7 @@ impl App {
                     plural(count, "provider", "providers")
                 )
             }
-            ResetTarget::Settings => "put theme, effort, mode, animations, the stats, session and instruction-file switches back to their defaults (providers and your earlier answers stay)".to_owned(),
+            ResetTarget::Settings => "put theme, effort, mode, animations, the stats, session, instruction-file and Claude-skill switches back to their defaults (providers, plugins, mod approvals and your earlier answers stay)".to_owned(),
             ResetTarget::UsageStats => "delete the usage-stats history".to_owned(),
             ResetTarget::ProjectChoices => {
                 "forget the per-project CLAUDE.md / AGENTS.md choices".to_owned()
@@ -391,6 +395,7 @@ mod tests {
         settings.sessions_enabled = true;
         settings.default_load_claude_md = true;
         settings.load_global_claude_md = true;
+        settings.load_claude_skills = true;
         settings.ultimate_acknowledged = true;
         settings.workflow_size = crate::workflow::WorkflowSize::Massive;
         settings.workflow_custom_size = 321;
@@ -569,6 +574,7 @@ mod tests {
         assert_eq!(settings.pulse, PulseMode::Words);
         assert!(!settings.stats_enabled && !settings.sessions_enabled);
         assert!(!settings.default_load_claude_md && !settings.load_global_claude_md);
+        assert!(!settings.load_claude_skills);
         assert!(!settings.ultimate_acknowledged);
         assert_eq!(settings.workflow_size, crate::workflow::WorkflowSize::Off);
         assert_eq!(settings.workflow_at_once, crate::workflow::DEFAULT_AT_ONCE);
@@ -667,6 +673,22 @@ mod tests {
         };
         assert!(shown.contains("delete 1 saved session"), "{shown}");
         assert!(shown.contains("cannot be undone"), "{shown}");
+    }
+
+    #[test]
+    fn resetting_preferences_keeps_plugin_switches_and_mod_approvals() {
+        let mut settings = Settings::default();
+        settings.load_claude_skills = true;
+        settings.disabled_plugins = vec!["kit".to_owned()];
+        settings
+            .approved_mods
+            .insert("kit/watch".to_owned(), "hash".to_owned());
+        settings.disabled_mods = vec!["clock".to_owned()];
+        let reset = reset_preferences(&settings);
+        assert!(!reset.load_claude_skills, "a preference goes back to off");
+        assert_eq!(reset.disabled_plugins, settings.disabled_plugins);
+        assert_eq!(reset.approved_mods, settings.approved_mods);
+        assert_eq!(reset.disabled_mods, settings.disabled_mods);
     }
 
     #[test]

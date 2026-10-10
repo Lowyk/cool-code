@@ -21,6 +21,8 @@ Native compilation uses LLVM/Clang tooling only; GCC is explicitly out of scope.
 
 The policy engine is authoritative. Model-generated reasoning may recommend actions but must not modify policy or self-approve. Subagents inherit the parent task's limits and cannot widen them.
 
+Extensions stay outside the policy engine. Skills and plugin commands are text for the model, loaded only from the user's folders, a trusted project or enabled plugins; mods are observers that receive events and return text for the status line. Nothing they produce reaches the approval path. See [extensions.md](extensions.md).
+
 The system prompt has three separately labeled sources: an immutable, versioned-in-code harness policy; optional user-authored global instructions at `~/.coolcode/COOL.md`; and project context from a trusted workspace's `COOL.md`. User instructions express the user's preferences but cannot override harness policy. Repository context and tool output are untrusted data and cannot grant permissions. The harness owns a provider-neutral tool registry; OpenAI-compatible, Anthropic, and Google adapters translate its schemas and normalized tool results into their native API formats. The agent loop includes bounded repository inspection, exact-snippet edits, and permission-gated platform shell commands. Tool proposals cannot change harness policy. Modes have deterministic rules: Plan starts read-only, then grants only the exact action list shown in an approved plan; Accept Edits auto-approves edits; Accept Minimal auto-approves edits and a literal verification-command allowlist; Manual approves nothing; Auto approves nothing by rule but sends every command, edit and new file to the user's chosen guard models (see `src/guard.rs`); Accept Everything auto-approves both edits and commands. Other actions require an explicit user decision. Shell execution uses an explicit PowerShell or POSIX shell profile and is bounded by a time and output limit.
 
 ## Source layout
@@ -40,7 +42,11 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/context.rs` | Keeping a long conversation inside the context window: token estimates, the model-reported window, where to cut, and the summary that replaces the older messages |
 | `src/imagegen.rs` | The image API behind `generate_image`: configuration, request, response parsing and the checks on what comes back |
 | `src/tui/image_setup.rs` | The Settings form for the image API (address, model, key, turn off) |
-| `src/tui/mentions.rs` | `@` file suggestions, browsing, and the confirmation of files outside the project |
+| `src/tui/mentions.rs` | `@` file suggestions, browsing, and the confirmation of files outside the project; the popup list the `/` commands share |
+| `src/tui/editing.rs` | The prompt cursor (kept as a distance from the end of the input) and the keys that move it or delete around it, by grapheme cluster, word and line |
+| `src/tui/slash.rs` | The table of built-in commands that writes `/help` and fills the `/` popup, and the closest-command suggestion |
+| `src/extensions/` | Skills (`skills.rs`: discovery, frontmatter, `use_skill`), plugins (`plugins.rs`: manifests, staging, install, removal), mods (`mods.rs`: manifests, approval hashes, the JSON-lines protocol; `mod_host.rs`: the processes and their limits) |
+| `src/tui/extensions.rs`, `src/tui/plugin_install.rs`, `src/tui/settings/plugins.rs` | Skills and plugin commands in the interface, the running mods and their events, `/plugin` with its install review, and Settings → Plugins |
 | `src/tui/markdown.rs` | Turns the assistant's Markdown into styled terminal lines (headings, emphasis, code blocks, lists, quotes, links, tables) |
 | `src/tui/undo.rs` | `/undo`: per-turn checkpoints of the files the edit tools changed, restored only when a file is still as the turn left it |
 | `src/tui/usage_view.rs` | `/usage`: every provider's usage (live where an endpoint exists, a dashboard pointer otherwise) |
@@ -64,7 +70,7 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/creators.rs` | Attributes model IDs to the lab that made them, for grouping |
 | `src/tui/forms.rs` | Provider and chain editing forms: state changes and key handling |
 | `src/tui/context.rs` | Workspace trust and `COOL.md` / `@path` context loading |
-| `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `appearance`, `providers`, `models`, `auto_switch`, `privacy`) plus `sync` (background model and usage fetches reported to the UI each frame) and `workflow_size` (the Dynamic workflows size and At once chooser, with its one-time confirmation) |
+| `src/tui/settings/` | Full-screen settings: `mod.rs` (sidebar, focus, footer) and one module per section (`general`, `appearance`, `providers`, `models`, `auto_switch`, `privacy`, `plugins`) plus `sync` (background model and usage fetches reported to the UI each frame) and `workflow_size` (the Dynamic workflows size and At once chooser, with its one-time confirmation) |
 | `src/tui/pickers/` | Quick pickers drawn over the chat, such as the `/model` picker |
 | `src/tui/widgets/` | Reusable widgets: the filterable selectable list and the collapsible provider/creator/model tree |
 | `src/tui/settings/reset.rs` | Settings > General > Reset: menu, custom checklist, confirmation with counts, and the reset itself |
