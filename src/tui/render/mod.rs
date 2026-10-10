@@ -122,15 +122,28 @@ fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> 
 }
 
 pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, usize)) {
+    wrap_input_at(input, input.len(), width)
+}
+
+/// Wraps the input to `width` columns (the first row starts after the "› " marker) and finds the
+/// row and column of the cursor at byte `cursor`.
+pub(super) fn wrap_input_at(
+    input: &str,
+    cursor: usize,
+    width: u16,
+) -> (Vec<String>, (usize, usize)) {
     use unicode_width::UnicodeWidthChar as _;
 
     let width = width.max(1) as usize;
     let mut lines = vec![String::new()];
     let mut row = 0usize;
     let mut column = 2usize.min(width);
-    let characters = input.chars().collect::<Vec<_>>();
-    for (index, character) in characters.iter().copied().enumerate() {
+    let mut found = None;
+    for (index, character) in input.char_indices() {
         if character == '\n' {
+            if index == cursor {
+                found = Some((row, column));
+            }
             lines.push(String::new());
             row += 1;
             column = 0;
@@ -142,15 +155,18 @@ pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, 
             row += 1;
             column = 0;
         }
+        if index == cursor {
+            found = Some((row, column));
+        }
         lines[row].push(character);
         column += character_width;
-        if index + 1 == characters.len() && column == width {
+        if index + character.len_utf8() == input.len() && column == width {
             lines.push(String::new());
             row += 1;
             column = 0;
         }
     }
-    (lines, (row, column))
+    (lines, found.unwrap_or((row, column)))
 }
 
 pub(super) fn input_visual_lines(input: &str, width: u16) -> usize {
@@ -348,7 +364,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         .padding(ratatui::widgets::Padding::new(2, 0, 1, 0));
     let prompt_inner = prompt_block.inner(prompt_area);
     let (input_lines, (cursor_line, cursor_column)) =
-        wrap_input_text(&app.input, prompt_inner.width);
+        wrap_input_at(&app.input, app.input_cursor(), prompt_inner.width);
     let prompt = if app.input.is_empty() {
         vec![Line::from(vec![
             Span::styled("› ", Style::default().fg(crate::tui::theme::accent())),
@@ -377,7 +393,10 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             .collect()
     };
     let prompt_lines = prompt.len();
-    let prompt_scroll = prompt_lines.saturating_sub(prompt_inner.height as usize) as u16;
+    // Show the end of a tall input, unless the cursor is further up: then scroll to it.
+    let prompt_scroll = prompt_lines
+        .saturating_sub(prompt_inner.height as usize)
+        .min(cursor_line) as u16;
     frame.render_widget(
         Paragraph::new(prompt)
             .scroll((prompt_scroll, 0))
@@ -563,7 +582,9 @@ pub(super) fn centered_rect(width_percent: u16, height_percent: u16, area: Rect)
 
 #[cfg(test)]
 mod tests {
-    use super::{draw, input_prompt_height, input_visual_lines, mode_span, wrap_input_text};
+    use super::{
+        draw, input_prompt_height, input_visual_lines, mode_span, wrap_input_at, wrap_input_text,
+    };
     use crate::Settings;
 
     use crate::tui::state::App;
@@ -652,6 +673,84 @@ mod tests {
         let (wide_lines, wide_cursor) = wrap_input_text("ab界c", 6);
         assert_eq!(wide_lines, ["ab界", "c"]);
         assert_eq!(wide_cursor, (1, 1));
+    }
+
+    #[test]
+    fn the_cursor_is_placed_inside_wrapped_and_multi_line_input() {
+        let at = |input: &str, cursor: usize, width: u16| wrap_input_at(input, cursor, width).1;
+        // The first row starts after the two-column "› " marker.
+        assert_eq!(at("abcdefghij", 3, 10), (0, 5));
+        assert_eq!(
+            at("abcdefghij", 8, 10),
+            (1, 0),
+            "the character that wrapped"
+        );
+        assert_eq!(at("abcdefghij", 0, 10), (0, 2));
+        assert_eq!(at("ab\ncd", 2, 40), (0, 4), "before the line break");
+        assert_eq!(at("ab\ncd", 3, 40), (1, 0), "after it");
+        assert_eq!(at("ab界c", 2, 6), (0, 4));
+        assert_eq!(at("ab界c", 5, 6), (1, 0));
+        assert_eq!(at("abcdefgh", 7, 10), (0, 9));
+        assert_eq!(
+            at("abcdefgh", 8, 10),
+            (1, 0),
+            "a full row moves the end to the next"
+        );
+        assert_eq!(wrap_input_at("abcdefghij", 3, 10).0, ["abcdefgh", "ij"]);
+    }
+
+    fn prompt_screen(app: &App) -> (Vec<String>, ratatui::layout::Position) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let rows = (0..30)
+            .map(|y| {
+                (0..80)
+                    .map(|x| buffer[(x, y)].symbol().to_owned())
+                    .collect::<String>()
+            })
+            .collect();
+        (rows, app.cursor.get().expect("the cursor is shown"))
+    }
+
+    /// The column of `needle` in `row`, counted in cells.
+    fn column_of(row: &str, needle: &str) -> u16 {
+        let byte = row.find(needle).expect("on the row");
+        row[..byte].chars().count() as u16
+    }
+
+    #[test]
+    fn the_drawn_cursor_follows_the_editing_cursor() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.set_input("hello world");
+        app.set_input_cursor(6);
+        let (rows, cursor) = prompt_screen(&app);
+        let row = &rows[cursor.y as usize];
+        assert_eq!(cursor.x, column_of(row, "world"), "{row}");
+        app.set_input("first\nsecond line");
+        app.set_input_cursor(2);
+        let (rows, cursor) = prompt_screen(&app);
+        assert_eq!(cursor.x, column_of(&rows[cursor.y as usize], "rst"));
+        assert!(rows[cursor.y as usize].contains("› first"));
+    }
+
+    #[test]
+    fn a_tall_input_scrolls_to_keep_the_cursor_visible() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        let lines = (0..20).map(|n| format!("line{n:02}")).collect::<Vec<_>>();
+        app.set_input(lines.join("\n"));
+        let (rows, cursor) = prompt_screen(&app);
+        assert!(
+            rows[cursor.y as usize].contains("line19"),
+            "the end is shown"
+        );
+        app.set_input_cursor(0);
+        let (rows, cursor) = prompt_screen(&app);
+        let row = &rows[cursor.y as usize];
+        assert!(row.contains("› line00"), "the start is shown: {row}");
+        assert_eq!(cursor.x, column_of(row, "line00"));
     }
 }
 

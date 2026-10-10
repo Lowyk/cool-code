@@ -74,7 +74,7 @@ impl App {
             self.notice = "Waiting for the current model response.".to_owned();
             return Ok(());
         }
-        self.input.clear();
+        self.set_input(String::new());
 
         if value.starts_with('/') {
             self.transcript.push(TranscriptEntry {
