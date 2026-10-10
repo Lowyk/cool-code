@@ -439,6 +439,7 @@ impl App {
         let (sender, receiver) = mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.streaming = Some(StreamingTurn::new(cancel.clone()));
+        self.tracker = crate::tui::tracker::Tracker::default();
         thread::spawn(move || {
             let result = run_agent_turns(
                 settings,
@@ -613,6 +614,7 @@ impl App {
                     | PendingEvent::ToolAction(_)
                     | PendingEvent::Compacted { .. }
                     | PendingEvent::FileChanged { .. }
+                    | PendingEvent::Subagent(_)
                     | PendingEvent::ConversationMessage(_))
             );
             self.apply_pending_event(event);
@@ -700,6 +702,7 @@ impl App {
                     Err(error) => format!("Could not condense the conversation: {error}"),
                 };
             }
+            Ok(PendingEvent::Subagent(event)) => self.tracker.apply(event),
             Ok(PendingEvent::ApprovalRequest(request)) => {
                 self.approval_scroll = 0;
                 self.approval_expanded = false;

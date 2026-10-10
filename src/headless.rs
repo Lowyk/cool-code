@@ -133,6 +133,7 @@ pub(crate) fn consume(
             | PendingEvent::Usage(_)
             | PendingEvent::ToolStarted(_)
             | PendingEvent::ConversationMessage(_)
+            | PendingEvent::Subagent(_)
             | PendingEvent::CompactFinished(_) => {}
         }
     }

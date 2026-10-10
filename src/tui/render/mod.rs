@@ -438,10 +438,19 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         ),
     ]);
     let help = match app.streaming.as_ref() {
-        Some(turn) => Line::from(Span::styled(
-            status_line(turn, std::time::Instant::now()),
-            Style::default().fg(Color::Rgb(120, 170, 200)),
-        )),
+        Some(turn) => {
+            let mut spans = vec![Span::styled(
+                status_line(turn, std::time::Instant::now()),
+                Style::default().fg(Color::Rgb(120, 170, 200)),
+            )];
+            if let Some(hint) = crate::tui::tracker::status_hint(&app.tracker) {
+                spans.push(Span::styled(
+                    format!(" · {hint}"),
+                    Style::default().fg(Color::Rgb(255, 197, 92)),
+                ));
+            }
+            Line::from(spans)
+        }
         None => help,
     };
     frame.render_widget(Paragraph::new(help).alignment(Alignment::Center), help_area);
@@ -555,6 +564,9 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     }
     if app.trust_prompt {
         draw_workspace_trust_prompt(frame, area, app);
+    }
+    if app.tracker.open {
+        crate::tui::tracker::draw_tracker(frame, area, app);
     }
     if let Some(approval) = app.tool_approval.as_ref() {
         crate::tui::approval::draw_approval_card(frame, area, prompt_area, app, approval);

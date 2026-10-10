@@ -71,6 +71,8 @@ pub(super) struct App {
     pub(super) approval_scroll: u16,
     /// The approval card shows all of its details instead of the first few rows.
     pub(super) approval_expanded: bool,
+    /// The subagents of the current turn, and the window that lists them.
+    pub(super) tracker: crate::tui::tracker::Tracker,
     pub(super) messages: Vec<provider::ChatMessage>,
     pub(super) transcript: Vec<TranscriptEntry>,
     pub(super) pending: Option<Receiver<PendingEvent>>,
@@ -485,6 +487,7 @@ impl App {
             tool_approval: None,
             approval_scroll: 0,
             approval_expanded: false,
+            tracker: crate::tui::tracker::Tracker::default(),
             messages: Vec::new(),
             transcript: Vec::new(),
             pending: None,
