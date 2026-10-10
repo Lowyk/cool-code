@@ -14,8 +14,26 @@ All notable changes are listed here, newest first. The format follows
 - An "At once" setting (8 by default, 1 to 32) for how many subagents run at the same time.
 - Low, High and Max effort for DeepSeek V4 (`deepseek-flash`, `deepseek-v4-pro`) and Kimi K3
   (`kimi-k3`, and `k3`, `k3-256k` and `kimi-for-coding` on Kimi Code), sent as `reasoning_effort`.
+- A subagent tracker: Shift+↓ lists every subagent of the turn with its task, status, rounds and
+  tool calls and latest action, updated live. x cancels the highlighted subagent only; the others
+  and the turn go on. The status line says how many subagents are running.
+- Mouse support: click buttons and rows in Settings, the pickers, the setup questions, the tracker
+  and the `@` list (a click highlights a row, a second click uses it), and scroll with the wheel.
+  It can be turned off in Settings → General → Mouse. With it on, selecting text in the terminal
+  needs Shift (Option on macOS).
 
 ### Changed
+
+- Tool approvals appear as a card just above the prompt instead of a window over the
+  conversation, with Auto mode's reason on its own line, a scrollable preview (v shows all of it)
+  and Allow / Deny buttons. The keys answer as before: y or Enter allows, n or Esc denies.
+- Every Y/N question is now the same dialog: a wide, short box with buttons at the bottom right,
+  chosen with ←/→ or Tab and pressed with Enter or their letter, and Esc picks the safe one. The
+  delete confirmations in Settings, /resume and /stats, which used to be a line at the bottom,
+  are dialogs too. Their texts and outcomes are unchanged, except that a key other than the
+  answers no longer cancels a deletion; Esc or n does.
+- The windows (Settings, the pickers, /usage, /stats, /resume, the setup wizard, the sign-in and
+  image setup screens) share the dialog's rounded, titled frame.
 
 - The Dynamic workflows switch became a size. Settings files with `dynamic_workflows = true` load
   as Medium, `false` as Off. Medium keeps Super's old limits (4 per call, 8 per turn); Ultimate on
