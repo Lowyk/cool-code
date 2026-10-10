@@ -14,7 +14,7 @@ use crossterm::event::{self, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -228,28 +228,29 @@ pub(in crate::tui) fn draw_chatgpt_login(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     login: &ChatGptLogin,
+    hits: &crate::tui::mouse::Hits,
 ) {
+    use crate::tui::dialog::{Tone, hint_style, window};
+    use crate::tui::mouse::{Click, Row};
     let popup = centered_rect(72, 62, area);
     frame.render_widget(Clear, popup);
     let accent = crate::tui::theme::accent_bright();
     let title = match login.stage {
-        Stage::Choosing(_) => " OpenAI · how do you want to sign in? ",
-        Stage::Waiting { .. } => " ChatGPT sign-in (unofficial) ",
+        Stage::Choosing(_) => "OpenAI · how do you want to sign in?",
+        Stage::Waiting { .. } => "ChatGPT sign-in (unofficial)",
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(crate::tui::theme::panel()));
+    let block = window(title, Tone::Normal).padding(ratatui::widgets::Padding::horizontal(1));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = hint_style();
     let warning = Style::default().fg(Color::Rgb(240, 210, 90));
     let mut lines = Vec::new();
+    let mut clicks = Vec::new();
     match &login.stage {
         Stage::Choosing(selected) => {
             for (index, (name, detail)) in METHODS.iter().enumerate() {
                 let current = index == *selected;
+                clicks.push((lines.len(), Click::Row(Row::new(index, *selected))));
                 lines.push(Line::from(vec![
                     Span::styled(
                         if current { "› " } else { "  " },
@@ -303,6 +304,7 @@ pub(in crate::tui) fn draw_chatgpt_login(
             )));
         }
     }
+    crate::tui::mouse::record_wrapped(hits, inner, &lines, &clicks);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
