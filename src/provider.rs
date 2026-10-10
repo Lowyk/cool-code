@@ -1785,9 +1785,37 @@ mod tests {
     #[test]
     fn a_model_without_effort_levels_is_sent_no_parameter() {
         let (base, seen) = serve(vec![(200, "text/event-stream", OK_STREAM)]);
-        run_against(&base, "deepseek-v4-flash", crate::Effort::Max).expect("ok");
+        run_against(&base, "deepseek-reasoner", crate::Effort::Max).expect("ok");
         let sent: Value = serde_json::from_str(&seen.lock().unwrap()[0]).unwrap();
         assert!(sent.get("reasoning_effort").is_none(), "{sent}");
+    }
+
+    #[test]
+    fn deepseek_and_kimi_k3_are_sent_reasoning_effort_max() {
+        for model in ["deepseek-flash", "kimi-k3"] {
+            let (base, seen) = serve(vec![(200, "text/event-stream", OK_STREAM)]);
+            run_against(&base, model, crate::Effort::Ultimate).expect("ok");
+            let sent: Value = serde_json::from_str(&seen.lock().unwrap()[0]).unwrap();
+            assert_eq!(sent["reasoning_effort"], "max", "{model}: {sent}");
+            assert!(sent.get("thinking").is_none(), "{model}: {sent}");
+        }
+    }
+
+    #[test]
+    fn a_deepseek_endpoint_that_rejects_the_effort_still_gets_its_answer() {
+        let (base, seen) = serve(vec![
+            (
+                400,
+                "application/json",
+                "{\"error\":{\"message\":\"unknown field reasoning_effort\"}}",
+            ),
+            (200, "text/event-stream", OK_STREAM),
+        ]);
+        let model = "deepseek-v4-flash-vision-exp";
+        run_against(&base, model, crate::Effort::High).expect("the retry succeeds");
+        let bodies = seen.lock().unwrap();
+        assert!(bodies[0].contains("reasoning_effort"));
+        assert!(!bodies[1].contains("reasoning_effort"), "{}", bodies[1]);
     }
 
     #[test]

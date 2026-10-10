@@ -1355,7 +1355,7 @@ mod tests {
 
     #[test]
     fn a_model_only_offers_the_levels_it_has() {
-        let deepseek = picker_app(Some("deepseek-v4-flash"), false, Effort::High);
+        let deepseek = picker_app(Some("deepseek-chat"), false, Effort::High);
         assert!(
             deepseek.picker_levels().is_empty(),
             "no effort, so no tiers either"
@@ -1525,7 +1525,10 @@ mod tests {
         assert_eq!(tiers("claude-opus-5-5"), [Effort::Super, Effort::Ultimate]);
         assert_eq!(tiers("gpt-5.5"), [Effort::Super]);
         assert!(tiers("gemini-3-pro").is_empty());
-        assert!(tiers("deepseek-v4-flash").is_empty());
+        assert!(tiers("deepseek-chat").is_empty());
+        // DeepSeek V4 and Kimi K3 have Max but no XHigh, so only Ultimate.
+        assert_eq!(tiers("deepseek-flash"), [Effort::Ultimate]);
+        assert_eq!(tiers("kimi-k3"), [Effort::Ultimate]);
     }
 
     #[test]
@@ -1702,9 +1705,9 @@ mod tests {
             "high",
             "locked workflows are not shown as on"
         );
-        let none = picker_app(Some("deepseek-v4-flash"), false, Effort::High);
+        let none = picker_app(Some("deepseek-chat"), false, Effort::High);
         assert_eq!(status_text(&none, later).0, "no effort");
-        let tier = picker_app(Some("deepseek-v4-flash"), true, Effort::Super);
+        let tier = picker_app(Some("deepseek-chat"), true, Effort::Super);
         assert_eq!(status_text(&tier, later).0, "super");
     }
 

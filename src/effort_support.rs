@@ -161,7 +161,32 @@ pub(crate) fn supported_levels(model_id: &str, overrides: &[Effort]) -> Vec<Effo
     if name.starts_with("grok-3-mini") {
         return vec![Low, High];
     }
+    if takes_low_high_max(&name) {
+        return vec![Low, High, Max];
+    }
     Vec::new()
+}
+
+/// DeepSeek V4 and V4.1 and Kimi K3 take `reasoning_effort` as "low", "high" or "max", with
+/// "max" meaning their own highest effort (not OpenAI's "xhigh"). Kimi K2.x and the retired
+/// `deepseek-chat` / `deepseek-reasoner` have no effort control (K2.x only turns thinking on or
+/// off), so they are not listed.
+///
+/// - DeepSeek: `deepseek-flash` and `deepseek-v4-pro`, plus the legacy `deepseek-v4-flash` names
+///   that route to V4.1 Flash (api-docs.deepseek.com, Chat Completions and Lists Models).
+/// - Kimi API: `kimi-k3` (platform.kimi.ai, Reasoning Effort and Model Parameter Reference).
+/// - Kimi Code membership: `k3`, `k3-256k` and `kimi-for-coding` list low / high / max effort;
+///   `kimi-for-coding-highspeed` (K2.7 Code) does not (kimi.com Kimi Code membership guide).
+fn takes_low_high_max(name: &str) -> bool {
+    let deepseek = ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash"]
+        .iter()
+        .any(|family| name == *family || name.starts_with(&format!("{family}-")));
+    let kimi = name == "kimi-k3"
+        || name.starts_with("kimi-k3-")
+        || name == "k3"
+        || name.starts_with("k3-")
+        || name == "kimi-for-coding";
+    deepseek || kimi
 }
 
 /// The level the model will actually run at when `wanted` is chosen: the highest level the model
@@ -216,8 +241,9 @@ pub(crate) fn apply_effort(
     }
     match api {
         Api::OpenAiCompatible => {
-            // OpenAI's own scale tops out at "xhigh".
-            let text = if level.model_level() == Effort::Max {
+            // OpenAI's own scale tops out at "xhigh"; DeepSeek and Kimi take "max" itself.
+            let text = if level.model_level() == Effort::Max && !takes_low_high_max(&bare(model_id))
+            {
                 "xhigh"
             } else {
                 name_of(level)
@@ -356,9 +382,16 @@ mod tests {
     #[test]
     fn models_without_effort_controls_offer_no_levels() {
         for id in [
-            "deepseek-v4-flash",
+            "deepseek-chat",
+            "deepseek-reasoner",
             "deepseek/deepseek-reasoner",
-            "kimi-k3",
+            "deepseek-v4",
+            "kimi-k2.6",
+            "kimi-k2.5",
+            "kimi-k2.7-code",
+            "kimi-k2.7-code-highspeed",
+            "kimi-for-coding-highspeed",
+            "kimi-k2-thinking",
             "qwen3.8-max",
             "glm-5.3-flash",
             "claude-haiku-4-5",
@@ -408,8 +441,21 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_never_shows_max() {
-        assert!(!supported_levels("deepseek-v4-flash", &[]).contains(&Max));
+    fn documented_deepseek_and_kimi_models_offer_low_high_and_max() {
+        for id in [
+            "deepseek-flash",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek/deepseek-v4-pro",
+            "kimi-k3",
+            "moonshotai/kimi-k3",
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+        ] {
+            assert_eq!(supported_levels(id, &[]), [Low, High, Max], "{id}");
+        }
     }
 
     #[test]
@@ -468,6 +514,44 @@ mod tests {
         assert_eq!(
             body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             1024
+        );
+    }
+
+    #[test]
+    fn deepseek_and_kimi_are_sent_their_own_level_names_including_max() {
+        let sent = |api, model: &str, level| {
+            let mut body = json!({"model": model});
+            assert!(apply_effort(&mut body, api, model, level, &[]), "{model}");
+            body
+        };
+        for model in [
+            "deepseek-flash",
+            "deepseek-v4-pro",
+            "kimi-k3",
+            "kimi-for-coding",
+            "k3",
+        ] {
+            let compatible = Api::OpenAiCompatible;
+            assert_eq!(sent(compatible, model, Low)["reasoning_effort"], "low");
+            assert_eq!(sent(compatible, model, High)["reasoning_effort"], "high");
+            assert_eq!(
+                sent(compatible, model, Max)["reasoning_effort"],
+                "max",
+                "{model} takes max itself, not OpenAI's xhigh"
+            );
+            assert_eq!(sent(compatible, model, Ultimate)["reasoning_effort"], "max");
+            assert_eq!(
+                sent(compatible, model, Medium)["reasoning_effort"],
+                "low",
+                "{model} has no medium, so it rounds down"
+            );
+        }
+        let anthropic = sent(Api::Anthropic, "deepseek-flash", Max);
+        assert_eq!(anthropic["output_config"]["effort"], "max");
+        assert_eq!(
+            sent(Api::OpenAiCompatible, "gpt-6-astra", Max)["reasoning_effort"],
+            "xhigh",
+            "OpenAI's own models still stop at xhigh"
         );
     }
 
