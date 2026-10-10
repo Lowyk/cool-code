@@ -301,6 +301,34 @@ fn reference_end(input: &str, start: usize, cursor: usize) -> usize {
     cursor + rest.find(char::is_whitespace).unwrap_or(rest.len())
 }
 
+/// Moves a popup's highlight by `step`, wrapping around and skipping rows that `skip` rejects,
+/// and scrolls just enough to keep it in view. Returns the new (selected, offset).
+pub(in crate::tui) fn step_selection(
+    selected: usize,
+    offset: usize,
+    count: usize,
+    step: isize,
+    skip: impl Fn(usize) -> bool,
+) -> (usize, usize) {
+    let mut chosen = selected;
+    let mut next = selected as isize;
+    for _ in 0..count {
+        next = (next + step).rem_euclid(count as isize);
+        if !skip(next as usize) {
+            chosen = next as usize;
+            break;
+        }
+    }
+    let offset = if chosen < offset {
+        chosen
+    } else if chosen >= offset + VISIBLE_SUGGESTIONS {
+        chosen + 1 - VISIBLE_SUGGESTIONS
+    } else {
+        offset
+    };
+    (chosen, offset)
+}
+
 const OUTSIDE_HINT: &str =
     "Outside the project: turn on \"Reference files outside the project\" in Settings → Privacy";
 
@@ -360,21 +388,14 @@ impl App {
 
     pub(in crate::tui) fn mention_move(&mut self, step: isize) {
         if let Some(state) = self.mention.as_mut() {
-            let count = state.items.len() as isize;
-            let mut next = state.selected as isize;
-            // Skip explanations, which cannot be chosen.
-            for _ in 0..count {
-                next = (next + step).rem_euclid(count);
-                if !state.items[next as usize].disabled {
-                    state.selected = next as usize;
-                    break;
-                }
-            }
-            if state.selected < state.offset {
-                state.offset = state.selected;
-            } else if state.selected >= state.offset + VISIBLE_SUGGESTIONS {
-                state.offset = state.selected + 1 - VISIBLE_SUGGESTIONS;
-            }
+            // Explanations cannot be chosen, so the highlight skips them.
+            (state.selected, state.offset) = step_selection(
+                state.selected,
+                state.offset,
+                state.items.len(),
+                step,
+                |index| state.items[index].disabled,
+            );
         }
     }
 
@@ -528,7 +549,69 @@ pub(in crate::tui) fn draw_mentions(
     prompt_area: Rect,
     state: &MentionState,
 ) {
-    let shown = state.items.len().min(VISIBLE_SUGGESTIONS);
+    let rows = state
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            if item.disabled {
+                return Line::from(Span::styled(
+                    item.insert.clone(),
+                    Style::default().fg(Color::Rgb(255, 197, 92)),
+                ));
+            }
+            let current = index == state.selected;
+            Line::from(vec![
+                popup_marker(current),
+                Span::styled(
+                    item.insert.clone(),
+                    if current {
+                        popup_current()
+                    } else if item.dir {
+                        Style::default().fg(crate::tui::theme::accent_soft())
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
+                ),
+            ])
+        })
+        .collect();
+    draw_list_popup(
+        frame,
+        prompt_area,
+        " Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ",
+        rows,
+        state.selected,
+        state.offset,
+    );
+}
+
+/// The "› " in front of the highlighted row of a popup list.
+pub(in crate::tui) fn popup_marker(current: bool) -> Span<'static> {
+    Span::styled(
+        if current { "› " } else { "  " },
+        Style::default().fg(crate::tui::theme::accent()),
+    )
+}
+
+/// The style of the highlighted row's main text.
+pub(in crate::tui) fn popup_current() -> Style {
+    Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// A scrolling list drawn just above the prompt, with the position of the highlight at the
+/// bottom. Used for `@` files and for `/` commands.
+pub(in crate::tui) fn draw_list_popup(
+    frame: &mut ratatui::Frame<'_>,
+    prompt_area: Rect,
+    title: &str,
+    rows: Vec<Line<'static>>,
+    selected: usize,
+    offset: usize,
+) {
+    let shown = rows.len().min(VISIBLE_SUGGESTIONS);
     let height = (shown as u16 + 2).min(prompt_area.y);
     if height < 3 {
         return;
@@ -544,51 +627,19 @@ pub(in crate::tui) fn draw_mentions(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(crate::tui::theme::accent()))
         .style(Style::default().bg(crate::tui::theme::panel()))
-        .title(" Files · ↑/↓ choose · Tab or Enter to insert · Esc closes ")
-        .title_bottom(
-            Line::from(format!(" {}/{} ", state.selected + 1, state.items.len())).right_aligned(),
-        );
+        .title(title.to_owned())
+        .title_bottom(Line::from(format!(" {}/{} ", selected + 1, rows.len())).right_aligned());
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let rows = inner.height as usize;
+    let visible = inner.height as usize;
     // Keep the highlighted row inside the visible window, even if the popup is shorter than usual.
-    let first = state
-        .offset
-        .max((state.selected + 1).saturating_sub(rows))
-        .min(state.selected);
-    let lines = state
-        .items
-        .iter()
-        .enumerate()
+    let first = offset
+        .max((selected + 1).saturating_sub(visible))
+        .min(selected);
+    let lines = rows
+        .into_iter()
         .skip(first)
-        .take(rows)
-        .map(|(index, item)| {
-            if item.disabled {
-                return Line::from(Span::styled(
-                    item.insert.clone(),
-                    Style::default().fg(Color::Rgb(255, 197, 92)),
-                ));
-            }
-            let current = index == state.selected;
-            Line::from(vec![
-                Span::styled(
-                    if current { "› " } else { "  " },
-                    Style::default().fg(crate::tui::theme::accent()),
-                ),
-                Span::styled(
-                    item.insert.clone(),
-                    if current {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else if item.dir {
-                        Style::default().fg(crate::tui::theme::accent_soft())
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    },
-                ),
-            ])
-        })
+        .take(visible)
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
 }

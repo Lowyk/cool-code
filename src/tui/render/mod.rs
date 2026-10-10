@@ -422,6 +422,8 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
 
     if let Some(state) = app.mention.as_ref() {
         crate::tui::mentions::draw_mentions(frame, prompt_area, state);
+    } else if app.slash.is_open() {
+        crate::tui::slash::draw_slash(frame, prompt_area, &app.slash);
     }
 
     let help = Line::from(vec![

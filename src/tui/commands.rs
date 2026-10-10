@@ -249,8 +249,9 @@ impl App {
             return Ok(());
         }
         if value == "/help" {
-            self.notice = "Commands: /help, /settings, /usage, /stats, /model <id|author/id>, /forcemodel <id>, /compact, /undo, /mode [name], /chain [id], /effort [level], /files, /read <path>, /search <text>, /git status, /init, /privacy [add|clear|revoke], /claudemd, /agentsmd, /resume [all], /clear, /quit. Attach workspace files with @path.".to_owned();
-            self.finish_command(self.notice.clone());
+            let catalog = self.slash_catalog();
+            self.notice = crate::tui::slash::help_summary(&catalog);
+            self.finish_command(crate::tui::slash::help_text(&catalog));
             return Ok(());
         }
         if value == "/files"
@@ -335,9 +336,9 @@ impl App {
             self.notice = "Conversation cleared.".to_owned();
             return Ok(());
         }
-        if value.starts_with('/') {
-            self.notice =
-                "Try /help, /settings, /model, /mode, /effort, /init, /clear, or /quit.".to_owned();
+        if let Some(command) = value.strip_prefix('/') {
+            let word = command.split_whitespace().next().unwrap_or_default();
+            self.notice = crate::tui::slash::unknown_notice(word, &self.slash_catalog());
             self.finish_command(self.notice.clone());
             return Ok(());
         }
