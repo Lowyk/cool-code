@@ -350,7 +350,7 @@ mod tests {
             "Ultimate becomes Max while locked"
         );
         let mut unlocked = Settings::default();
-        unlocked.dynamic_workflows = true;
+        unlocked.workflow_size = crate::workflow::WorkflowSize::Medium;
         apply_overrides(
             &mut unlocked,
             &Options {

@@ -3,6 +3,7 @@ use crate::tui::models::selected_model_name;
 use crate::tui::pickers::model::ModelPicker;
 use crate::tui::render::mode_span;
 use crate::tui::settings::reset::ResetStage;
+use crate::tui::settings::workflow_size::WorkflowChooser;
 use crate::tui::settings::{Focus, SettingsView};
 use crate::tui::state::App;
 use crate::{PulseMode, write_settings};
@@ -21,6 +22,22 @@ fn switch(on: bool) -> Span<'static> {
     } else {
         Span::styled("off", Style::default().fg(Color::Gray))
     }
+}
+
+/// The Dynamic workflows row: "off", or the size, its limit and how many run at once.
+fn workflow_size_value(settings: &crate::Settings) -> Span<'static> {
+    if !settings.workflows_unlocked() {
+        return switch(false);
+    }
+    Span::styled(
+        format!(
+            "{} · up to {} · {} at once",
+            settings.workflow_size.label(),
+            settings.workflow_limit(),
+            settings.subagents_at_once()
+        ),
+        Style::default().fg(Color::Rgb(255, 197, 92)),
+    )
 }
 
 pub(super) fn draw_general(
@@ -86,7 +103,7 @@ pub(super) fn draw_general(
         vec![switch(app.settings.default_load_claude_md)],
         vec![switch(app.settings.default_load_agents_md)],
         vec![switch(app.settings.load_global_claude_md)],
-        vec![switch(app.settings.dynamic_workflows)],
+        vec![workflow_size_value(&app.settings)],
         vec![switch(app.settings.usage_warnings)],
         vec![switch(app.settings.auto_compact)],
         vec![match &app.settings.image_generation {
@@ -186,18 +203,7 @@ impl App {
                     write_settings(&self.settings)?;
                 }
                 10 => {
-                    self.settings.dynamic_workflows = !self.settings.dynamic_workflows;
-                    self.notice = if self.settings.dynamic_workflows {
-                        "Dynamic workflows unlocked: Super, Ultimate and workflows on lower levels can use many more tokens.".to_owned()
-                    } else if self.settings.enforce_workflow_lock() {
-                        format!(
-                            "Dynamic workflows locked; effort set to {}.",
-                            effort_name(self.settings.effort)
-                        )
-                    } else {
-                        "Dynamic workflows locked.".to_owned()
-                    };
-                    write_settings(&self.settings)?;
+                    view.workflow_chooser = Some(WorkflowChooser::open(&self.settings));
                 }
                 11 => {
                     self.settings.usage_warnings = !self.settings.usage_warnings;

@@ -1,11 +1,18 @@
 //! Workflows: letting the assistant hand work to subagents, and having its work reviewed.
 //!
-//! Active on the Super and Ultimate tiers (and on lower levels when ticked), and only once
-//! *Dynamic workflows* has been switched on, because they can use many times more tokens. The
-//! main assistant gets a `spawn_subagents` tool. `explore` subagents only read and run in
-//! parallel; `implement` subagents can also edit and run commands, so they run one after another
-//! and go through the same permission prompts as everything else. After the assistant finishes a
-//! change, a separate reviewer subagent inspects it and can send problems back for a fix round.
+//! Active on the Super and Ultimate tiers (and on lower levels when ticked), and only once a
+//! *Dynamic workflows* size other than Off has been chosen, because they can use many times more
+//! tokens. The size is the most subagents a whole turn may start; see [`Budget::new`] for how
+//! each tier shares it. The main assistant gets a `spawn_subagents` tool. `explore` subagents
+//! only read and run in parallel, at most *At once* of them at a time; `implement` subagents can
+//! also edit and run commands, so they run one after another and go through the same permission
+//! prompts as everything else. After the assistant finishes a change, a separate reviewer
+//! subagent inspects it and can send problems back for a fix round.
+//!
+//! Every provider request a subagent causes, including an Auto mode guard check of one of its
+//! actions, is made on that subagent's own thread, one at a time, while it holds its place among
+//! the *At once* running subagents. So the requests in flight never outnumber that bound. (Only
+//! implementers ever trigger guard checks, and they take turns.)
 //!
 //! Every limit lives in [`Budget`]; nothing here can run away.
 
@@ -17,9 +24,11 @@ use crate::stream::{Stream, StreamEvent};
 use crate::tools::ToolSet;
 use crate::{Effort, Settings};
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
 /// Something that can answer a request for the next model reply. Production uses the real
@@ -61,6 +70,106 @@ impl Completer for ProviderCompleter<'_> {
     }
 }
 
+/// How many subagents a turn may start in all: the *Dynamic workflows* setting.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum WorkflowSize {
+    /// No workflows: Super and Ultimate are locked.
+    #[default]
+    Off,
+    Small,
+    Medium,
+    Big,
+    Large,
+    Massive,
+    Extreme,
+    /// The number in `workflow_custom_size`.
+    Custom,
+}
+
+/// The Custom size can never go above this.
+pub(crate) const CUSTOM_CEILING: usize = 500;
+pub(crate) const DEFAULT_CUSTOM_SIZE: usize = 20;
+/// Subagents running at the same time, by default and at most.
+pub(crate) const DEFAULT_AT_ONCE: usize = 8;
+pub(crate) const MAX_AT_ONCE: usize = 32;
+/// Sizes above this many subagents are confirmed once, because they can be very expensive.
+pub(crate) const CONFIRM_ABOVE: usize = 100;
+/// The most subagents one `spawn_subagents` call may start, whatever the size.
+pub(crate) const MAX_PER_CALL: usize = 50;
+/// The most report text one `spawn_subagents` call hands back to the main assistant, so a big
+/// call cannot flood its context.
+pub(crate) const CALL_REPORT_CHARS: usize = 120_000;
+
+impl WorkflowSize {
+    pub(crate) const ALL: [WorkflowSize; 8] = [
+        WorkflowSize::Off,
+        WorkflowSize::Small,
+        WorkflowSize::Medium,
+        WorkflowSize::Big,
+        WorkflowSize::Large,
+        WorkflowSize::Massive,
+        WorkflowSize::Extreme,
+        WorkflowSize::Custom,
+    ];
+
+    /// The fixed limit of a preset size (0 for Off); `None` for Custom.
+    pub(crate) fn preset_limit(self) -> Option<usize> {
+        match self {
+            WorkflowSize::Off => Some(0),
+            WorkflowSize::Small => Some(5),
+            WorkflowSize::Medium => Some(15),
+            WorkflowSize::Big => Some(30),
+            WorkflowSize::Large => Some(50),
+            WorkflowSize::Massive => Some(100),
+            WorkflowSize::Extreme => Some(200),
+            WorkflowSize::Custom => None,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            WorkflowSize::Off => "Off",
+            WorkflowSize::Small => "Small",
+            WorkflowSize::Medium => "Medium",
+            WorkflowSize::Big => "Big",
+            WorkflowSize::Large => "Large",
+            WorkflowSize::Massive => "Massive",
+            WorkflowSize::Extreme => "Extreme",
+            WorkflowSize::Custom => "Custom",
+        }
+    }
+
+    /// Whether choosing this size (with `custom` as the Custom number) needs the one-time
+    /// "this can be very expensive" confirmation: Massive, Extreme, or Custom above 100.
+    pub(crate) fn needs_confirmation(self, custom: usize) -> bool {
+        match self {
+            WorkflowSize::Massive | WorkflowSize::Extreme => true,
+            WorkflowSize::Custom => custom > CONFIRM_ABOVE,
+            _ => false,
+        }
+    }
+}
+
+/// Reads `workflow_size`, or the on/off `dynamic_workflows` switch it replaced: on becomes
+/// Medium (the size closest to what the switch allowed), off becomes Off.
+pub(crate) fn size_from_config<'de, D>(deserializer: D) -> Result<WorkflowSize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Switch(bool),
+        Size(WorkflowSize),
+    }
+    Ok(match Stored::deserialize(deserializer)? {
+        Stored::Switch(true) => WorkflowSize::Medium,
+        Stored::Switch(false) => WorkflowSize::Off,
+        Stored::Size(size) => size,
+    })
+}
+
 /// How much a turn may delegate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Budget {
@@ -68,6 +177,8 @@ pub(crate) struct Budget {
     pub(crate) per_call: usize,
     /// Subagents in the whole turn.
     pub(crate) total_runs: usize,
+    /// Subagents running at the same time.
+    pub(crate) at_once: usize,
     /// Model rounds one subagent may take.
     pub(crate) rounds: usize,
     /// Characters of a subagent's report passed back to the main assistant.
@@ -77,33 +188,69 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
-    pub(crate) fn for_effort(effort: Effort) -> Budget {
-        if effort == Effort::Ultimate {
-            Budget {
-                per_call: 6,
-                total_runs: 20,
-                rounds: 25,
-                report_chars: 10_000,
-                review_cycles: 2,
-            }
-        } else {
-            Budget {
-                per_call: 4,
-                total_runs: 8,
-                rounds: 12,
-                report_chars: 6_000,
-                review_cycles: 1,
-            }
+    /// The budget for `effort` under a size of `limit` subagents per turn. Ultimate may use the
+    /// whole size, Super half of it and the lower levels (with workflows ticked) a quarter,
+    /// rounded up and never below one. One call may start a third of the turn's subagents on
+    /// Ultimate and half on the other levels (at most [`MAX_PER_CALL`]), and reports are
+    /// shortened so one call never returns more than [`CALL_REPORT_CHARS`].
+    pub(crate) fn new(effort: Effort, limit: usize, at_once: usize) -> Budget {
+        let ultimate = effort == Effort::Ultimate;
+        let share = match effort {
+            Effort::Ultimate => 1,
+            Effort::Super => 2,
+            _ => 4,
+        };
+        let total_runs = limit.max(1).div_ceil(share);
+        let per_call = total_runs
+            .div_ceil(if ultimate { 3 } else { 2 })
+            .min(MAX_PER_CALL);
+        let report_chars = if ultimate { 10_000 } else { 6_000 };
+        Budget {
+            per_call,
+            total_runs,
+            at_once: at_once.clamp(1, MAX_AT_ONCE),
+            rounds: if ultimate { 25 } else { 12 },
+            report_chars: report_chars.min(CALL_REPORT_CHARS / per_call),
+            review_cycles: if ultimate { 2 } else { 1 },
         }
+    }
+
+    /// The budget the settings allow, or `None` while workflows are not active.
+    pub(crate) fn for_settings(settings: &Settings) -> Option<Budget> {
+        settings.workflows_active().then(|| {
+            Budget::new(
+                settings.effort,
+                settings.workflow_limit(),
+                settings.subagents_at_once(),
+            )
+        })
     }
 }
 
 impl Settings {
+    /// Whether a workflow size other than Off is chosen, which unlocks Super, Ultimate and the
+    /// workflows checkbox on the lower levels.
+    pub(crate) fn workflows_unlocked(&self) -> bool {
+        self.workflow_size != WorkflowSize::Off
+    }
+
+    /// The most subagents a turn may start (0 while workflows are off).
+    pub(crate) fn workflow_limit(&self) -> usize {
+        self.workflow_size
+            .preset_limit()
+            .unwrap_or_else(|| self.workflow_custom_size.clamp(1, CUSTOM_CEILING))
+    }
+
+    /// The most subagents running at the same time.
+    pub(crate) fn subagents_at_once(&self) -> usize {
+        self.workflow_at_once.clamp(1, MAX_AT_ONCE)
+    }
+
     /// The settings a subagent runs with: no workflows of its own (subagents cannot start more
     /// subagents) and the model-level effort of the tier that launched it.
     pub(crate) fn for_subagent(&self) -> Settings {
         let mut settings = self.clone();
-        settings.dynamic_workflows = false;
+        settings.workflow_size = WorkflowSize::Off;
         settings.workflows = false;
         settings.effort = self.effort.model_level();
         settings
@@ -169,9 +316,7 @@ pub(crate) enum Review {
 impl Run {
     pub(crate) fn new(settings: &Settings) -> Run {
         Run {
-            budget: settings
-                .workflows_active()
-                .then(|| Budget::for_effort(settings.effort)),
+            budget: Budget::for_settings(settings),
             runs_used: 0,
             reviews_done: 0,
             changed: false,
@@ -226,42 +371,54 @@ impl Run {
         )));
         let sub_settings = settings.for_subagent();
         let mut reports: Vec<Option<Report>> = tasks.iter().map(|_| None).collect();
-        // Explorers only read, so they run side by side.
+        // Explorers only read, so they run side by side: a pool of at most `at_once` workers,
+        // each taking the next waiting explorer until none are left.
+        let explorers = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task.role == Role::Explore)
+            .collect::<Vec<_>>();
+        let next = AtomicUsize::new(0);
+        let finished = Mutex::new(Vec::new());
         std::thread::scope(|scope| {
-            let handles = tasks
-                .iter()
-                .enumerate()
-                .filter(|(_, task)| task.role == Role::Explore)
-                .map(|(index, task)| {
-                    let (settings, events) = (&sub_settings, events.clone());
-                    (
-                        index,
-                        scope.spawn(move || {
+            for _ in 0..budget.at_once.min(explorers.len()) {
+                let (settings, events) = (&sub_settings, events.clone());
+                let (explorers, next, finished) = (&explorers, &next, &finished);
+                scope.spawn(move || {
+                    while let Some((index, task)) =
+                        explorers.get(next.fetch_add(1, Ordering::SeqCst)).copied()
+                    {
+                        let report = guarded_run(|| {
                             run_subagent(completer, settings, root, task, &budget, &events, cancel)
-                        }),
-                    )
-                })
-                .collect::<Vec<_>>();
-            for (index, handle) in handles {
-                reports[index] = Some(handle.join().unwrap_or_else(|_| Report {
-                    text: "The subagent stopped unexpectedly.".to_owned(),
-                    changed: false,
-                    cancelled: false,
-                }));
+                        });
+                        finished
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push((index, report));
+                    }
+                });
             }
         });
+        for (index, report) in finished
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
+            reports[index] = Some(report);
+        }
         // Implementers can edit and need approvals, so they take turns.
         for (index, task) in tasks.iter().enumerate() {
             if task.role == Role::Implement && !cancel.load(Ordering::Relaxed) {
-                reports[index] = Some(run_subagent(
-                    completer,
-                    &sub_settings,
-                    root,
-                    task,
-                    &budget,
-                    events,
-                    cancel,
-                ));
+                reports[index] = Some(guarded_run(|| {
+                    run_subagent(
+                        completer,
+                        &sub_settings,
+                        root,
+                        task,
+                        &budget,
+                        events,
+                        cancel,
+                    )
+                }));
             }
         }
         if cancel.load(Ordering::Relaxed) || reports.iter().flatten().any(|r| r.cancelled) {
@@ -328,6 +485,15 @@ impl Run {
             Review::Passed | Review::Skipped(_) => None,
         })
     }
+}
+
+/// Runs a subagent, turning a panic inside it into a report instead of losing the others.
+fn guarded_run(run: impl FnOnce() -> Report) -> Report {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Report {
+        text: "The subagent stopped unexpectedly.".to_owned(),
+        changed: false,
+        cancelled: false,
+    })
 }
 
 fn parse_tasks(arguments: &Value, budget: &Budget, plan_mode: bool) -> Result<Vec<Task>> {
@@ -717,7 +883,7 @@ mod tests {
     fn settings(effort: Effort) -> Settings {
         let mut settings = Settings::default();
         settings.permission_mode = "accept-everything".to_owned();
-        settings.dynamic_workflows = true;
+        settings.workflow_size = WorkflowSize::Medium;
         settings.effort = effort;
         settings
     }
@@ -768,22 +934,99 @@ mod tests {
         (result, seen.join().unwrap())
     }
 
-    // ---- budgets and parsing ----
+    // ---- sizes, budgets and parsing ----
+
+    fn sized(size: WorkflowSize, custom: usize) -> Settings {
+        let mut settings = Settings::default();
+        settings.workflow_size = size;
+        settings.workflow_custom_size = custom;
+        settings
+    }
 
     #[test]
-    fn super_and_ultimate_have_their_own_bigger_or_smaller_budgets() {
-        let super_tier = Budget::for_effort(Effort::Super);
-        let ultimate = Budget::for_effort(Effort::Ultimate);
+    fn each_size_allows_its_documented_number_of_subagents() {
+        use WorkflowSize::*;
+        let limits = [Off, Small, Medium, Big, Large, Massive, Extreme]
+            .map(|size| sized(size, 7).workflow_limit());
+        assert_eq!(limits, [0, 5, 15, 30, 50, 100, 200]);
+        assert_eq!(sized(Custom, 250).workflow_limit(), 250);
         assert_eq!(
-            Budget::for_effort(Effort::High),
-            super_tier,
-            "lower levels use the Super budget"
+            sized(Custom, 9_999).workflow_limit(),
+            500,
+            "the hard ceiling"
         );
-        assert!(ultimate.per_call > super_tier.per_call);
-        assert!(ultimate.total_runs > super_tier.total_runs);
-        assert!(ultimate.rounds > super_tier.rounds);
-        assert!(ultimate.review_cycles > super_tier.review_cycles);
-        assert_eq!((super_tier.per_call, super_tier.review_cycles), (4, 1));
+        assert_eq!(sized(Custom, 0).workflow_limit(), 1, "at least one");
+        assert!(!sized(Off, 7).workflows_unlocked());
+        assert!(sized(Small, 7).workflows_unlocked() && sized(Custom, 1).workflows_unlocked());
+    }
+
+    #[test]
+    fn only_sizes_above_a_hundred_ask_for_confirmation() {
+        use WorkflowSize::*;
+        for size in [Off, Small, Medium, Big, Large] {
+            assert!(!size.needs_confirmation(500), "{size:?}");
+        }
+        assert!(Massive.needs_confirmation(1) && Extreme.needs_confirmation(1));
+        assert!(!Custom.needs_confirmation(100));
+        assert!(Custom.needs_confirmation(101));
+    }
+
+    #[test]
+    fn at_once_defaults_to_eight_and_stays_between_one_and_thirty_two() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.subagents_at_once(), 8);
+        settings.workflow_at_once = 0;
+        assert_eq!(settings.subagents_at_once(), 1);
+        settings.workflow_at_once = 99;
+        assert_eq!(settings.subagents_at_once(), 32);
+    }
+
+    #[test]
+    fn budgets_scale_with_the_size_and_ultimate_may_use_all_of_it() {
+        let medium = 15;
+        let ultimate = Budget::new(Effort::Ultimate, medium, 8);
+        let super_tier = Budget::new(Effort::Super, medium, 8);
+        let high = Budget::new(Effort::High, medium, 8);
+        assert_eq!((ultimate.total_runs, ultimate.per_call), (15, 5));
+        assert_eq!(
+            (super_tier.total_runs, super_tier.per_call),
+            (8, 4),
+            "Medium keeps the old Super budget"
+        );
+        assert_eq!((high.total_runs, high.per_call), (4, 2), "a quarter");
+        assert!(ultimate.rounds > super_tier.rounds && super_tier.rounds == high.rounds);
+        assert_eq!((ultimate.review_cycles, super_tier.review_cycles), (2, 1));
+        for limit in [1, 5, 15, 30, 50, 100, 200, 500] {
+            for effort in [Effort::Low, Effort::High, Effort::Super, Effort::Ultimate] {
+                let budget = Budget::new(effort, limit, 8);
+                assert!(
+                    budget.total_runs >= 1 && budget.total_runs <= limit,
+                    "{limit}"
+                );
+                assert!(budget.per_call >= 1 && budget.per_call <= budget.total_runs);
+                assert!(budget.per_call <= MAX_PER_CALL);
+                assert!(
+                    budget.per_call * budget.report_chars <= CALL_REPORT_CHARS,
+                    "one call's reports stay bounded: {effort:?} {limit}"
+                );
+            }
+        }
+        assert_eq!(Budget::new(Effort::Ultimate, 500, 8).total_runs, 500);
+        assert_eq!(Budget::new(Effort::Ultimate, 1, 0).at_once, 1);
+    }
+
+    #[test]
+    fn the_budget_comes_from_the_settings_only_while_workflows_are_active() {
+        let mut settings = sized(WorkflowSize::Large, 0);
+        settings.effort = Effort::Ultimate;
+        settings.workflow_at_once = 3;
+        let budget = Budget::for_settings(&settings).expect("active");
+        assert_eq!((budget.total_runs, budget.at_once), (50, 3));
+        settings.effort = Effort::High;
+        assert_eq!(Budget::for_settings(&settings), None, "not ticked");
+        settings.workflow_size = WorkflowSize::Off;
+        settings.effort = Effort::Ultimate;
+        assert_eq!(Budget::for_settings(&settings), None);
     }
 
     #[test]
@@ -791,7 +1034,7 @@ mod tests {
         let mut parent = settings(Effort::Ultimate);
         parent.workflows = true;
         let child = parent.for_subagent();
-        assert!(!child.dynamic_workflows && !child.workflows && !child.workflows_active());
+        assert!(!child.workflows_unlocked() && !child.workflows && !child.workflows_active());
         assert_eq!(child.effort, Effort::Max, "Ultimate's model level");
         assert_eq!(settings(Effort::Super).for_subagent().effort, Effort::XHigh);
         assert_eq!(
@@ -802,7 +1045,7 @@ mod tests {
 
     #[test]
     fn task_arguments_are_validated() {
-        let budget = Budget::for_effort(Effort::Super);
+        let budget = Budget::new(Effort::Super, 15, 8);
         let parse = |value: Value, plan: bool| parse_tasks(&value, &budget, plan);
         let ok = parse(
             serde_json::json!({"tasks": [
@@ -881,7 +1124,7 @@ mod tests {
         );
         let off = Scripted::new(|_, _| say("done"));
         let mut locked = settings(Effort::Super);
-        locked.dynamic_workflows = false;
+        locked.workflow_size = WorkflowSize::Off;
         run(&off, &locked, &root, &cancel).0.unwrap();
         assert_eq!(
             off.tool_sets(),
@@ -950,6 +1193,95 @@ mod tests {
             events.iter().any(|e| e == "started: 3 subagent(s)"),
             "{events:?}"
         );
+    }
+
+    /// A model whose main assistant starts `count` explorers once, then answers.
+    fn many_explorers(count: usize) -> Scripted {
+        Scripted::new(move |messages, _| {
+            if is_subagent(messages) {
+                return say("explored");
+            }
+            match last_tool_result(messages) {
+                None => call(
+                    "spawn_subagents",
+                    serde_json::json!({"tasks": (0..count)
+                        .map(|index| serde_json::json!({"kind": "explore", "instructions": format!("area {index}")}))
+                        .collect::<Vec<_>>()}),
+                ),
+                Some(reports) => say(&reports),
+            }
+        })
+        .slow(std::time::Duration::from_millis(80))
+    }
+
+    #[test]
+    fn explorers_in_one_call_all_run_at_the_same_time_when_the_bound_allows() {
+        let root = workspace();
+        let cancel = AtomicBool::new(false);
+        let mut wide = settings(Effort::Ultimate);
+        wide.workflow_size = WorkflowSize::Large;
+        wide.workflow_at_once = 8;
+        let model = many_explorers(6);
+        let answer = run(&model, &wide, &root, &cancel).0.unwrap().text;
+        assert_eq!(answer.matches("explored").count(), 6, "{answer}");
+        assert_eq!(
+            model.most_at_once.load(Ordering::SeqCst),
+            6,
+            "all six overlapped"
+        );
+    }
+
+    #[test]
+    fn no_more_than_at_once_subagents_run_together() {
+        let root = workspace();
+        let cancel = AtomicBool::new(false);
+        let mut narrow = settings(Effort::Ultimate);
+        narrow.workflow_size = WorkflowSize::Large;
+        narrow.workflow_at_once = 2;
+        let model = many_explorers(7);
+        let answer = run(&model, &narrow, &root, &cancel).0.unwrap().text;
+        assert_eq!(
+            answer.matches("explored").count(),
+            7,
+            "every task still ran"
+        );
+        for index in 1..=7 {
+            assert!(answer.contains(&format!("Subagent {index} ")), "{answer}");
+        }
+        assert_eq!(model.most_at_once.load(Ordering::SeqCst), 2);
+        narrow.workflow_at_once = 1;
+        let one = many_explorers(3);
+        run(&one, &narrow, &root, &cancel).0.unwrap();
+        assert_eq!(one.most_at_once.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_subagent_that_panics_is_reported_and_the_others_still_run() {
+        let root = workspace();
+        let cancel = AtomicBool::new(false);
+        let mut narrow = settings(Effort::Ultimate);
+        narrow.workflow_at_once = 1;
+        let model = Scripted::new(|messages, _| {
+            if is_subagent(messages) {
+                if messages[1].display == "boom" {
+                    panic!("scripted panic");
+                }
+                return say("fine");
+            }
+            match last_tool_result(messages) {
+                None => call(
+                    "spawn_subagents",
+                    serde_json::json!({"tasks": [
+                        {"kind": "explore", "instructions": "boom"},
+                        {"kind": "explore", "instructions": "calm"}
+                    ]}),
+                ),
+                Some(reports) => say(&reports),
+            }
+        });
+        let answer = run(&model, &narrow, &root, &cancel).0.unwrap().text;
+        assert!(answer.contains("stopped unexpectedly"), "{answer}");
+        assert!(answer.contains("fine"), "{answer}");
     }
 
     #[test]
@@ -1157,7 +1489,7 @@ mod tests {
             .filter(|set| **set == ToolSet::Explore)
             .count();
         assert!(
-            rounds <= Budget::for_effort(Effort::Super).rounds + 1,
+            rounds <= Budget::new(Effort::Super, 15, 8).rounds + 1,
             "{rounds} rounds"
         );
     }

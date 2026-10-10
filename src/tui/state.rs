@@ -622,14 +622,14 @@ impl App {
         }
         // The checkbox only belongs to the plain levels; the tiers are workflows by definition.
         self.settings.workflows = self.picker_workflows
-            && self.settings.dynamic_workflows
+            && self.settings.workflows_unlocked()
             && matches!(selected, Effort::Low | Effort::Medium | Effort::High);
         self.apply_effort(selected)
     }
 
     /// True (after telling the user why) when `effort` is a workflow tier that is still locked.
     pub(super) fn workflow_tier_is_locked(&mut self, effort: Effort) -> bool {
-        let locked = effort.is_workflow_tier() && !self.settings.dynamic_workflows;
+        let locked = effort.is_workflow_tier() && !self.settings.workflows_unlocked();
         if locked {
             self.notice = format!(
                 "{} is locked. Turn on Dynamic workflows in Settings → General to use it.",

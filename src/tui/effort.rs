@@ -452,7 +452,7 @@ impl App {
                 self.picker_focus_workflows = false;
             }
             KeyCode::Down if plain && !self.picker_focus_workflows => {
-                if self.settings.dynamic_workflows {
+                if self.settings.workflows_unlocked() {
                     self.picker_focus_workflows = true;
                 } else {
                     self.notice =
@@ -467,7 +467,7 @@ impl App {
                     Effort::Ultimate
                 };
                 if let Some(index) = levels.iter().position(|level| *level == tier) {
-                    if self.settings.dynamic_workflows {
+                    if self.settings.workflows_unlocked() {
                         self.picker_index = index;
                     } else {
                         self.notice = format!(
@@ -520,7 +520,7 @@ pub(super) fn draw_effort_picker(
     let selected_index = app.picker_index.min(levels.len() - 1);
     let selected_effort = levels[selected_index];
     let model_levels = app.active_model_levels();
-    let unlocked = app.settings.dynamic_workflows;
+    let unlocked = app.settings.workflows_unlocked();
     let on_plain_level = matches!(selected_effort, Effort::Low | Effort::Medium | Effort::High);
     let t = app.launched_at.elapsed().as_secs_f32();
     let rows = bar_rows(area.height.saturating_sub(2));
@@ -654,6 +654,17 @@ pub(super) fn draw_effort_picker(
         } else {
             selected_effort.description().to_owned()
         };
+        if selected_effort.is_workflow_tier() && unlocked {
+            let budget = crate::workflow::Budget::new(
+                selected_effort,
+                app.settings.workflow_limit(),
+                app.settings.subagents_at_once(),
+            );
+            text.push_str(&format!(
+                ". Up to {} subagents this turn ({} at once).",
+                budget.total_runs, budget.at_once
+            ));
+        }
         if model_levels.is_empty() {
             text.push_str(" This model has no adjustable effort levels.");
         }
@@ -938,7 +949,7 @@ mod tests {
             rendered.contains("locked") && !rendered.contains("xhigh+wf"),
             "the workflow tiers say they are locked by default:\n{rendered}"
         );
-        app.settings.dynamic_workflows = true;
+        app.settings.workflow_size = crate::workflow::WorkflowSize::Medium;
         terminal
             .draw(|frame| draw(frame, &app, 0))
             .expect("draw unlocked");
@@ -956,6 +967,31 @@ mod tests {
         let ordered = ["Low", "Medium", "High", "XHigh", "Max", "Super", "Ultimate"]
             .map(|label| rendered.find(label).expect("effort label"));
         assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn the_picker_says_how_many_subagents_a_workflow_tier_may_start() {
+        let mut terminal = Terminal::new(TestBackend::new(110, 32)).expect("test terminal");
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.settings.workflow_size = crate::workflow::WorkflowSize::Large;
+        app.picker = true;
+        let shown = |app: &App, terminal: &mut Terminal<TestBackend>| {
+            terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        app.picker_index = app.picker_levels().len() - 1;
+        let ultimate = shown(&app, &mut terminal);
+        assert!(ultimate.contains("Up to 50 subagents"), "{ultimate}");
+        app.picker_index = app.picker_levels().len() - 2;
+        let super_tier = shown(&app, &mut terminal);
+        assert!(super_tier.contains("Up to 25 subagents"), "{super_tier}");
     }
 
     #[test]
@@ -1246,7 +1282,7 @@ mod tests {
     fn star_cells_in_view(effort_index: usize) -> usize {
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
-        app.settings.dynamic_workflows = true;
+        app.settings.workflow_size = crate::workflow::WorkflowSize::Medium;
         app.settings.background_animation = false;
         app.transcript.push(crate::tui::state::TranscriptEntry {
             kind: crate::tui::state::TranscriptKind::Assistant,
@@ -1285,7 +1321,11 @@ mod tests {
     fn picker_app(model: Option<&str>, dynamic: bool, effort: Effort) -> App {
         let mut settings = Settings::default();
         settings.model = model.map(str::to_owned);
-        settings.dynamic_workflows = dynamic;
+        settings.workflow_size = if dynamic {
+            crate::workflow::WorkflowSize::Medium
+        } else {
+            crate::workflow::WorkflowSize::Off
+        };
         settings.effort = effort;
         let mut app = App::new(settings);
         app.trust_prompt = false;
@@ -1655,7 +1695,7 @@ mod tests {
         assert_eq!(status_text(&app, later).0, "high +wf");
         app.settings.workflows = false;
         assert_eq!(status_text(&app, later).0, "high");
-        app.settings.dynamic_workflows = false;
+        app.settings.workflow_size = crate::workflow::WorkflowSize::Off;
         app.settings.workflows = true;
         assert_eq!(
             status_text(&app, later).0,

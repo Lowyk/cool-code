@@ -37,11 +37,11 @@ impl Effort {
 }
 
 impl crate::Settings {
-    /// Puts the effort back inside what is unlocked: while dynamic workflows are off, Super and
+    /// Puts the effort back inside what is unlocked: while the workflow size is Off, Super and
     /// Ultimate become XHigh and Max and workflows are switched off. Returns whether anything
     /// had to change.
     pub(crate) fn enforce_workflow_lock(&mut self) -> bool {
-        if self.dynamic_workflows {
+        if self.workflows_unlocked() {
             return false;
         }
         let before = (self.effort, self.workflows);
@@ -52,7 +52,7 @@ impl crate::Settings {
 
     /// Whether workflows (subagents) are on for the current effort.
     pub(crate) fn workflows_active(&self) -> bool {
-        self.dynamic_workflows
+        self.workflows_unlocked()
             && (self.effort.is_workflow_tier()
                 || (self.workflows
                     && matches!(self.effort, Effort::Low | Effort::Medium | Effort::High)))
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn workflow_tiers_are_locked_until_dynamic_workflows_are_enabled() {
         let mut settings = crate::Settings::default();
-        assert!(!settings.dynamic_workflows, "locked by default");
+        assert!(!settings.workflows_unlocked(), "locked by default");
         settings.effort = Ultimate;
         settings.workflows = true;
         assert!(settings.enforce_workflow_lock());
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn unlocked_workflows_are_active_on_the_tiers_and_on_ticked_lower_levels() {
         let mut settings = crate::Settings::default();
-        settings.dynamic_workflows = true;
+        settings.workflow_size = crate::workflow::WorkflowSize::Small;
         for (effort, ticked, expected) in [
             (Super, false, true),
             (Ultimate, false, true),
@@ -344,7 +344,7 @@ mod tests {
                 "{effort:?} ticked={ticked}"
             );
         }
-        settings.dynamic_workflows = false;
+        settings.workflow_size = crate::workflow::WorkflowSize::Off;
         settings.effort = Super;
         assert!(
             !settings.workflows_active(),

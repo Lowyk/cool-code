@@ -147,7 +147,7 @@ impl Settings {
         settings.active_chain_id = None;
         settings.effort = crate::Effort::Low;
         settings.workflows = false;
-        settings.dynamic_workflows = false;
+        settings.workflow_size = crate::workflow::WorkflowSize::Off;
         Some(settings)
     }
 
@@ -956,7 +956,7 @@ mod tests {
         let mut settings = Settings::default();
         settings.model = Some("big-model".to_owned());
         settings.effort = crate::Effort::Max;
-        settings.dynamic_workflows = true;
+        settings.workflow_size = crate::workflow::WorkflowSize::Medium;
         settings.workflows = true;
         settings.active_chain_id = Some("chain".to_owned());
         settings.providers = vec![provider("main", false), provider("small", false)];
@@ -969,7 +969,7 @@ mod tests {
         assert_eq!(own.base_url.as_deref(), Some("https://example.invalid"));
         assert_eq!(own.model.as_deref(), Some("haiku"));
         assert_eq!(own.effort, crate::Effort::Low);
-        assert!(!own.workflows && !own.dynamic_workflows);
+        assert!(!own.workflows && !own.workflows_unlocked());
         assert_eq!(
             own.active_chain_id, None,
             "a guard never falls over to the chat chain"

@@ -187,9 +187,21 @@ struct Settings {
     /// Load the user's own `~/.claude/CLAUDE.md` in every project.
     load_global_claude_md: bool,
     instructions_prompt_answered: bool,
-    /// Unlocks the Super and Ultimate effort tiers (and workflows on lower levels). Off by
-    /// default because workflows can spend many times more tokens.
-    dynamic_workflows: bool,
+    /// The most subagents a whole turn may start. Anything but Off unlocks the Super and
+    /// Ultimate effort tiers (and workflows on lower levels); Off by default because workflows
+    /// can spend many times more tokens. Files from before sizes existed said
+    /// `dynamic_workflows = true` (loaded as Medium) or `false` (Off).
+    #[serde(
+        alias = "dynamic_workflows",
+        deserialize_with = "workflow::size_from_config"
+    )]
+    workflow_size: workflow::WorkflowSize,
+    /// The limit used when the size is Custom (1 to 500).
+    workflow_custom_size: usize,
+    /// The most subagents running at the same time (1 to 32).
+    workflow_at_once: usize,
+    /// The user confirmed once that sizes above 100 subagents can be very expensive.
+    large_workflows_acknowledged: bool,
     /// Run workflows on the Low, Medium and High levels too (only while workflows are unlocked).
     workflows: bool,
     /// Keep the effort name in the status line animated instead of fading it after a change.
@@ -328,7 +340,10 @@ impl Default for Settings {
             default_load_agents_md: false,
             load_global_claude_md: false,
             instructions_prompt_answered: false,
-            dynamic_workflows: false,
+            workflow_size: workflow::WorkflowSize::Off,
+            workflow_custom_size: workflow::DEFAULT_CUSTOM_SIZE,
+            workflow_at_once: workflow::DEFAULT_AT_ONCE,
+            large_workflows_acknowledged: false,
             workflows: false,
             effort_always_animated: false,
             light_mode: false,
@@ -525,9 +540,9 @@ fn run() -> Result<()> {
         Command::Effort { level } => {
             let mut settings = read_settings()?;
             if let Some(level) = level {
-                if level.is_workflow_tier() && !settings.dynamic_workflows {
+                if level.is_workflow_tier() && !settings.workflows_unlocked() {
                     println!(
-                        "{level:?} is locked. Turn on Dynamic workflows in Settings → General first."
+                        "{level:?} is locked. Choose a Dynamic workflows size in Settings → General first."
                     );
                     return Ok(());
                 }
@@ -596,6 +611,33 @@ mod tests {
         assert_eq!(current.effort, Effort::Ultimate);
         let written = toml::to_string(&old).expect("write");
         assert!(written.contains("ultimate"), "{written}");
+    }
+
+    #[test]
+    fn the_old_dynamic_workflows_switch_loads_as_a_size() {
+        use crate::workflow::WorkflowSize;
+        let on: Settings = toml::from_str("dynamic_workflows = true\n").expect("parse");
+        assert_eq!(on.workflow_size, WorkflowSize::Medium);
+        let off: Settings = toml::from_str("dynamic_workflows = false\n").expect("parse");
+        assert_eq!(off.workflow_size, WorkflowSize::Off);
+        let missing: Settings = toml::from_str("").expect("parse");
+        assert_eq!(
+            missing.workflow_size,
+            WorkflowSize::Off,
+            "locked by default"
+        );
+        assert_eq!(missing.workflow_at_once, 8);
+        assert!(!missing.large_workflows_acknowledged);
+        let written = toml::to_string(&on).expect("write");
+        assert!(written.contains("workflow_size = \"medium\""), "{written}");
+        assert!(!written.contains("dynamic_workflows"), "{written}");
+        let custom: Settings =
+            toml::from_str("workflow_size = \"custom\"\nworkflow_custom_size = 250\n")
+                .expect("parse");
+        assert_eq!(custom.workflow_size, WorkflowSize::Custom);
+        assert_eq!(custom.workflow_limit(), 250);
+        let again: Settings = toml::from_str(&toml::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(again.workflow_limit(), 250);
     }
 
     #[test]

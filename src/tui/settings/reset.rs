@@ -392,6 +392,10 @@ mod tests {
         settings.default_load_claude_md = true;
         settings.load_global_claude_md = true;
         settings.ultimate_acknowledged = true;
+        settings.workflow_size = crate::workflow::WorkflowSize::Massive;
+        settings.workflow_custom_size = 321;
+        settings.workflow_at_once = 3;
+        settings.large_workflows_acknowledged = true;
         settings.theme_prompt_answered = true;
         settings.motion_prompt_answered = true;
         settings.stats_prompt_answered = true;
@@ -566,6 +570,13 @@ mod tests {
         assert!(!settings.stats_enabled && !settings.sessions_enabled);
         assert!(!settings.default_load_claude_md && !settings.load_global_claude_md);
         assert!(!settings.ultimate_acknowledged);
+        assert_eq!(settings.workflow_size, crate::workflow::WorkflowSize::Off);
+        assert_eq!(settings.workflow_at_once, crate::workflow::DEFAULT_AT_ONCE);
+        assert_eq!(
+            settings.workflow_custom_size,
+            crate::workflow::DEFAULT_CUSTOM_SIZE
+        );
+        assert!(!settings.large_workflows_acknowledged);
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.model.as_deref(), Some("m"));
         assert!(settings.theme_prompt_answered && settings.instructions_prompt_answered);

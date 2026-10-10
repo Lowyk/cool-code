@@ -1127,7 +1127,7 @@ mod tests {
         assert!(app.notice.contains("locked"), "{}", app.notice);
         let mut unlocked = Settings::default();
         unlocked.effort = crate::Effort::Super;
-        unlocked.dynamic_workflows = true;
+        unlocked.workflow_size = crate::workflow::WorkflowSize::Medium;
         assert_eq!(App::new(unlocked).settings.effort, crate::Effort::Super);
     }
 
@@ -1137,7 +1137,7 @@ mod tests {
             let mut app = App::new(Settings::default());
             app.trust_prompt = false;
             app.settings.ultimate_acknowledged = true;
-            app.settings.dynamic_workflows = true;
+            app.settings.workflow_size = crate::workflow::WorkflowSize::Medium;
             app.input = format!("/effort {name}");
             app.submit().expect("submit");
             assert_eq!(app.settings.effort, crate::Effort::Ultimate, "{name}");
