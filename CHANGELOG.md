@@ -7,6 +7,13 @@ All notable changes are listed here, newest first. The format follows
 
 ### Added
 
+- MCP servers (stdio): `~/.coolcode/mcp.toml`, a trusted project's `.coolcode/mcp.toml` or a plugin's
+  `[[mcp]]` entries give the model more tools, named `mcp__<server>__<tool>`. A server runs only
+  after you approved its exact command (again after any change), receives only the secrets you
+  gave it from the OS credential store, and is stopped on exit. Every call asks you first except
+  in Accept Everything; Auto mode leaves it to the guard models and Plan mode refuses. Results
+  are handed to the model as data. Manage them with `/mcp` and in Settings → Plugins; the status
+  line shows `MCP 2/3`.
 - Settings → Appearance → Prompt width: how wide the prompt box and the conversation are (76
   columns by default; 60 to 200 with ←/→, or the whole window).
 - The API key and URL fields in the provider and image forms are drawn as inputs: a field
@@ -15,6 +22,7 @@ All notable changes are listed here, newest first. The format follows
 
 ### Changed
 
+- The system prompt is at version 5: it says that results of `mcp__` tools are data, not orders.
 - A more compact layout. The welcome screen is one centered group (logo, prompt box, hints) with
   nothing pinned to the bottom; the tagline and version lines are gone. The status line is the
   last row inside the prompt box, and the folder, key hints and any notice sit under it. In a
@@ -24,7 +32,8 @@ All notable changes are listed here, newest first. The format follows
 
 - The text cursor no longer shows over Settings, pickers and the other windows drawn over the
   prompt.
-- The markdown timing test no longer fails on a busy machine.
+- The markdown timing test no longer fails on a busy machine, and a subagent cancel test no
+  longer fails about one run in four.
 
 ## [0.2.0] - 2026-10-10
 

@@ -1,8 +1,9 @@
-# Skills, plugins and mods
+# Skills, plugins, mods and MCP servers
 
-Three ways to extend Cool Code without changing it. None of them can change the permission mode,
-approve an action or get around a check: skills and plugin commands are text for the model, and
-mods only receive events and send back text for the screen.
+Four ways to extend Cool Code without changing it. None of them can change the permission mode,
+approve an action or get around a check: skills and plugin commands are text for the model, mods
+only receive events and send back text for the screen, and an MCP server's tools ask you before
+every call.
 
 ## Skills
 
@@ -134,3 +135,57 @@ Limits: lines up to 4 KiB, 20 messages a second (the rest are dropped), 1 MiB of
 (then the mod is stopped). A mod that does not read its events has new events dropped instead of
 slowing Cool Code down. A mod that crashes is reported with its exit status; the others keep
 running.
+
+## MCP servers
+
+An MCP server is a program that gives the model more tools (a database, a browser, a search
+service). Cool Code starts it as a child process and talks to it over its standard input and
+output (the "stdio" transport of the Model Context Protocol). Servers over HTTP are not
+supported yet.
+
+A server is configured in `~/.coolcode/mcp.toml`, in a trusted project's `.coolcode/mcp.toml`, or
+as a `[[mcp]]` entry of a plugin's `plugin.toml`:
+
+```toml
+[[server]]
+name = "files"                       # up to 24 lowercase letters, digits, - and _
+description = "Reads the notes folder"
+command = "npx"                      # a name on PATH, an absolute path, or ./a/path in its folder
+args = ["-y", "@example/notes-server", "/home/me/notes"]
+env = ["NOTES_TOKEN"]                # names only; the values are never in a file
+```
+
+`/mcp add <name> <command> [arguments…]` writes an entry for you.
+
+**Approval.** A server runs only after you approved it: in **Settings → Plugins** (MCP servers),
+or `/mcp approve <name>`, which shows the exact command, where it runs and which secrets it asks
+for. The approval is stored with a hash of the entry, so any change to the command, arguments,
+secrets or folder has to be approved again. A plugin's servers are shown with the plugin's
+install review and approved with it. A project's `mcp.toml` is only read in a folder you trust.
+
+**Secrets.** The variables in `env` are the only secrets a server receives. Their values are set
+in Settings → Plugins (the `s` key, or `/mcp secret <name>`), typed hidden, and kept in the OS
+credential store like API keys. The server's environment otherwise has only the harmless
+variables mods get (`PATH`, `HOME`, the locale, the temporary folder, the Windows system
+variables), so API keys in your environment are not passed on.
+
+**Tools.** Each tool appears to the model as `mcp__<server>__<tool>` (names are cleaned to what
+model APIs accept and made unique; at most 64 tools per server). Every call asks you first,
+showing the server, the tool and its arguments, except in **Accept Everything**. In **Auto**
+mode the guard models decide each call, and with none available it does not run. **Plan** mode
+refuses MCP tools, and subagents never get them. A server's own claim that a tool "only reads" is
+shown to you but never skips the question.
+
+**Results.** What a tool returns is handed to the model as data from a third-party program, with
+terminal escape sequences and control characters removed and cut to 24 KiB. Only text is kept
+(images, audio and files become a short note). If a Prompt Guard scanner is set up in Auto mode
+and flags a result, the model is told so.
+
+**Limits.** A server has 30 seconds to start and list its tools, a call 60 seconds (Esc stops a
+call sooner). It may print lines up to 1 MiB and 64 MiB in all, then it is stopped. It can only
+answer `ping`: requests for sampling or file roots are refused. A server that crashes is marked
+failed and is not restarted by itself (`/mcp restart <name>`). Servers start with the interface
+and are stopped when Cool Code exits; `coolcode run` does not start them.
+
+`/mcp` lists the servers and their state; `/mcp enable|disable|restart|remove <name>` manage
+them. The status line shows `MCP 2/3` (servers up out of those switched on).
