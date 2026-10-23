@@ -152,6 +152,8 @@ pub(super) struct App {
     pub(super) notice: String,
     pub(super) running: bool,
     pub(super) launched_at: std::time::Instant,
+    /// The working folder as shown under the prompt, with the home folder written `~`.
+    pub(super) folder: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -548,12 +550,13 @@ impl App {
             notice: if auto_was_unusable {
                 AUTO_OFF_NOTICE.to_owned()
             } else if workspace_trusted {
-                "Trusted workspace · type a task or use /help for commands.".to_owned()
+                String::new()
             } else {
                 "Workspace access is paused until you trust this folder or decline.".to_owned()
             },
             running: true,
             launched_at: std::time::Instant::now(),
+            folder: crate::tui::render::folder_label(),
         }
     }
 

@@ -8,7 +8,6 @@ pub(super) const COMPACT_WIDTH: u16 = 66;
 
 const FULL_ROWS: usize = 6;
 const COMPACT_ROWS: usize = 5;
-const TAGLINE: &str = "temperature-conscious coding harness";
 
 /// How many rows the logo takes on a terminal `width` columns wide.
 pub(super) fn wordmark_height(width: u16) -> u16 {
@@ -263,46 +262,6 @@ fn compact_wordmark(elapsed: f32) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// The two lines under the logo: the tagline, with a glint sweeping through it, and a version row.
-pub(super) fn tagline_lines(elapsed: f32) -> Vec<Line<'static>> {
-    let fade = (elapsed * 1.5).clamp(0.0, 1.0);
-    let length = TAGLINE.chars().count() as f32;
-    let sweep = ((elapsed * 0.22).rem_euclid(1.6) - 0.3) * length;
-    let tagline = TAGLINE
-        .chars()
-        .enumerate()
-        .map(|(index, character)| {
-            let gap = index as f32 - sweep;
-            let base = logo_blend_color(
-                crate::tui::theme::panel_alt(),
-                crate::tui::theme::current().tagline,
-                fade,
-            );
-            let color = logo_blend_color(
-                base,
-                crate::tui::theme::current().bloom,
-                0.85 * fade * (-(gap * gap) / 10.0).exp(),
-            );
-            Span::styled(character.to_string(), Style::default().fg(color))
-        })
-        .collect::<Vec<_>>();
-    let rule = Style::default().fg(crate::tui::theme::current().rule);
-    let ice = Style::default().fg(crate::tui::theme::accent_soft());
-    let detail = Style::default().fg(logo_blend_color(
-        crate::tui::theme::current().tagline,
-        crate::tui::theme::current().rule,
-        0.3,
-    ));
-    let version = Line::from(vec![
-        Span::styled("──────  ", rule),
-        Span::styled("◆", ice),
-        Span::styled(format!("  Rust · v{}  ", env!("CARGO_PKG_VERSION")), detail),
-        Span::styled("◆", ice),
-        Span::styled("  ──────", rule),
-    ]);
-    vec![Line::from(tagline), version]
-}
-
 pub(super) fn logo_blend_color(left: Color, right: Color, amount: f32) -> Color {
     let (Color::Rgb(lr, lg, lb), Color::Rgb(rr, rg, rb)) = (left, right) else {
         return right;
@@ -326,7 +285,7 @@ pub(super) fn ice_gradient_color(position: f32) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{COMPACT_WIDTH, FULL_WIDTH, cool_code_wordmark, tagline_lines, wordmark_height};
+    use super::{COMPACT_WIDTH, FULL_WIDTH, cool_code_wordmark, wordmark_height};
     use ratatui::style::Color;
     use ratatui::text::Line;
 
@@ -470,11 +429,9 @@ mod tests {
         let cool = (first_fill(120), first_fill(COMPACT_WIDTH));
         set_current(ThemeId::Sakura);
         let sakura = (first_fill(120), first_fill(COMPACT_WIDTH));
-        let tagline = tagline_lines(5.0)[0].spans[0].style.fg;
         set_current(ThemeId::Cool);
         assert_ne!(cool.0, sakura.0, "the large logo recolors");
         assert_ne!(cool.1, sakura.1, "the compact logo recolors");
-        assert_ne!(tagline_lines(5.0)[0].spans[0].style.fg, tagline);
         let Some(Color::Rgb(r, _, b)) = sakura.0 else {
             panic!("expected RGB")
         };
@@ -488,34 +445,5 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert!(text_of(&lines).contains("COOL CODE"));
         assert!(width_of(&lines[0]) <= 30);
-    }
-
-    #[test]
-    fn the_tagline_row_names_the_harness_and_its_version() {
-        let lines = tagline_lines(5.0);
-        assert_eq!(lines.len(), 2);
-        let shown = text_of(&lines);
-        assert!(
-            shown.contains("temperature-conscious coding harness"),
-            "{shown}"
-        );
-        assert!(
-            shown.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))),
-            "{shown}"
-        );
-    }
-
-    #[test]
-    fn the_tagline_fades_in_and_shimmers() {
-        let first = |t: f32| tagline_lines(t)[0].spans[0].style.fg;
-        assert!(brightness(first(0.0)) < brightness(first(1.0)));
-        let colors = |t: f32| {
-            tagline_lines(t)[0]
-                .spans
-                .iter()
-                .map(|span| span.style.fg)
-                .collect::<Vec<_>>()
-        };
-        assert_ne!(colors(2.0), colors(4.5));
     }
 }
