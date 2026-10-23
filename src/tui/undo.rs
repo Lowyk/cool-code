@@ -49,6 +49,23 @@ pub(super) fn with_note(mut message: ChatMessage, note: &str) -> ChatMessage {
 }
 
 impl App {
+    /// The files the model changed in this session, by the name it used, each once: the turns
+    /// that can still be undone, then the turn in progress.
+    pub(in crate::tui) fn changed_files(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let all = self
+            .checkpoints
+            .iter()
+            .flat_map(|checkpoint| checkpoint.files.iter())
+            .chain(self.journal.iter());
+        for file in all {
+            if !names.contains(&file.name) {
+                names.push(file.name.clone());
+            }
+        }
+        names
+    }
+
     /// Remembers a file the model changed in the current turn. The first `before` and the latest
     /// `after` of a file are kept.
     pub(in crate::tui) fn record_file_change(
@@ -188,6 +205,19 @@ mod tests {
             Vec::new(),
         ));
         app
+    }
+
+    #[test]
+    fn the_files_changed_are_listed_once_across_turns_in_the_order_they_were_first_changed() {
+        let root = workspace();
+        let mut app = app_with_a_request("do it");
+        assert!(app.changed_files().is_empty());
+        edit(&mut app, &root, "a.rs", Some("1"), "2");
+        edit(&mut app, &root, "b.rs", Some("1"), "2");
+        app.commit_checkpoint();
+        edit(&mut app, &root, "a.rs", Some("2"), "3");
+        edit(&mut app, &root, "c.rs", None, "new");
+        assert_eq!(app.changed_files(), ["a.rs", "b.rs", "c.rs"]);
     }
 
     /// What the model's edit tools did: change `name` from `before` to `after` on disk and report it.

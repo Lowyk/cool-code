@@ -2,6 +2,7 @@ mod dialogs;
 pub(super) mod forms;
 mod history;
 mod motion;
+mod sidebar;
 
 use crate::policy::mode_label;
 use crate::tui::backdrop::{backdrop_enabled, draw_backdrop};
@@ -232,13 +233,23 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             area,
         );
     }
-    let available = area.width.saturating_sub(2);
+    // A conversation may have the sidebar beside it; everything else is laid out in the rest.
+    let sidebar_width = if sidebar::shown(app, area.width) {
+        sidebar::WIDTH
+    } else {
+        0
+    };
+    let main = Rect {
+        width: area.width - sidebar_width,
+        ..area
+    };
+    let available = main.width.saturating_sub(2);
     let columns = if app.transcript.is_empty() {
         app.settings.prompt_columns(available)
     } else {
         app.settings.chat_columns(available)
     };
-    let prompt_height = input_prompt_height(&app.input, area, columns);
+    let prompt_height = input_prompt_height(&app.input, main, columns);
     let (logo_area, history_area, prompt_area, hint_area) = if app.transcript.is_empty() {
         // One group in the middle of the window: the logo, the prompt box and its hints.
         let layout = Layout::default()
@@ -251,7 +262,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
                 Constraint::Length(HINT_ROWS),
                 Constraint::Fill(1),
             ])
-            .split(area);
+            .split(main);
         (
             layout[1],
             Rect::default(),
@@ -267,7 +278,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
                 Constraint::Length(prompt_height),
                 Constraint::Length(HINT_ROWS),
             ])
-            .split(area);
+            .split(main);
         (
             Rect::default(),
             column(layout[1], columns),
@@ -310,6 +321,13 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
 
     if !app.transcript.is_empty() {
         history::draw_history(frame, history_area, app);
+    }
+    if sidebar_width > 0 {
+        sidebar::draw_sidebar(
+            frame,
+            Rect::new(main.right(), area.y, sidebar_width, area.height),
+            app,
+        );
     }
 
     let prompt_block = Block::default()
@@ -1484,5 +1502,105 @@ mod layout_tests {
         let rows = self::rows(&drawn(&app, 120, 30));
         let line = &rows[row_of(&rows, "no model selected") + 2];
         assert!(line.contains("K  Ctrl+P commands"), "{line:?}");
+    }
+    #[test]
+    fn the_sidebar_shows_only_when_on_wide_enough_and_in_a_conversation() {
+        let conversation = |sidebar: bool, width: u16| {
+            let mut app = app(|s| s.sidebar = sidebar);
+            say(&mut app, TranscriptKind::User, "fix the build please");
+            say(&mut app, TranscriptKind::Assistant, "On it.");
+            let buffer = drawn(&app, width, 30);
+            let rows = rows(&buffer);
+            // The sidebar names the model too, so take the last row that does: the box's.
+            let status = rows
+                .iter()
+                .rposition(|row| row.contains("no model selected"))
+                .unwrap();
+            (rows.join("\n"), box_cells(&buffer, status))
+        };
+        let (off, box_off) = conversation(false, 200);
+        assert!(!off.contains("Context"), "{off}");
+        assert_eq!(box_off, 198);
+        let (on, box_on) = conversation(true, 200);
+        assert!(on.contains("Context"), "{on}");
+        assert_eq!(
+            box_on,
+            200 - 32 - 2,
+            "the box leaves the sidebar its columns"
+        );
+        let (narrow, box_narrow) = conversation(true, 100);
+        assert!(!narrow.contains("Context"), "too narrow for it: {narrow}");
+        assert_eq!(box_narrow, 98);
+        let mut welcome = app(|s| s.sidebar = true);
+        welcome.transcript.clear();
+        let shown = rows(&drawn(&welcome, 200, 30)).join("\n");
+        assert!(!shown.contains("Context"), "not on the welcome screen");
+    }
+
+    #[test]
+    fn the_sidebar_tells_the_session_the_context_the_mode_and_the_files_changed() {
+        let mut app = app(|s| {
+            s.sidebar = true;
+            s.permission_mode = "manual".to_owned();
+        });
+        app.folder = "~/work/app".to_owned();
+        say(&mut app, TranscriptKind::User, "fix the build please");
+        say(&mut app, TranscriptKind::Assistant, "On it.");
+        let text = "a".repeat(40_000);
+        app.messages
+            .push(crate::provider::ChatMessage::user_with_images(
+                text.clone(),
+                text,
+                Vec::new(),
+            ));
+        app.record_file_change(
+            std::path::PathBuf::from("/work/app/src/lib.rs"),
+            "src/lib.rs".to_owned(),
+            None,
+            crate::agent::FileContent::Text("x".to_owned()),
+        );
+        let buffer = drawn(&app, 160, 30);
+        let rows = rows(&buffer);
+        let side = |row: &String| row.chars().skip(160 - 32).collect::<String>();
+        let column = rows.iter().map(side).collect::<Vec<_>>().join("\n");
+        for expected in [
+            "fix the build please",
+            "Context",
+            "tokens",
+            "Manual",
+            "Files changed",
+            "src/lib.rs",
+        ] {
+            assert!(column.contains(expected), "{expected}:\n{column}");
+        }
+        assert!(
+            side(rows.last().unwrap()).contains("~/work/app"),
+            "the folder is the last line: {:?}",
+            rows.last()
+        );
+        assert_ne!(
+            buffer[(160 - 10, 3)].bg,
+            crate::tui::theme::input(),
+            "its own background"
+        );
+    }
+
+    #[test]
+    fn a_custom_title_replaces_the_first_prompt_and_long_text_is_cut() {
+        let mut app = app(|s| s.sidebar = true);
+        say(
+            &mut app,
+            TranscriptKind::User,
+            &"very long request ".repeat(20),
+        );
+        let shown = rows(&drawn(&app, 160, 30)).join("\n");
+        assert!(shown.contains("very long request"), "{shown}");
+        app.custom_title = Some("Release prep".to_owned());
+        let shown = rows(&drawn(&app, 160, 30)).join("\n");
+        assert!(shown.contains("Release prep"), "{shown}");
+        // Tiny windows never panic.
+        for (w, h) in [(110, 3), (111, 1), (200, 2)] {
+            let _ = drawn(&app, w, h);
+        }
     }
 }
