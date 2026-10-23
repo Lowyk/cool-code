@@ -810,7 +810,8 @@ mod tests {
             app
         };
         assert!(cursor_is_shown(&fresh()), "the prompt shows it");
-        let covers: [(&str, fn(&mut App)); 6] = [
+        type Open = fn(&mut App);
+        let covers: [(&str, Open); 6] = [
             ("settings", |app| {
                 app.open_settings(crate::tui::settings::Section::General)
             }),
