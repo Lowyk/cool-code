@@ -24,6 +24,13 @@ pub(crate) fn auto_approve_file_change(permission_mode: &str) -> bool {
     )
 }
 
+/// Whether a mode lets the model call a tool of an MCP server without asking. Only Accept
+/// Everything does: the program behind a tool is not Cool Code's own, and its description of
+/// what a tool does is its own claim. Auto mode leaves each call to the guard models.
+pub(crate) fn auto_approve_mcp(permission_mode: &str) -> bool {
+    permission_mode == "accept-everything"
+}
+
 pub(crate) fn auto_approve_command(permission_mode: &str, command: &str) -> bool {
     if permission_mode == "accept-everything" {
         return true;
