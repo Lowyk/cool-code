@@ -55,25 +55,45 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
                     Rect::new(inner.x, y, inner.width, 1),
                 );
                 y = y.saturating_add(1);
-                let placeholder_shown = value.is_empty() && !masked;
-                let visible = if masked {
+                // A visible input box: its own background, a caret while selected, and a dim hint
+                // while empty, so an empty field is never mistaken for plain text.
+                let shown = if masked {
                     "•".repeat(value.chars().count().min(42))
-                } else if value.is_empty() {
-                    if placeholder.is_empty() {
-                        "(empty)".to_owned()
-                    } else {
-                        placeholder.to_owned()
-                    }
                 } else {
                     value.to_owned()
                 };
-                let color = if placeholder_shown {
-                    Color::DarkGray
+                let mut spans = Vec::new();
+                if selected {
+                    spans.push(Span::styled(
+                        "▏",
+                        Style::default().fg(crate::tui::theme::accent()),
+                    ));
+                }
+                if value.is_empty() {
+                    let hint = if placeholder.is_empty() {
+                        "(empty)"
+                    } else {
+                        placeholder
+                    };
+                    spans.push(Span::styled(
+                        hint.to_owned(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 } else {
-                    Color::Rgb(185, 195, 205)
-                };
+                    spans.push(Span::styled(
+                        shown,
+                        Style::default().fg(Color::Rgb(185, 195, 205)),
+                    ));
+                    if selected {
+                        spans.push(Span::styled(
+                            "▏",
+                            Style::default().fg(crate::tui::theme::accent()),
+                        ));
+                    }
+                }
                 frame.render_widget(
-                    Paragraph::new(visible).style(Style::default().fg(color)),
+                    Paragraph::new(Line::from(spans))
+                        .style(Style::default().bg(crate::tui::theme::input())),
                     Rect::new(inner.x + 3, y, inner.width.saturating_sub(3), 1),
                 );
                 y = y.saturating_add(2);
@@ -87,7 +107,13 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
             false,
         );
         if preset.custom {
-            render_field("Base URL", &form.base_url, "", form.focus == 1, false);
+            render_field(
+                "Base URL",
+                &form.base_url,
+                "https://api.example.com/v1",
+                form.focus == 1,
+                false,
+            );
         }
         let key_label = match (form.existing_id.is_some(), preset.key_prefix) {
             _ if preset.key_optional => "API Key · optional, local servers need none".to_owned(),
@@ -100,7 +126,20 @@ pub(in crate::tui) fn draw_open_form(frame: &mut ratatui::Frame<'_>, inner: Rect
             }
             (false, None) => "API Key · kept in OS credential store".to_owned(),
         };
-        render_field(&key_label, &form.api_key, "", form.focus == key_focus, true);
+        let key_hint = if preset.key_optional {
+            "optional · leave empty for a local server"
+        } else if form.existing_id.is_some() {
+            "•••••••• saved · type to replace"
+        } else {
+            "paste your API key here"
+        };
+        render_field(
+            &key_label,
+            &form.api_key,
+            key_hint,
+            form.focus == key_focus,
+            true,
+        );
         if has_endpoint_fields(form) {
             render_field(
                 "Models endpoint · optional",

@@ -1375,6 +1375,69 @@ mod tests {
         assert!(!rendered.contains("super-secret-value"));
     }
 
+    /// The settings screen with a provider form for `preset`, drawn as text.
+    fn form_screen(preset_id: &str, existing: bool, api_key: &str, focus: usize) -> String {
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.open_settings(Section::Providers);
+        app.provider_form = Some(ProviderDraft {
+            choosing_preset: false,
+            existing_id: existing.then(|| "saved".to_owned()),
+            preset: preset_index(preset_id),
+            alias: String::new(),
+            suggested_alias: "My provider".to_owned(),
+            base_url: String::new(),
+            api_key: api_key.to_owned(),
+            models: Vec::new(),
+            models_endpoint: String::new(),
+            limits_endpoint: String::new(),
+            managed_models: false,
+            focus,
+        });
+        terminal.draw(|frame| draw(frame, &app, 0)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_empty_api_key_field_says_where_to_paste_the_key() {
+        let screen = form_screen("openai-custom", false, "", 2);
+        assert!(screen.contains("paste your API key here"), "{screen}");
+        let typed = form_screen("openai-custom", false, "sk-secret", 2);
+        assert!(!typed.contains("paste your API key here"), "{typed}");
+        assert!(!typed.contains("sk-secret"), "{typed}");
+    }
+
+    #[test]
+    fn a_custom_provider_shows_an_example_base_url() {
+        let screen = form_screen("openai-custom", false, "", 1);
+        assert!(screen.contains("https://api.example.com/v1"), "{screen}");
+    }
+
+    #[test]
+    fn a_saved_key_says_typing_replaces_it() {
+        let screen = form_screen("openai-custom", true, "", 2);
+        assert!(screen.contains("saved · type to replace"), "{screen}");
+        assert!(!screen.contains("paste your API key here"), "{screen}");
+    }
+
+    #[test]
+    fn the_selected_field_shows_a_caret_and_the_others_do_not() {
+        let selected = form_screen("openai-custom", false, "", 2);
+        assert_eq!(selected.matches('▏').count(), 1, "{selected}");
+        let typed = form_screen("openai-custom", false, "abc", 2);
+        assert!(typed.contains("•••▏"), "{typed}");
+    }
+
     #[test]
     fn the_new_presets_point_at_their_documented_endpoints() {
         let preset = |id: &str| &PROVIDER_PRESETS[preset_index(id)];
