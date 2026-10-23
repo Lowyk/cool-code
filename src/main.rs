@@ -173,6 +173,10 @@ struct Settings {
     dim_backdrop_in_chat: bool,
     /// Columns of the prompt box and the conversation; 0 uses the whole window.
     prompt_width: u16,
+    /// Columns of the prompt box and the text in a conversation; 0 uses the whole window.
+    chat_width: u16,
+    /// Show the sidebar (session, context, files changed) beside a conversation.
+    sidebar: bool,
     pulse: PulseMode,
     motion_prompt_answered: bool,
     max_tool_rounds: usize,
@@ -354,6 +358,8 @@ impl Default for Settings {
             backdrop_in_chat: false,
             dim_backdrop_in_chat: true,
             prompt_width: 76,
+            chat_width: 0,
+            sidebar: false,
             pulse: PulseMode::Words,
             motion_prompt_answered: false,
             max_tool_rounds: 40,

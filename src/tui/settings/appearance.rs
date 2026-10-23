@@ -16,13 +16,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 /// One row per theme, then light mode, the three backdrop switches and the effort-name switch.
-pub(super) const ROWS: usize = THEMES.len() + 6;
+pub(super) const ROWS: usize = THEMES.len() + 8;
 const LIGHT_MODE: usize = THEMES.len();
 const WELCOME_BACKDROP: usize = THEMES.len() + 1;
 const CHAT_BACKDROP: usize = THEMES.len() + 2;
 const DIM_IN_CHAT: usize = THEMES.len() + 3;
 const ANIMATE_EFFORT: usize = THEMES.len() + 4;
 const PROMPT_WIDTH: usize = THEMES.len() + 5;
+const CHAT_WIDTH: usize = THEMES.len() + 6;
+const SIDEBAR: usize = THEMES.len() + 7;
 /// The usual widths Enter cycles through; 0 is the whole window.
 const WIDTH_CHOICES: [u16; 5] = [76, 100, 120, 160, 0];
 const WIDTH_STEP: u16 = 4;
@@ -201,18 +203,25 @@ fn option_lines(
     lines.push(Line::from(preview));
     lines.push(Line::from(""));
     lines.push(heading("Layout"));
-    lines.push(Line::from(vec![
-        marker(PROMPT_WIDTH),
-        Span::raw("  "),
-        Span::styled(format!("{:<21}", "Prompt width"), label_style(PROMPT_WIDTH)),
-        Span::styled(
-            match settings.prompt_width {
-                0 => "whole window".to_owned(),
-                width => format!("{width} columns"),
-            },
-            Style::default().fg(Color::Rgb(185, 195, 205)),
-        ),
-    ]));
+    let width_text = |width: u16| match width {
+        0 => "whole window".to_owned(),
+        width => format!("{width} columns"),
+    };
+    for (row, label, width) in [
+        (PROMPT_WIDTH, "Welcome prompt width", settings.prompt_width),
+        (CHAT_WIDTH, "Chat width", settings.chat_width),
+    ] {
+        lines.push(Line::from(vec![
+            marker(row),
+            Span::raw("  "),
+            Span::styled(format!("{label:<21}"), label_style(row)),
+            Span::styled(
+                width_text(width),
+                Style::default().fg(Color::Rgb(185, 195, 205)),
+            ),
+        ]));
+    }
+    lines.push(toggle(SIDEBAR, "Sidebar", settings.sidebar));
     lines
 }
 
@@ -286,7 +295,20 @@ fn draw_preview(
             .to_owned(),
         ),
         PROMPT_WIDTH => {
-            draw_width_preview(frame, area, settings.prompt_width);
+            draw_width_preview(
+                frame,
+                area,
+                settings.prompt_width,
+                "The welcome screen's prompt",
+            );
+            return;
+        }
+        CHAT_WIDTH => {
+            draw_width_preview(frame, area, settings.chat_width, "The conversation");
+            return;
+        }
+        SIDEBAR => {
+            draw_sidebar_preview(frame, area, settings.sidebar);
             return;
         }
         _ => {
@@ -423,7 +445,7 @@ fn draw_sample(
 }
 
 /// A bar as wide as the prompt would be, next to a bar for the widest setting.
-fn draw_width_preview(frame: &mut ratatui::Frame<'_>, area: Rect, width: u16) {
+fn draw_width_preview(frame: &mut ratatui::Frame<'_>, area: Rect, width: u16, what: &str) {
     let room = area.width.saturating_sub(2).max(1);
     let share =
         |columns: u16| ((u32::from(columns) * u32::from(room)) / u32::from(WIDTH_MAX)) as usize;
@@ -438,9 +460,9 @@ fn draw_width_preview(frame: &mut ratatui::Frame<'_>, area: Rect, width: u16) {
     let lines = vec![
         Line::from(Span::styled(
             if width == 0 {
-                "The prompt and the conversation use the whole width of the window.".to_owned()
+                format!("{what} uses the whole width of the window.")
             } else {
-                format!("The prompt and the conversation are {width} columns wide.")
+                format!("{what} is {width} columns wide.")
             },
             Style::default().fg(Color::Gray),
         )),
@@ -451,6 +473,43 @@ fn draw_width_preview(frame: &mut ratatui::Frame<'_>, area: Rect, width: u16) {
             "your width, against a 200-column window",
             Style::default().fg(Color::DarkGray),
         )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Preview ")
+                .border_style(Style::default().fg(theme::accent())),
+        ),
+        Rect {
+            height: area.height.min(9),
+            ..area
+        },
+    );
+}
+
+/// What the sidebar is, in words, next to a small drawing of where it sits.
+fn draw_sidebar_preview(frame: &mut ratatui::Frame<'_>, area: Rect, on: bool) {
+    let dim = Style::default().fg(Color::DarkGray);
+    let lines = vec![
+        Line::from(Span::styled(
+            if on {
+                "A column on the right of a conversation shows the session title, the context used, the mode and model, the files changed and the MCP servers. Ctrl+B hides it."
+            } else {
+                "The conversation uses the whole window. Ctrl+B shows a column with the session title, the context used, the files changed and the MCP servers."
+            },
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            if on {
+                "┃ conversation         │ session ┃"
+            } else {
+                "┃ conversation                   ┃"
+            },
+            dim,
+        )),
+        Line::from(Span::styled("(needs a window 110 columns wide)", dim)),
     ];
     frame.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: true }).block(
@@ -505,7 +564,7 @@ fn draw_effort_preview(frame: &mut ratatui::Frame<'_>, area: Rect, animated: boo
 
 /// Whether ←/→ change this row's value instead of leaving the section.
 pub(super) fn row_uses_arrows(row: usize) -> bool {
-    row == PROMPT_WIDTH
+    row == PROMPT_WIDTH || row == CHAT_WIDTH
 }
 
 /// One step wider or narrower: 60 to 200 columns, then the whole window (0) beyond the top.
@@ -527,17 +586,24 @@ impl App {
         match key.code {
             KeyCode::Up => view.row = view.row.saturating_sub(1),
             KeyCode::Down => view.row = (view.row + 1).min(ROWS - 1),
-            KeyCode::Left | KeyCode::Right if view.row == PROMPT_WIDTH => {
+            KeyCode::Left | KeyCode::Right if row_uses_arrows(view.row) => {
                 let wider = key.code == KeyCode::Right;
-                self.settings.prompt_width = step_width(self.settings.prompt_width, wider);
+                let field = if view.row == PROMPT_WIDTH {
+                    &mut self.settings.prompt_width
+                } else {
+                    &mut self.settings.chat_width
+                };
+                *field = step_width(*field, wider);
                 write_settings(&self.settings)?;
             }
-            KeyCode::Enter | KeyCode::Char(' ') if view.row == PROMPT_WIDTH => {
-                let at = WIDTH_CHOICES
-                    .iter()
-                    .position(|width| *width == self.settings.prompt_width);
-                self.settings.prompt_width =
-                    WIDTH_CHOICES[at.map_or(0, |at| (at + 1) % WIDTH_CHOICES.len())];
+            KeyCode::Enter | KeyCode::Char(' ') if row_uses_arrows(view.row) => {
+                let field = if view.row == PROMPT_WIDTH {
+                    &mut self.settings.prompt_width
+                } else {
+                    &mut self.settings.chat_width
+                };
+                let at = WIDTH_CHOICES.iter().position(|width| width == field);
+                *field = WIDTH_CHOICES[at.map_or(0, |at| (at + 1) % WIDTH_CHOICES.len())];
                 write_settings(&self.settings)?;
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -552,6 +618,7 @@ impl App {
                     DIM_IN_CHAT => {
                         settings.dim_backdrop_in_chat = !settings.dim_backdrop_in_chat;
                     }
+                    SIDEBAR => settings.sidebar = !settings.sidebar,
                     _ => settings.effort_always_animated = !settings.effort_always_animated,
                 }
                 write_settings(&self.settings)?;
@@ -565,8 +632,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANIMATE_EFFORT, CHAT_BACKDROP, LIGHT_MODE, PROMPT_WIDTH, ROWS, WELCOME_BACKDROP,
-        effort_preview,
+        ANIMATE_EFFORT, CHAT_BACKDROP, CHAT_WIDTH, LIGHT_MODE, PROMPT_WIDTH, ROWS, SIDEBAR,
+        WELCOME_BACKDROP, effort_preview,
     };
     use crate::tui::render::draw;
     use crate::tui::settings::Section;
@@ -624,7 +691,9 @@ mod tests {
             ("While chatting", CHAT_BACKDROP),
             ("Dim while chatting", super::DIM_IN_CHAT),
             ("Animate effort name", ANIMATE_EFFORT),
-            ("Prompt width", PROMPT_WIDTH),
+            ("Welcome prompt width", PROMPT_WIDTH),
+            ("Chat width", CHAT_WIDTH),
+            ("Sidebar", SIDEBAR),
             (crate::tui::theme::THEMES[2].name, 2),
         ] {
             click_text(&mut app, label);
@@ -669,6 +738,54 @@ mod tests {
         assert!(shown.contains("76 columns wide"), "{shown}");
         app.settings.prompt_width = 0;
         assert!(text(&frame(&app)).contains("whole width"));
+    }
+
+    #[test]
+    fn the_chat_width_row_defaults_to_the_whole_window_and_steps_like_the_welcome_one() {
+        let mut app = app();
+        assert_eq!(app.settings.chat_width, 0);
+        down(&mut app, CHAT_WIDTH);
+        assert!(text(&frame(&app)).contains("whole window"));
+        press(&mut app, KeyCode::Left);
+        assert_eq!(
+            app.settings.chat_width, 200,
+            "← from the whole window is 200"
+        );
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.settings.chat_width, 196);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.settings.chat_width, 200);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.settings.chat_width, 0);
+        assert_eq!(
+            app.settings.prompt_width, 76,
+            "the welcome width is its own setting"
+        );
+        assert!(
+            text(&frame(&app)).contains("conversation"),
+            "{}",
+            text(&frame(&app))
+        );
+    }
+
+    #[test]
+    fn the_sidebar_row_is_off_by_default_and_switches_with_enter() {
+        let mut app = app();
+        assert!(!app.settings.sidebar);
+        down(&mut app, SIDEBAR);
+        assert!(
+            text(&frame(&app)).contains("Sidebar"),
+            "{}",
+            text(&frame(&app))
+        );
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings.sidebar);
+        assert!(
+            !app.settings.effort_always_animated,
+            "the row is not the effort switch"
+        );
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app.settings.sidebar);
     }
 
     #[test]
