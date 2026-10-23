@@ -370,6 +370,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.history_scroll = app.history_scroll.saturating_sub(3)
             }
+            KeyCode::Char('b') if control => app.toggle_sidebar()?,
+            KeyCode::Char('p') if control => app.open_palette(),
             KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.insert_input(character.encode_utf8(&mut [0; 4]));
             }
@@ -582,6 +584,36 @@ mod tests {
         super::handle_batch(&mut app, &typed("x\ny")).unwrap();
         assert_eq!(app.input, "a\nx\nyb");
         assert!(app.transcript.is_empty());
+    }
+
+    #[test]
+    fn ctrl_b_shows_and_hides_the_sidebar_and_remembers_it() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        assert!(!app.settings.sidebar);
+        handle_key(&mut app, with(KeyCode::Char('b'), KeyModifiers::CONTROL)).unwrap();
+        assert!(app.settings.sidebar);
+        assert!(crate::read_settings().expect("saved").sidebar, "remembered");
+        assert!(app.notice.contains("Sidebar on"), "{}", app.notice);
+        assert!(app.input.is_empty(), "the key is not typed");
+        handle_key(&mut app, with(KeyCode::Char('b'), KeyModifiers::CONTROL)).unwrap();
+        assert!(!app.settings.sidebar);
+        assert!(!crate::read_settings().expect("saved").sidebar);
+        assert!(app.notice.contains("Sidebar off"), "{}", app.notice);
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_command_list_in_an_empty_prompt_only() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        handle_key(&mut app, with(KeyCode::Char('p'), KeyModifiers::CONTROL)).unwrap();
+        assert_eq!(app.input, "/");
+        assert!(app.slash.is_open(), "the list of commands is showing");
+        // With text typed it leaves the text alone and says why.
+        app.set_input("fix the");
+        handle_key(&mut app, with(KeyCode::Char('p'), KeyModifiers::CONTROL)).unwrap();
+        assert_eq!(app.input, "fix the");
+        assert!(app.notice.contains("empty prompt"), "{}", app.notice);
     }
 
     #[test]

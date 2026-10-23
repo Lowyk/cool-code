@@ -152,6 +152,8 @@ pub(super) struct App {
     pub(super) notice: String,
     pub(super) running: bool,
     pub(super) launched_at: std::time::Instant,
+    /// A name the user gave the session with `/rename`.
+    pub(super) custom_title: Option<String>,
     /// The working folder as shown under the prompt, with the home folder written `~`.
     pub(super) folder: String,
 }
@@ -567,6 +569,7 @@ impl App {
             },
             running: true,
             launched_at: std::time::Instant::now(),
+            custom_title: None,
             folder: crate::tui::render::folder_label(),
         }
     }
@@ -614,6 +617,54 @@ impl App {
             tokens
         };
         Some(used)
+    }
+
+    /// Shows or hides the sidebar (Ctrl+B) and remembers the choice.
+    pub(super) fn toggle_sidebar(&mut self) -> Result<()> {
+        self.settings.sidebar = !self.settings.sidebar;
+        write_settings(&self.settings)?;
+        self.notice = if self.settings.sidebar {
+            "Sidebar on (it needs a window 110 columns wide)."
+        } else {
+            "Sidebar off."
+        }
+        .to_owned();
+        Ok(())
+    }
+
+    /// Ctrl+P: opens the list of commands, by typing the `/` that starts one.
+    pub(super) fn open_palette(&mut self) {
+        if self.input.is_empty() {
+            self.set_input("/");
+        } else {
+            self.notice = "Ctrl+P opens the commands in an empty prompt.".to_owned();
+        }
+    }
+
+    /// The size of the conversation and the model's window, when it is known.
+    pub(super) fn context_figures(&self) -> Option<(u64, Option<u64>)> {
+        Some((
+            self.context_used()?,
+            crate::context::window_tokens(&self.settings),
+        ))
+    }
+
+    /// The session's name: the one the user chose, else the first thing they asked.
+    pub(super) fn session_title(&self) -> String {
+        if let Some(title) = self.custom_title.as_ref().filter(|title| !title.is_empty()) {
+            return title.clone();
+        }
+        let first = self
+            .transcript
+            .iter()
+            .find(|entry| entry.kind == TranscriptKind::User)
+            .map_or("", |entry| entry.text.as_str());
+        let flat = first.split_whitespace().collect::<Vec<_>>().join(" ");
+        if flat.is_empty() {
+            "New session".to_owned()
+        } else {
+            flat
+        }
     }
 
     /// The context as the bottom line shows it (`8.0K (4%)`), and how urgent it is (0 to 2).
