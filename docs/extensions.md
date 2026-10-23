@@ -83,6 +83,17 @@ staging folder. An installed plugin is never overwritten: remove it first.
 `/plugin list` shows what is installed and `/plugin remove <name>` deletes it. **Settings >
 Plugins** switches plugins off and on and removes them.
 
+### Updating a plugin
+
+`/plugin update <name>` fetches the plugin again from where it was installed from (Cool Code remembers
+the Git address or folder; for a plugin installed before that, give one: `/plugin update <name>
+<source>`). The source must hold a plugin of the same name. The review shows the version change,
+what changed in the commands, mods and MCP servers (new, changed or removed, each with its full
+command line), and everything the new version has. Until you press **y** the installed version
+is not touched; on **y** its folder is set aside, the new one moved in (and the old one moved
+back if that fails), the mods and servers you were shown are approved, and the approvals and secrets of those
+the update dropped are forgotten.
+
 ## Mods
 
 A mod is a program that watches Cool Code. It comes with a plugin or lives in

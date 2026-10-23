@@ -77,8 +77,8 @@ pub(in crate::tui) const COMMANDS: &[BuiltIn] = &[
     ),
     command(
         "plugin",
-        "[install <git-url or path>|list|remove <name>]",
-        "Install, list or remove plugins",
+        "[install <git-url or path>|update <name>|list|remove <name>]",
+        "Install, update, list or remove plugins",
     ),
     command(
         "mcp",

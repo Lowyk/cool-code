@@ -82,6 +82,7 @@ pub(in crate::tui) fn reset_preferences(settings: &Settings) -> Settings {
         disabled_plugins: settings.disabled_plugins.clone(),
         approved_mods: settings.approved_mods.clone(),
         disabled_mods: settings.disabled_mods.clone(),
+        plugin_sources: settings.plugin_sources.clone(),
         approved_mcp: settings.approved_mcp.clone(),
         disabled_mcp: settings.disabled_mcp.clone(),
         active_provider_id: settings.active_provider_id.clone(),
