@@ -529,7 +529,13 @@ mod tests {
             &[key_press(KeyCode::Enter), key_press(KeyCode::Up)],
         )
         .unwrap();
-        assert!(app.input.is_empty());
+        let sent = app
+            .transcript
+            .iter()
+            .filter(|entry| entry.text == "/help")
+            .count();
+        assert_eq!(sent, 2, "both Enters sent the command");
+        assert_eq!(app.input, "/help", "and the arrow then recalled it");
     }
 
     #[test]
