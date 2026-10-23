@@ -5,6 +5,27 @@ All notable changes are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Settings → Appearance → Prompt width: how wide the prompt box and the conversation are (76
+  columns by default; 60 to 200 with ←/→, or the whole window).
+- The API key and URL fields in the provider and image forms are drawn as inputs: a field
+  background, a caret on the selected one, and a hint while empty ("paste your API key here",
+  "••••••• saved · type to replace", an example base URL for custom providers).
+
+### Changed
+
+- A more compact layout. The welcome screen is one centered group (logo, prompt box, hints) with
+  nothing pinned to the bottom; the tagline and version lines are gone. The status line is the
+  last row inside the prompt box, and the folder, key hints and any notice sit under it. In a
+  conversation the box and the text share the same width.
+
+### Fixed
+
+- The text cursor no longer shows over Settings, pickers and the other windows drawn over the
+  prompt.
+- The markdown timing test no longer fails on a busy machine.
+
 ## [0.2.0] - 2026-10-10
 
 Cool Code 0.2 extends the harness in three areas: larger and better-controlled workflows, an

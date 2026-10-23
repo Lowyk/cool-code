@@ -204,7 +204,7 @@ Every question (trusting a folder, the privacy check, the Ultimate and large-wor
 
 ## Appearance
 
-Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, Mint, Autumn, Retro (CRT), Synthwave), each with a colour set and an animated backdrop, plus a light mode, options for the backdrop on the welcome screen and while chatting, and for animating the effort name. Next to the options is a live preview of the highlighted one: a theme is shown in its own colours with its backdrop before you pick it, and the effort names under "Animate effort name" move only while it is on. Light mode works with every theme: it keeps each theme's colours but draws them light. `NO_COLOR` turns the backdrop off. The browser page shown after a sign-in looks like a Windows 10 console window in your theme's colours.
+Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, Mint, Autumn, Retro (CRT), Synthwave), each with a colour set and an animated backdrop, plus a light mode, options for the backdrop on the welcome screen and while chatting, for animating the effort name, and the prompt width (76 columns by default, 60 to 200, or the whole window; the prompt box and the conversation share it). Next to the options is a live preview of the highlighted one: a theme is shown in its own colours with its backdrop before you pick it, and the effort names under "Animate effort name" move only while it is on. Light mode works with every theme: it keeps each theme's colours but draws them light. `NO_COLOR` turns the backdrop off. The browser page shown after a sign-in looks like a Windows 10 console window in your theme's colours.
 
 ## Principles
 
