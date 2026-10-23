@@ -18,6 +18,7 @@ mod mouse;
 mod pickers;
 mod plugin_install;
 mod present;
+mod prompt_history;
 mod render;
 mod series;
 pub(crate) mod sessions;
@@ -343,6 +344,8 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
             KeyCode::Up if slash && !control => app.slash_move(-1),
             KeyCode::Down if slash && !control => app.slash_move(1),
+            KeyCode::Up if app.history_open() && !control => app.history_up(),
+            KeyCode::Down if app.history_open() && !control => app.history_down(),
             KeyCode::Tab if slash => app.accept_slash(),
             KeyCode::Esc if slash => app.dismiss_slash(),
             KeyCode::Enter
@@ -600,6 +603,25 @@ mod tests {
         assert!(!app.settings.sidebar);
         assert!(!crate::read_settings().expect("saved").sidebar);
         assert!(app.notice.contains("Sidebar off"), "{}", app.notice);
+    }
+
+    #[test]
+    fn the_arrow_keys_recall_earlier_prompts_only_in_an_empty_prompt() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.set_input("/help");
+        app.submit().unwrap();
+        assert_eq!(app.input, "");
+        handle_key(&mut app, key_press(KeyCode::Up)).unwrap();
+        assert_eq!(app.input, "/help");
+        handle_key(&mut app, key_press(KeyCode::Down)).unwrap();
+        assert_eq!(app.input, "");
+        app.set_input("draft text");
+        handle_key(&mut app, key_press(KeyCode::Up)).unwrap();
+        assert_eq!(
+            app.input, "draft text",
+            "a prompt being typed is left alone"
+        );
     }
 
     #[test]

@@ -75,6 +75,7 @@ impl App {
             return Ok(());
         }
         self.set_input(String::new());
+        self.remember_prompt(&value);
         // Skills and plugin commands send a message of their own, so they are not echoed here.
         if value.starts_with('/') && self.run_extension_command(&value)? {
             return Ok(());
