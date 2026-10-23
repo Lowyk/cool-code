@@ -708,15 +708,22 @@ mod tests {
         let paragraph =
             "Some **bold** words, `code`, and a [link](https://example.com).\n\n".repeat(30);
         let text = format!("{paragraph}```rust\nfn main() {{}}\n```\n");
-        let start = std::time::Instant::now();
-        for _ in 0..200 {
-            std::hint::black_box(render(&text));
-        }
-        let each = start.elapsed() / 200;
+        // The fastest of several batches: a busy machine slows some batches, but a real slowdown
+        // of the renderer slows all of them.
+        let best = (0..5)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                for _ in 0..40 {
+                    std::hint::black_box(render(&text));
+                }
+                start.elapsed() / 40
+            })
+            .min()
+            .expect("batches");
         // 200 answers of this size (about 2 KB each) must cost far less than a frame (40 ms).
         assert!(
-            each * 200 < std::time::Duration::from_secs(1),
-            "{each:?} per answer"
+            best * 200 < std::time::Duration::from_secs(1),
+            "{best:?} per answer"
         );
     }
 }
