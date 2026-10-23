@@ -2064,8 +2064,8 @@ mod tests {
                 None => call(
                     "spawn_subagents",
                     serde_json::json!({"tasks": [
-                        {"kind": "explore", "instructions": "waiting", "name": "queued one"},
                         {"kind": "explore", "instructions": "working", "name": "busy one"},
+                        {"kind": "explore", "instructions": "waiting", "name": "queued one"},
                         {"kind": "explore", "instructions": "kept", "name": "kept one"}
                     ]}),
                 ),
@@ -2073,7 +2073,8 @@ mod tests {
             }
         })
         .slow(std::time::Duration::from_millis(20));
-        // The first is cancelled while it waits; the second once it has started its work.
+        // The first runs and is cancelled once it has started its work; the second is cancelled
+        // while it waits behind it (with one place, it cannot start before the first is done).
         let (result, log) = run_tracked(&model, &one_at_a_time, &root, |event, names| {
             let name_of = |id: &usize| {
                 names
@@ -2094,7 +2095,7 @@ mod tests {
         assert!(log.contains(&"1 finished Cancelled".to_owned()), "{log:#?}");
         assert!(log.contains(&"2 finished Done".to_owned()), "{log:#?}");
         assert!(
-            !log.contains(&"0 started".to_owned()),
+            !log.contains(&"1 started".to_owned()),
             "a cancelled subagent that was still waiting never starts: {log:#?}"
         );
         assert_eq!(
