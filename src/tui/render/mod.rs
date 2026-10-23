@@ -1196,6 +1196,7 @@ mod layout_tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
 
     fn app(setup: impl FnOnce(&mut Settings)) -> App {
         let mut settings = Settings::default();
@@ -1602,5 +1603,26 @@ mod layout_tests {
         for (w, h) in [(110, 3), (111, 1), (200, 2)] {
             let _ = drawn(&app, w, h);
         }
+    }
+    #[test]
+    fn a_tool_that_ran_is_one_dim_line_without_the_word_tool() {
+        let mut app = app(|_| {});
+        say(&mut app, TranscriptKind::User, "look around");
+        say(
+            &mut app,
+            TranscriptKind::CommandOutput,
+            "Tool · read_file · 3 lines",
+        );
+        say(&mut app, TranscriptKind::CommandOutput, "Settings opened.");
+        let buffer = drawn(&app, 100, 30);
+        let rows = rows(&buffer);
+        let at = row_of(&rows, "read_file");
+        assert!(rows[at].contains("▸ read_file · 3 lines"), "{}", rows[at]);
+        assert!(!rows[at].contains("Tool"), "{}", rows[at]);
+        let x = rows[at].find("read_file").unwrap();
+        let column = rows[at][..x].chars().count() as u16;
+        assert_eq!(buffer[(column, at as u16)].fg, Color::DarkGray, "dim");
+        // Other command output keeps its look.
+        assert!(rows[row_of(&rows, "Settings opened.")].contains("   Settings opened."));
     }
 }

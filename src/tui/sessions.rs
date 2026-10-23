@@ -548,6 +548,22 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_session_is_saved_and_listed_under_its_new_name_and_resumes_with_it() {
+        let mut app = app();
+        talk(&mut app, "refactor the parser", "done");
+        app.rename_command("Parser work");
+        app.save_session();
+        let listed = session::list_in(&app.session_dir, None);
+        assert_eq!(listed[0].title, "Parser work");
+        let id = app.session_id.clone();
+        // A new conversation starts unnamed again; resuming brings the name back.
+        app.begin_new_session();
+        assert_eq!(app.custom_title, None);
+        app.resume_session(&id);
+        assert_eq!(app.session_title(), "Parser work");
+    }
+
+    #[test]
     fn a_conversation_is_saved_with_a_title_and_prompt_count() {
         let mut app = app();
         app.transcript.push(TranscriptEntry {

@@ -83,7 +83,8 @@ The system prompt has three separately labeled sources: an immutable, versioned-
 | `src/tui/present.rs` | Puts each frame on the terminal: synchronized update, cursor hidden only while cells are written, nothing written for an unchanged frame |
 | `src/tui/stats_view.rs` | The `/stats` full-screen view: overview, models tab, range selection, and clearing history |
 | `src/tui/sessions.rs` | Saving the live conversation, resuming a saved one, and the `/resume` picker |
-| `src/tui/render/` | Frame drawing: `mod.rs` (layout, input, streaming text and status line), `forms.rs`, `dialogs.rs` (the trust, privacy and Ultimate dialogs and the mode and provider pickers), `motion.rs` (text pulse and reduced-motion prompt) |
+| `src/tui/render/` | Frame drawing: `mod.rs` (layout, input box, the bottom line), `history.rs` (the conversation: tinted user blocks, answers with footers, measured and drawn entry by entry), `sidebar.rs`, `forms.rs`, `dialogs.rs` (the trust, privacy and Ultimate dialogs and the mode and provider pickers), `motion.rs` (text pulse and reduced-motion prompt) |
+| `src/tui/prompt_history.rs`, `clipboard.rs`, `conversation_tools.rs` | Earlier prompts for ↑/↓ (saved only with Save sessions), `/copy` (system tool or OSC 52), and `/export`, `/retry` and `/rename` |
 | `src/tui/effort.rs` | Effort slider rendering and animation |
 | `src/tui/wordmark.rs` | Welcome wordmark and gradient |
 | `src/tui/backdrop.rs` | The animated backdrop: one kind per theme (snow, stars with a nebula, plain stars, petals, bubbles, leaves, CRT noise, synthwave sun and grid), always drawn first and only into empty cells |
