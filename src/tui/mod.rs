@@ -330,16 +330,18 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
     } else if app.settings_view.is_some() {
         app.handle_settings_view_key(key)?;
     } else {
+        // Only a press of Esc or Ctrl+C right after the last one counts as the second.
+        if !matches!(key.code, KeyCode::Esc)
+            && !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+        {
+            app.exit_armed = None;
+        }
         if let Some(edit) = editing::edit_key(key) {
             app.edit_input(edit);
             app.refresh_popups();
             return Ok(());
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        // Only a press of Esc or Ctrl+C right after the last one counts as the second.
-        if !matches!(key.code, KeyCode::Esc) && !(control && key.code == KeyCode::Char('c')) {
-            app.exit_armed = None;
-        }
         let slash = app.slash.is_open() && app.mention.is_none();
         match key.code {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.open_tracker(),
