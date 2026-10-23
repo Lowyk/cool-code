@@ -156,6 +156,8 @@ pub(super) struct App {
     pub(super) launched_at: std::time::Instant,
     /// What the last Esc or Ctrl+C asked for and when; a second press soon after does it.
     pub(super) exit_armed: Option<(ExitAsk, std::time::Instant)>,
+    /// An escape sequence that asks the terminal to copy text, waiting to be written (`/copy`).
+    pub(super) clipboard_escape: Option<String>,
     /// A name the user gave the session with `/rename`.
     pub(super) custom_title: Option<String>,
     /// The working folder as shown under the prompt, with the home folder written `~`.
@@ -575,6 +577,7 @@ impl App {
             running: true,
             launched_at: std::time::Instant::now(),
             custom_title: None,
+            clipboard_escape: None,
             exit_armed: None,
             folder: crate::tui::render::folder_label(),
         }
