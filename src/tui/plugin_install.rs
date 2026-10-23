@@ -43,8 +43,10 @@ impl App {
             "" | "list" if rest.is_empty() => Ok(self.plugin_list()),
             "install" => Ok(self.start_plugin_install(rest)),
             "remove" if !rest.is_empty() => {
+                let secrets = self.plugin_secrets(rest);
                 Ok(match plugins::remove(&self.extensions.dirs, rest) {
                     Ok(()) => {
+                        crate::tui::mcp::delete_secrets(&secrets);
                         self.forget_plugin(rest);
                         write_settings(&self.settings)?;
                         format!("Removed the plugin {rest}.")
@@ -209,6 +211,10 @@ impl App {
             .disabled_mods
             .retain(|id| !id.starts_with(&prefix));
         crate::extensions::mcp::forget_plugin(&mut self.settings, name);
+        crate::extensions::mcp_hub::hub().stop_prefix(&prefix);
+        self.extensions
+            .mcp_started
+            .retain(|id, _| !id.starts_with(&prefix));
         for id in self.extensions.mods.running_ids() {
             if id.starts_with(&prefix) {
                 self.extensions.mods.stop(&id);
@@ -470,11 +476,16 @@ env = ["TOKEN"]
         wait_for_review(&mut app);
         press(&mut app, KeyCode::Char('y'));
         app.settings.disabled_plugins.push("reviewer".to_owned());
+        crate::extensions::mcp::store_variable("reviewer/files", "TOKEN", "s3cret").unwrap();
         let said = run(&mut app, "/plugin remove reviewer");
         assert!(said.contains("Removed"), "{said}");
         assert!(!home.join(".coolcode/plugins/reviewer").exists());
         assert!(app.settings.approved_mods.is_empty());
         assert!(app.settings.approved_mcp.is_empty());
+        assert!(
+            !crate::extensions::mcp::has_variable("reviewer/files", "TOKEN"),
+            "a removed plugin's secrets are deleted too"
+        );
         assert!(app.settings.disabled_plugins.is_empty());
         assert!(!app.slash_catalog().iter().any(|item| item.name == "review"));
     }

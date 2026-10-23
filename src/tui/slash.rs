@@ -80,6 +80,11 @@ pub(in crate::tui) const COMMANDS: &[BuiltIn] = &[
         "[install <git-url or path>|list|remove <name>]",
         "Install, list or remove plugins",
     ),
+    command(
+        "mcp",
+        "[add <name> <command>|approve|enable|disable|restart|secret|remove <name>]",
+        "List and manage MCP servers",
+    ),
     command("resume", "[all]", "Continue a saved session"),
     command("clear", "", "Start a new conversation"),
     command("quit", "", "Save the session and exit (also /exit)"),
@@ -540,6 +545,7 @@ mod tests {
             "clear",
             "quit",
             "plugin",
+            "mcp",
         ] {
             assert!(seen.contains(expected), "{expected} is missing");
         }

@@ -495,6 +495,17 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
+    if let Some((text, degraded)) = app.mcp_status() {
+        status_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        status_spans.push(Span::styled(
+            text,
+            Style::default().fg(if degraded {
+                Color::Rgb(255, 197, 92)
+            } else {
+                Color::DarkGray
+            }),
+        ));
+    }
     // Each running mod's own status text, already cleaned and cut short.
     for text in app.extensions.mods.statuses().into_iter().take(3) {
         status_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));

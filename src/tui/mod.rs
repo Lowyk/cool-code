@@ -11,6 +11,7 @@ mod extensions;
 mod forms;
 mod image_setup;
 mod markdown;
+mod mcp;
 mod mentions;
 pub(crate) mod models;
 mod mouse;

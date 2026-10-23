@@ -29,6 +29,8 @@ pub(in crate::tui) struct Extensions {
     pub(in crate::tui) mods: crate::extensions::mod_host::ModHost,
     /// Mods run only once the interface itself is running, never in an `App` built for a test.
     pub(in crate::tui) mods_active: bool,
+    /// The MCP servers started, each with the hash of the entry it was started from.
+    pub(in crate::tui) mcp_started: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Extensions {
@@ -39,6 +41,7 @@ impl Default for Extensions {
             install: None,
             mods: Default::default(),
             mods_active: false,
+            mcp_started: Default::default(),
         }
     }
 }
@@ -175,6 +178,7 @@ impl App {
     pub(in crate::tui) fn stop_mods(&mut self) {
         self.extensions.mods_active = false;
         self.extensions.mods.stop_all();
+        self.stop_mcp();
     }
 
     /// Makes the running mods match the approved, switched-on ones: stops the others, restarts
@@ -183,6 +187,7 @@ impl App {
         if !self.extensions.mods_active {
             return;
         }
+        self.sync_mcp();
         let (found, _) = mods::discover(&self.extensions.dirs, &self.settings);
         let wanted = found
             .into_iter()

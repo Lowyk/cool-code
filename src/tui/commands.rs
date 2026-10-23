@@ -322,6 +322,14 @@ impl App {
             self.finish_command(output);
             return Ok(());
         }
+        if let Some(arguments) = value
+            .strip_prefix("/mcp")
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            let output = self.mcp_command(arguments.trim())?;
+            self.finish_command(output);
+            return Ok(());
+        }
         if value == "/undo" {
             let message = self.undo_last();
             self.finish_command(message.clone());
