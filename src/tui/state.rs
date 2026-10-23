@@ -790,6 +790,13 @@ impl App {
         Ok(())
     }
 
+    /// Shift+Tab: the next permission mode (never Accept Everything, see [`crate::policy`]).
+    pub(super) fn cycle_mode(&mut self) -> Result<()> {
+        let next =
+            crate::policy::next_mode(&self.settings.permission_mode, self.settings.auto_ready());
+        self.apply_mode(next)
+    }
+
     pub(super) fn apply_mode(&mut self, mode: &str) -> Result<()> {
         if mode == "auto" && !self.settings.auto_ready() {
             self.notice = ACTIVATE_NOTICE.to_owned();
