@@ -24,8 +24,7 @@ pub(in crate::tui) enum Install {
     },
 }
 
-const USAGE: &str =
-    "Usage: /plugin install <git-url or folder> | /plugin list | /plugin remove <name>";
+const USAGE: &str = "Usage: /plugin install <git-url or folder> | /plugin update <name> [git-url or folder] | /plugin list | /plugin remove <name>";
 
 impl App {
     /// Whether the install review has the keyboard.
@@ -42,6 +41,7 @@ impl App {
         match word {
             "" | "list" if rest.is_empty() => Ok(self.plugin_list()),
             "install" => Ok(self.start_plugin_install(rest)),
+            "update" if !rest.is_empty() => Ok(self.start_plugin_update(rest)),
             "remove" if !rest.is_empty() => {
                 let secrets = self.plugin_secrets(rest);
                 Ok(match plugins::remove(&self.extensions.dirs, rest) {
@@ -69,15 +69,20 @@ impl App {
         for plugin in &installed {
             let manifest = &plugin.manifest;
             text.push_str(&format!(
-                "\n  {} {} ({}): {} · {} skill folder(s), {} command(s), {} mod(s)",
+                "\n  {} {} ({}): {} · {} skill folder(s), {} command(s), {} mod(s), {} MCP server(s)",
                 manifest.name,
                 manifest.version,
                 if plugin.enabled { "on" } else { "off" },
                 manifest.description,
                 manifest.skills.len(),
                 manifest.commands.len(),
-                manifest.mods.len()
+                manifest.mods.len(),
+                manifest.mcp.len()
             ));
+            match self.settings.plugin_sources.get(&manifest.name) {
+                Some(source) => text.push_str(&format!("\n    from {source}")),
+                None => text.push_str("\n    source unknown: give one with /plugin update"),
+            }
         }
         for warning in warnings {
             text.push_str(&format!("\n  Skipped {warning}"));
@@ -108,6 +113,52 @@ impl App {
         format!("Fetching {source}. You will be asked before anything is installed.")
     }
 
+    /// `/plugin update <name> [source]`: fetches the new version and shows what changed.
+    fn start_plugin_update(&mut self, arguments: &str) -> String {
+        let (name, given) = match arguments.split_once(char::is_whitespace) {
+            Some((name, given)) => (name, given.trim()),
+            None => (arguments, ""),
+        };
+        if !crate::extensions::valid_name(name) {
+            return format!("{name:?} is not a plugin name.");
+        }
+        if self.extensions.install.is_some() {
+            return "Another plugin install is still waiting; answer it first.".to_owned();
+        }
+        let (installed, _) = plugins::installed(&self.extensions.dirs, &self.settings);
+        if !installed.iter().any(|plugin| plugin.manifest.name == name) {
+            return format!("No plugin named {name} is installed.");
+        }
+        let source = if given.is_empty() {
+            match self.settings.plugin_sources.get(name) {
+                Some(source) => source.clone(),
+                None => {
+                    return format!(
+                        "Cool Code does not know where {name} came from. Say where its new version is: /plugin update {name} <git-url or folder>."
+                    );
+                }
+            }
+        } else {
+            given.to_owned()
+        };
+        let parsed = match plugins::parse_source(&source) {
+            Ok(parsed) => parsed,
+            Err(error) => return format!("Could not update the plugin: {error:#}"),
+        };
+        let dirs = self.extensions.dirs.clone();
+        let wanted = name.to_owned();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(
+                plugins::stage_update(&dirs, &parsed, &wanted)
+                    .map_err(|error| format!("{error:#}")),
+            );
+        });
+        self.extensions.install = Some(Install::Fetching(receiver));
+        self.notice = "Fetching the new version…".to_owned();
+        format!("Fetching {source}. You will be asked before anything is changed.")
+    }
+
     /// Picks up a finished fetch.
     pub(in crate::tui) fn poll_plugin_install(&mut self) {
         let Some(Install::Fetching(receiver)) = self.extensions.install.as_ref() else {
@@ -122,19 +173,23 @@ impl App {
         };
         match fetched {
             Ok(staged) => {
+                let updating = staged.replaces.is_some();
                 let lines = staged.review(&crate::tui::extensions::built_in);
                 self.extensions.install = Some(Install::Review {
                     staged: Box::new(staged),
                     lines,
                     scroll: 0,
                 });
-                self.notice =
+                self.notice = if updating {
+                    "Read what changed, then press y to update the plugin or n to cancel."
+                } else {
                     "Read what the plugin adds, then press y to install it or n to cancel."
-                        .to_owned();
+                }
+                .to_owned();
             }
             Err(error) => {
                 self.extensions.install = None;
-                self.notice = format!("Could not install the plugin: {error}");
+                self.notice = format!("Could not install or update the plugin: {error}");
                 self.finish_command(self.notice.clone());
             }
         }
@@ -153,7 +208,7 @@ impl App {
                 if let Some(Install::Review { staged, .. }) = self.extensions.install.take() {
                     staged.discard();
                 }
-                self.notice = "Nothing was installed.".to_owned();
+                self.notice = "Nothing was installed or changed.".to_owned();
             }
             KeyCode::Char('y' | 'Y') => {
                 if let Some(Install::Review { staged, .. }) = self.extensions.install.take() {
@@ -165,22 +220,85 @@ impl App {
         Ok(())
     }
 
-    /// Keeps a plugin the user said yes to, and approves the mods they were shown.
+    /// Keeps a plugin (new or updated) the user said yes to, approves the mods and MCP servers
+    /// they were shown, and forgets what an update no longer has.
     fn install_reviewed(&mut self, staged: Staged) -> Result<()> {
         let name = staged.manifest.name.clone();
+        let version = staged.manifest.version.clone();
         let mods = staged.mods();
         let servers = staged.mcp_servers();
+        let source = staged.source.clone();
+        let replaced = staged.replaces.clone();
         let summary = format!(
-            "Installed {name}: {} skill(s), {} command(s), {} mod(s), {} MCP server(s).",
+            "{} {name}{}: {} skill(s), {} command(s), {} mod(s), {} MCP server(s).",
+            if replaced.is_some() {
+                "Updated"
+            } else {
+                "Installed"
+            },
+            if replaced.is_some() {
+                format!(" to {version}")
+            } else {
+                String::new()
+            },
             staged.skills.len(),
             staged.manifest.commands.len(),
             mods.len(),
             servers.len()
         );
+        let keeps_mod = |entry: &str| staged.manifest.mods.iter().any(|kept| kept.name == entry);
+        let kept_variables = |server: &str| {
+            staged
+                .manifest
+                .mcp
+                .iter()
+                .find(|kept| kept.name == server)
+                .map(|kept| kept.env.clone())
+        };
+        // What an update drops, worked out before the files change.
+        let dropped_mods = replaced
+            .iter()
+            .flat_map(|old| old.mods.iter())
+            .filter(|old| !keeps_mod(&old.name))
+            .map(|old| format!("{name}/{}", old.name))
+            .collect::<Vec<_>>();
+        let dropped_secrets = replaced
+            .iter()
+            .flat_map(|old| old.mcp.iter())
+            .flat_map(|old| {
+                let kept = kept_variables(&old.name);
+                let id = format!("{name}/{}", old.name);
+                let dropped_server = kept.is_none();
+                old.env
+                    .iter()
+                    .filter(move |variable| {
+                        dropped_server || !kept.as_ref().is_some_and(|env| env.contains(variable))
+                    })
+                    .map(move |variable| (id.clone(), variable.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let dropped_servers = replaced
+            .iter()
+            .flat_map(|old| old.mcp.iter())
+            .filter(|old| kept_variables(&old.name).is_none())
+            .map(|old| format!("{name}/{}", old.name))
+            .collect::<Vec<_>>();
         if let Err(error) = staged.install() {
-            self.notice = format!("Could not install the plugin: {error:#}");
+            self.notice = format!("Could not install or update the plugin: {error:#}");
             return Ok(());
         }
+        for id in &dropped_mods {
+            self.settings.approved_mods.remove(id);
+            self.settings.disabled_mods.retain(|other| other != id);
+            self.extensions.mods.stop(id);
+        }
+        for id in &dropped_servers {
+            crate::extensions::mcp::forget(&mut self.settings, id);
+            crate::extensions::mcp_hub::hub().stop(id);
+            self.extensions.mcp_started.remove(id);
+        }
+        crate::tui::mcp::delete_secrets(&dropped_secrets);
         for info in &mods {
             crate::extensions::mods::approve(&mut self.settings, info);
         }
@@ -190,6 +308,7 @@ impl App {
         self.settings
             .disabled_plugins
             .retain(|plugin| *plugin != name);
+        self.settings.plugin_sources.insert(name, source);
         write_settings(&self.settings)?;
         self.forget_extension_items();
         self.sync_mods();
@@ -204,6 +323,7 @@ impl App {
         self.settings
             .disabled_plugins
             .retain(|plugin| plugin != name);
+        self.settings.plugin_sources.remove(name);
         self.settings
             .approved_mods
             .retain(|id, _| !id.starts_with(&prefix));
@@ -226,14 +346,31 @@ impl App {
 
 /// The review of a plugin before it is installed.
 pub(in crate::tui) fn draw_plugin_review(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let Some(Install::Review { lines, scroll, .. }) = app.extensions.install.as_ref() else {
+    let Some(Install::Review {
+        lines,
+        scroll,
+        staged,
+    }) = app.extensions.install.as_ref()
+    else {
         return;
     };
+    let updating = staged.replaces.is_some();
     let popup = centered_rect(80, 80, area);
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" Install this plugin? ")
-        .title_bottom(Line::from(" y install · n cancel · ↑/↓ scroll ").right_aligned())
+        .title(if updating {
+            " Update this plugin? "
+        } else {
+            " Install this plugin? "
+        })
+        .title_bottom(
+            Line::from(if updating {
+                " y update · n cancel · ↑/↓ scroll "
+            } else {
+                " y install · n cancel · ↑/↓ scroll "
+            })
+            .right_aligned(),
+        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Rgb(255, 197, 92)))
         .style(Style::default().bg(crate::tui::theme::dialog()));
@@ -465,6 +602,194 @@ env = ["TOKEN"]
         );
     }
 
+    /// Installs the standard plugin and returns the folder it came from.
+    fn installed_plugin(app: &mut App) -> PathBuf {
+        let source = plugin_source();
+        run(app, &format!("/plugin install {}", source.display()));
+        wait_for_review(app);
+        press(app, KeyCode::Char('y'));
+        source
+    }
+
+    /// Edits the source plugin: version 1.3.0, a different mod command, no MCP server.
+    fn new_version(source: &Path) {
+        let manifest = source.join("plugin.toml");
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("version = \"1.2.0\"", "version = \"1.3.0\"")
+            .replace("--every\", \"5 s\"", "--every\", \"1 s\"");
+        let text = text.split("[[mcp]]").next().unwrap().to_owned();
+        std::fs::write(&manifest, text).unwrap();
+    }
+
+    fn installed_version(home: &Path) -> String {
+        crate::extensions::plugins::read_manifest(&home.join(".coolcode/plugins/reviewer"))
+            .unwrap()
+            .version
+    }
+
+    #[test]
+    fn an_install_records_where_the_plugin_came_from() {
+        let home = temp("home");
+        let mut app = app_in(&home);
+        let source = installed_plugin(&mut app);
+        assert_eq!(
+            app.settings.plugin_sources.get("reviewer"),
+            Some(&source.display().to_string())
+        );
+        assert!(run(&mut app, "/plugin list").contains(&source.display().to_string()));
+    }
+
+    #[test]
+    fn an_update_shows_what_changed_and_changes_nothing_until_y() {
+        let home = temp("home");
+        let mut app = app_in(&home);
+        let source = installed_plugin(&mut app);
+        let old_hash = app
+            .settings
+            .approved_mods
+            .get("reviewer/status")
+            .cloned()
+            .unwrap();
+        new_version(&source);
+        let said = run(&mut app, "/plugin update reviewer");
+        assert!(said.contains("asked before"), "{said}");
+        wait_for_review(&mut app);
+        let shown = screen(&app);
+        for expected in [
+            "Update this plugin?",
+            "update 1.2.0 → 1.3.0",
+            "changed mod status",
+            "removed MCP server files",
+        ] {
+            assert!(shown.contains(expected), "{expected}:\n{shown}");
+        }
+        assert_eq!(installed_version(&home), "1.2.0", "nothing changed yet");
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(installed_version(&home), "1.2.0");
+        assert_eq!(app.settings.approved_mods["reviewer/status"], old_hash);
+        assert!(
+            app.notice.contains("Nothing was installed"),
+            "{}",
+            app.notice
+        );
+        // Saying yes swaps it, approves what was shown and forgets what is gone.
+        run(&mut app, "/plugin update reviewer");
+        wait_for_review(&mut app);
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(installed_version(&home), "1.3.0");
+        assert!(app.notice.contains("Updated reviewer"), "{}", app.notice);
+        let (mods, _) = crate::extensions::mods::discover(&app.extensions.dirs, &app.settings);
+        assert!(crate::extensions::mods::should_run(&app.settings, &mods[0]));
+        assert_ne!(app.settings.approved_mods["reviewer/status"], old_hash);
+        assert!(
+            app.settings.approved_mcp.is_empty(),
+            "the removed server's approval is gone"
+        );
+    }
+
+    #[test]
+    fn an_updated_plugin_that_drops_an_mcp_server_loses_its_secrets() {
+        let home = temp("home");
+        let mut app = app_in(&home);
+        let source = installed_plugin(&mut app);
+        crate::extensions::mcp::store_variable("reviewer/files", "TOKEN", "s3cret").unwrap();
+        new_version(&source);
+        run(&mut app, "/plugin update reviewer");
+        wait_for_review(&mut app);
+        press(&mut app, KeyCode::Char('y'));
+        assert!(!crate::extensions::mcp::has_variable(
+            "reviewer/files",
+            "TOKEN"
+        ));
+    }
+
+    #[test]
+    fn an_update_that_drops_a_mod_forgets_its_approval_and_stops_it() {
+        let home = temp("home");
+        let mut app = app_in(&home);
+        let source = installed_plugin(&mut app);
+        app.settings
+            .disabled_mods
+            .push("reviewer/status".to_owned());
+        assert!(app.settings.approved_mods.contains_key("reviewer/status"));
+        let manifest = source.join("plugin.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        let (before, rest) = text.split_once("[[mods]]").unwrap();
+        let after = rest.split_once("[[mcp]]").unwrap().1;
+        std::fs::write(&manifest, format!("{before}[[mcp]]{after}")).unwrap();
+        run(&mut app, "/plugin update reviewer");
+        wait_for_review(&mut app);
+        assert!(
+            screen(&app).contains("removed mod status"),
+            "{}",
+            screen(&app)
+        );
+        press(&mut app, KeyCode::Char('y'));
+        assert!(!app.settings.approved_mods.contains_key("reviewer/status"));
+        assert!(app.settings.disabled_mods.is_empty());
+        assert!(
+            app.settings.approved_mcp.contains_key("reviewer/files"),
+            "what stays is approved"
+        );
+    }
+
+    #[test]
+    fn an_update_without_a_known_source_asks_for_one_and_then_remembers_it() {
+        let home = temp("home");
+        let mut app = app_in(&home);
+        let source = installed_plugin(&mut app);
+        app.settings.plugin_sources.clear();
+        new_version(&source);
+        let said = run(&mut app, "/plugin update reviewer");
+        assert!(
+            said.contains("does not know where reviewer came from"),
+            "{said}"
+        );
+        assert!(app.extensions.install.is_none());
+        run(
+            &mut app,
+            &format!("/plugin update reviewer {}", source.display()),
+        );
+        wait_for_review(&mut app);
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(installed_version(&home), "1.3.0");
+        assert_eq!(
+            app.settings.plugin_sources.get("reviewer"),
+            Some(&source.display().to_string())
+        );
+    }
+
+    #[test]
+    fn an_update_from_the_wrong_plugin_or_for_a_missing_one_is_refused() {
+        let home = temp("home");
+        let mut app = app_in(&home);
+        let said = run(&mut app, "/plugin update reviewer");
+        assert!(
+            said.contains("No plugin named reviewer is installed"),
+            "{said}"
+        );
+        assert!(run(&mut app, "/plugin update ../x").contains("not a plugin name"));
+        installed_plugin(&mut app);
+        let other = plugin_source();
+        let text = std::fs::read_to_string(other.join("plugin.toml"))
+            .unwrap()
+            .replace("name = \"reviewer\"", "name = \"impostor\"");
+        std::fs::write(other.join("plugin.toml"), text).unwrap();
+        run(
+            &mut app,
+            &format!("/plugin update reviewer {}", other.display()),
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while app.extensions.install.is_some() {
+            assert!(Instant::now() < deadline);
+            app.poll_response();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.notice.contains("not reviewer"), "{}", app.notice);
+        assert_eq!(installed_version(&home), "1.2.0");
+    }
+
     #[test]
     fn removing_a_plugin_deletes_it_and_forgets_its_approvals() {
         let home = temp("home");
@@ -482,6 +807,7 @@ env = ["TOKEN"]
         assert!(!home.join(".coolcode/plugins/reviewer").exists());
         assert!(app.settings.approved_mods.is_empty());
         assert!(app.settings.approved_mcp.is_empty());
+        assert!(app.settings.plugin_sources.is_empty());
         assert!(
             !crate::extensions::mcp::has_variable("reviewer/files", "TOKEN"),
             "a removed plugin's secrets are deleted too"

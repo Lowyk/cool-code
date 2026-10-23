@@ -239,6 +239,9 @@ struct Settings {
     /// Approved mods the user switched off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     disabled_mods: Vec<String>,
+    /// Where each installed plugin came from (a Git address or a folder), for `/plugin update`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    plugin_sources: std::collections::BTreeMap<String, String>,
     /// MCP servers the user approved, each with the hash of the entry that was shown.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     approved_mcp: std::collections::BTreeMap<String, String>,
@@ -381,6 +384,7 @@ impl Default for Settings {
             disabled_plugins: Vec::new(),
             approved_mods: std::collections::BTreeMap::new(),
             disabled_mods: Vec::new(),
+            plugin_sources: std::collections::BTreeMap::new(),
             approved_mcp: std::collections::BTreeMap::new(),
             disabled_mcp: Vec::new(),
             effort: Effort::High,

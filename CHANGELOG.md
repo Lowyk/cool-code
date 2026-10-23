@@ -7,6 +7,10 @@ All notable changes are listed here, newest first. The format follows
 
 ### Added
 
+- `/plugin update <name> [git-url or folder]` updates an installed plugin from where it came
+  from. The review lists what changed in its commands, mods and MCP servers and nothing changes
+  until you confirm; a failed swap puts the old version back, and the approvals and secrets of
+  anything the update drops are forgotten. `/plugin list` shows each plugin's source.
 - MCP servers (stdio): `~/.coolcode/mcp.toml`, a trusted project's `.coolcode/mcp.toml` or a plugin's
   `[[mcp]]` entries give the model more tools, named `mcp__<server>__<tool>`. A server runs only
   after you approved its exact command (again after any change), receives only the secrets you

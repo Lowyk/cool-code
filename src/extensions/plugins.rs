@@ -332,11 +332,23 @@ pub(crate) struct Staged {
     /// What the user typed.
     pub(crate) source: String,
     pub(crate) skills: Vec<Skill>,
+    /// The installed version this one replaces, for an update.
+    pub(crate) replaces: Option<Manifest>,
 }
 
 /// Fetches a plugin into a staging folder under `~/.coolcode/plugins` and checks it. Nothing
 /// from it runs here.
 pub(crate) fn stage(dirs: &Dirs, source: &Source) -> Result<Staged> {
+    stage_for(dirs, source, None)
+}
+
+/// Fetches a new version of the installed plugin `name`. It checks that the source holds a
+/// plugin of that name; the installed one is not touched until the update is confirmed.
+pub(crate) fn stage_update(dirs: &Dirs, source: &Source, name: &str) -> Result<Staged> {
+    stage_for(dirs, source, Some(name))
+}
+
+fn stage_for(dirs: &Dirs, source: &Source, updating: Option<&str>) -> Result<Staged> {
     let plugins = plugins_dir(dirs).context("could not find the home folder")?;
     std::fs::create_dir_all(&plugins).with_context(|| format!("creating {}", plugins.display()))?;
     let plugins = plugins
@@ -346,16 +358,37 @@ pub(crate) fn stage(dirs: &Dirs, source: &Source) -> Result<Staged> {
     let checked = fetch(source, &staging).and_then(|()| {
         let manifest = read_manifest(&staging)?;
         let target = plugins.join(&manifest.name);
-        if std::fs::symlink_metadata(&target).is_ok() {
-            bail!(
-                "a plugin named {} is already installed; remove it first with /plugin remove {}",
-                manifest.name,
-                manifest.name
-            );
-        }
-        Ok((manifest, target))
+        let installed = std::fs::symlink_metadata(&target).is_ok();
+        let replaces = match updating {
+            Some(name) => {
+                if manifest.name != name {
+                    bail!(
+                        "the source holds a plugin named {}, not {name}",
+                        manifest.name
+                    );
+                }
+                if !installed {
+                    bail!("the plugin {name} is not installed");
+                }
+                Some(read_manifest(&target).with_context(|| {
+                    format!("reading the installed plugin {name}")
+                })?)
+            }
+            None => {
+                if installed {
+                    bail!(
+                        "a plugin named {} is already installed; update it with /plugin update {}, or remove it first with /plugin remove {}",
+                        manifest.name,
+                        manifest.name,
+                        manifest.name
+                    );
+                }
+                None
+            }
+        };
+        Ok((manifest, target, replaces))
     });
-    let (manifest, target) = match checked {
+    let (manifest, target, replaces) = match checked {
         Ok(checked) => checked,
         Err(error) => {
             let _ = std::fs::remove_dir_all(&staging);
@@ -387,6 +420,7 @@ pub(crate) fn stage(dirs: &Dirs, source: &Source) -> Result<Staged> {
             Source::Local(path) => path.display().to_string(),
         },
         skills,
+        replaces,
     })
 }
 
@@ -492,18 +526,112 @@ fn copy_tree(from: &Path, to: &Path, budget: &mut (usize, u64)) -> Result<()> {
     Ok(())
 }
 
+/// What an update changes in the parts that run or send something: commands, mods and MCP
+/// servers, by name.
+fn changes(old: &Manifest, new: &Manifest) -> Vec<String> {
+    fn compare<T: PartialEq>(
+        kind: &str,
+        old: &[T],
+        new: &[T],
+        name: impl Fn(&T) -> &str,
+        shown: impl Fn(&T) -> String,
+        lines: &mut Vec<String>,
+    ) {
+        for entry in new {
+            match old.iter().find(|earlier| name(earlier) == name(entry)) {
+                None => lines.push(format!("  new {kind} {}: {}", name(entry), shown(entry))),
+                Some(earlier) if earlier != entry => lines.push(format!(
+                    "  changed {kind} {}: {} (before: {})",
+                    name(entry),
+                    shown(entry),
+                    shown(earlier)
+                )),
+                Some(_) => {}
+            }
+        }
+        for earlier in old {
+            if !new.iter().any(|entry| name(entry) == name(earlier)) {
+                lines.push(format!("  removed {kind} {}", name(earlier)));
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    compare(
+        "command",
+        &old.commands,
+        &new.commands,
+        |entry| &entry.name,
+        |entry| {
+            format!(
+                "sends {:?}",
+                entry.prompt.lines().next().unwrap_or_default()
+            )
+        },
+        &mut lines,
+    );
+    compare(
+        "mod",
+        &old.mods,
+        &new.mods,
+        |entry| &entry.name,
+        |entry| {
+            format!(
+                "runs {} for {}",
+                entry.command_line(),
+                entry.events.join(", ")
+            )
+        },
+        &mut lines,
+    );
+    compare(
+        "MCP server",
+        &old.mcp,
+        &new.mcp,
+        |entry| &entry.name,
+        |entry| {
+            format!(
+                "runs {} with secrets {}",
+                entry.command_line(),
+                if entry.env.is_empty() {
+                    "none".to_owned()
+                } else {
+                    entry.env.join(", ")
+                }
+            )
+        },
+        &mut lines,
+    );
+    if lines.is_empty() {
+        lines.push("  No commands, mods or MCP servers changed.".to_owned());
+    }
+    lines
+}
+
 impl Staged {
     /// Everything the plugin adds, as lines for the confirmation. `built_in` says which command
     /// names are taken.
     pub(crate) fn review(&self, built_in: &dyn Fn(&str) -> bool) -> Vec<String> {
         let manifest = &self.manifest;
-        let mut lines = vec![
-            format!("{} {}", manifest.name, manifest.version),
+        let mut lines = vec![match &self.replaces {
+            Some(old) => format!(
+                "{}: update {} → {}",
+                manifest.name, old.version, manifest.version
+            ),
+            None => format!("{} {}", manifest.name, manifest.version),
+        }];
+        lines.extend([
             manifest.description.clone(),
             format!("From: {}", self.source),
             format!("Installs to: {}", self.target.display()),
             String::new(),
-        ];
+        ]);
+        if let Some(old) = &self.replaces {
+            lines.push("Changes since the installed version:".to_owned());
+            lines.extend(changes(old, manifest));
+            lines.push(String::new());
+            lines.push("The whole new version, which is what you approve:".to_owned());
+            lines.push(String::new());
+        }
         lines.push(format!("Skills ({}):", self.skills.len()));
         for skill in &self.skills {
             lines.push(format!("  {}: {}", skill.name, skill.description));
@@ -569,11 +697,37 @@ impl Staged {
 
     /// Moves the plugin into place. Refuses to replace anything.
     pub(crate) fn install(self) -> Result<PathBuf> {
+        if self.replaces.is_some() {
+            return self.replace_installed();
+        }
         if std::fs::symlink_metadata(&self.target).is_ok() {
             bail!("a plugin named {} is already installed", self.manifest.name);
         }
         std::fs::rename(&self.staging, &self.target)
             .with_context(|| format!("moving the plugin to {}", self.target.display()))?;
+        Ok(self.target.clone())
+    }
+
+    /// Puts the new version in place of the installed one: the old folder is moved aside first
+    /// and moved back if the new one cannot be put in place, so a failure loses nothing.
+    fn replace_installed(&self) -> Result<PathBuf> {
+        let parent = self
+            .target
+            .parent()
+            .context("the plugin has no folder to live in")?;
+        let aside = parent.join(format!(".old-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::rename(&self.target, &aside)
+            .with_context(|| format!("setting {} aside", self.target.display()))?;
+        if let Err(error) = std::fs::rename(&self.staging, &self.target) {
+            let _ = std::fs::rename(&aside, &self.target);
+            return Err(error).with_context(|| {
+                format!(
+                    "moving the new version to {}; the old one is kept",
+                    self.target.display()
+                )
+            });
+        }
+        let _ = std::fs::remove_dir_all(&aside);
         Ok(self.target.clone())
     }
 
@@ -942,6 +1096,164 @@ events = ["turn_finished", "tool_started"]
         assert_eq!(listed.len(), 1);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("broken"), "{warnings:?}");
+    }
+
+    /// Installs the standard test plugin into `dirs` and returns the folder it came from.
+    fn installed_in(dirs: &Dirs) -> PathBuf {
+        let source = source_folder();
+        let staged = stage(dirs, &Source::Local(source.clone())).expect("staged");
+        staged.install().expect("installed");
+        source
+    }
+
+    /// Edits the plugin source in place: `plugin.toml` text replaced, a marker file added.
+    fn change_source(source: &Path, from: &str, to: &str, marker: &str) {
+        let manifest = source.join("plugin.toml");
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace(from, to);
+        std::fs::write(&manifest, text).unwrap();
+        std::fs::write(source.join(marker), "new").unwrap();
+    }
+
+    #[test]
+    fn an_update_leaves_the_installed_plugin_alone_until_it_is_confirmed() {
+        let dirs = dirs();
+        let source = installed_in(&dirs);
+        change_source(
+            &source,
+            "version = \"1.2.0\"",
+            "version = \"1.3.0\"",
+            "new.txt",
+        );
+        let staged = stage_update(&dirs, &Source::Local(source), "reviewer").expect("staged");
+        let target = plugins_dir(&dirs).unwrap().join("reviewer");
+        assert!(!target.join("new.txt").exists(), "nothing changed yet");
+        assert_eq!(read_manifest(&target).unwrap().version, "1.2.0");
+        assert_eq!(staged.replaces.as_ref().unwrap().version, "1.2.0");
+        staged.discard();
+        assert_eq!(
+            read_manifest(&target).unwrap().version,
+            "1.2.0",
+            "declining keeps it"
+        );
+        assert!(
+            std::fs::read_dir(plugins_dir(&dirs).unwrap())
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with('.')),
+            "no staging folder is left behind"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_update_swaps_the_folders_and_leaves_nothing_behind() {
+        let dirs = dirs();
+        let source = installed_in(&dirs);
+        change_source(
+            &source,
+            "version = \"1.2.0\"",
+            "version = \"1.3.0\"",
+            "new.txt",
+        );
+        let target = plugins_dir(&dirs).unwrap().join("reviewer");
+        std::fs::write(target.join("old.txt"), "old").unwrap();
+        let staged = stage_update(&dirs, &Source::Local(source), "reviewer").expect("staged");
+        assert_eq!(staged.install().unwrap(), target);
+        assert_eq!(read_manifest(&target).unwrap().version, "1.3.0");
+        assert!(target.join("new.txt").is_file());
+        assert!(!target.join("old.txt").exists(), "the old files are gone");
+        assert!(
+            std::fs::read_dir(plugins_dir(&dirs).unwrap())
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with('.')),
+            "neither the staging nor the set-aside folder is left behind"
+        );
+    }
+
+    #[test]
+    fn an_update_that_cannot_be_put_in_place_restores_the_old_version() {
+        let dirs = dirs();
+        let source = installed_in(&dirs);
+        change_source(
+            &source,
+            "version = \"1.2.0\"",
+            "version = \"1.3.0\"",
+            "new.txt",
+        );
+        let staged = stage_update(&dirs, &Source::Local(source), "reviewer").expect("staged");
+        // Without its staging folder the swap fails halfway.
+        std::fs::remove_dir_all(&staged.staging).unwrap();
+        let target = staged.target.clone();
+        assert!(staged.install().is_err());
+        assert_eq!(read_manifest(&target).unwrap().version, "1.2.0");
+        assert!(target.join("skills/checklist/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn an_update_needs_an_installed_plugin_of_the_same_name() {
+        let dirs = dirs();
+        let source = source_folder();
+        let error =
+            stage_update(&dirs, &Source::Local(source.clone()), "reviewer").expect_err("refused");
+        assert!(format!("{error:#}").contains("not installed"), "{error:#}");
+        let source = installed_in(&dirs);
+        let error =
+            stage_update(&dirs, &Source::Local(source.clone()), "other").expect_err("refused");
+        assert!(format!("{error:#}").contains("not other"), "{error:#}");
+        // A plain install of an installed plugin points to /plugin update.
+        let error = stage(&dirs, &Source::Local(source)).expect_err("refused");
+        assert!(
+            format!("{error:#}").contains("/plugin update reviewer"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn the_review_of_an_update_lists_what_changed_in_what_runs() {
+        let dirs = dirs();
+        let source = installed_in(&dirs);
+        change_source(
+            &source,
+            "args = [\"mods/status.py\", \"--every\", \"5 s\"]",
+            "args = [\"mods/status.py\", \"--every\", \"1 s\"]",
+            "new.txt",
+        );
+        let manifest = source.join("plugin.toml");
+        let mut text = std::fs::read_to_string(&manifest).unwrap();
+        text.push_str("\n[[mcp]]\nname = \"files\"\ncommand = \"npx\"\n");
+        std::fs::write(&manifest, text).unwrap();
+        let staged = stage_update(&dirs, &Source::Local(source), "reviewer").expect("staged");
+        let shown = staged.review(&|_| false).join("\n");
+        for expected in [
+            "reviewer: update 1.2.0 → 1.2.0",
+            "changed mod status: runs python3 mods/status.py --every \"1 s\"",
+            "(before: runs python3 mods/status.py --every \"5 s\"",
+            "new MCP server files: runs npx",
+            "The whole new version",
+        ] {
+            assert!(shown.contains(expected), "{expected}:\n{shown}");
+        }
+        assert!(
+            !shown.contains("changed command review"),
+            "unchanged things are not listed"
+        );
+        let same = changes(&staged.manifest, &staged.manifest);
+        assert_eq!(same, ["  No commands, mods or MCP servers changed."]);
+        let removed = changes(
+            &staged.manifest,
+            &Manifest {
+                mods: Vec::new(),
+                ..staged.manifest.clone()
+            },
+        );
+        assert!(
+            removed
+                .iter()
+                .any(|line| line.contains("removed mod status")),
+            "{removed:?}"
+        );
     }
 
     #[test]
