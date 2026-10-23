@@ -125,6 +125,8 @@ pub(super) struct App {
     #[cfg(test)]
     pub(super) spawned_tasks: usize,
     pub(super) history_scroll: u16,
+    /// Earlier prompts, for ↑ and ↓ in an empty prompt.
+    pub(in crate::tui) prompt_history: crate::tui::prompt_history::PromptHistory,
     pub(super) settings_view: Option<crate::tui::settings::SettingsView>,
     pub(super) provider_index: usize,
     pub(super) provider_form: Option<ProviderDraft>,
@@ -537,6 +539,7 @@ impl App {
             #[cfg(test)]
             spawned_tasks: 0,
             history_scroll: 0,
+            prompt_history: Default::default(),
             settings_view: None,
             provider_index,
             provider_form: None,
