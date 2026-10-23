@@ -16,7 +16,7 @@ use crate::tui::render::motion::pulse_spans;
 use crate::tui::settings::draw_settings_view;
 use crate::tui::state::{App, StreamingTurn, TranscriptKind};
 use crate::tui::stats_view::draw_stats;
-use crate::tui::wordmark::{cool_code_wordmark, tagline_lines, wordmark_height};
+use crate::tui::wordmark::{cool_code_wordmark, wordmark_height};
 use crate::{PulseMode, provider};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
@@ -175,13 +175,49 @@ pub(super) fn input_visual_lines(input: &str, width: u16) -> usize {
     wrap_input_text(input, width).0.len()
 }
 
-pub(super) fn input_prompt_height(input: &str, area: Rect) -> u16 {
-    let prompt_width = centered_rect(78, 100, Rect::new(area.x, area.y, area.width, 1))
-        .width
-        .saturating_sub(3);
-    let needed = input_visual_lines(input, prompt_width).saturating_add(1);
+/// Rows the prompt box needs: the text, plus a top margin, a blank row and the status row.
+pub(super) fn input_prompt_height(input: &str, area: Rect, columns: u16) -> u16 {
+    let text_width = columns.saturating_sub(3);
+    let needed = input_visual_lines(input, text_width).saturating_add(3);
     let available = area.height.saturating_sub(12).clamp(4, 10) as usize;
     needed.clamp(4, available) as u16
+}
+
+/// Rows under the prompt box: the key hints or turn status, then room for a wrapped notice.
+const HINT_ROWS: u16 = 3;
+
+/// `width` columns in the middle of `area`.
+fn column(area: Rect, width: u16) -> Rect {
+    let width = width.min(area.width);
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y,
+        width,
+        area.height,
+    )
+}
+
+/// The working folder with the home folder written `~`.
+pub(super) fn shorten_home(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        return if rest.as_os_str().is_empty() {
+            "~".to_owned()
+        } else {
+            format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display())
+        };
+    }
+    path.display().to_string()
+}
+
+pub(super) fn folder_label() -> String {
+    std::env::current_dir()
+        .map(|dir| {
+            let dir = std::path::PathBuf::from(crate::tui::context::plain(&dir));
+            shorten_home(&dir, dirs::home_dir().as_deref())
+        })
+        .unwrap_or_default()
 }
 
 /// How strongly the backdrop shows behind a conversation when dimming is on.
@@ -215,55 +251,44 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             area,
         );
     }
-    let prompt_height = input_prompt_height(&app.input, area);
-    let (logo_area, subtitle_area, history_area, prompt_area, help_area, notice_area, status_area) =
-        if app.transcript.is_empty() {
-            let layout = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Fill(1),
-                    Constraint::Length(wordmark_height(area.width)),
-                    Constraint::Length(3),
-                    Constraint::Length(prompt_height),
-                    Constraint::Length(1),
-                    Constraint::Length(2),
-                    Constraint::Fill(1),
-                    Constraint::Length(2),
-                    Constraint::Length(1),
-                ])
-                .split(area);
-            (
-                layout[1],
-                layout[2],
-                Rect::default(),
-                layout[3],
-                layout[5],
-                layout[7],
-                layout[8],
-            )
-        } else {
-            let layout = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints([
-                    Constraint::Length(1),
-                    Constraint::Fill(5),
-                    Constraint::Length(prompt_height),
-                    Constraint::Length(2),
-                    Constraint::Length(2),
-                    Constraint::Length(1),
-                ])
-                .split(area);
-            (
-                Rect::default(),
-                Rect::default(),
-                layout[1],
-                layout[2],
-                layout[3],
-                layout[4],
-                layout[5],
-            )
-        };
+    let columns = app.settings.prompt_columns(area.width.saturating_sub(2));
+    let prompt_height = input_prompt_height(&app.input, area, columns);
+    let (logo_area, history_area, prompt_area, hint_area) = if app.transcript.is_empty() {
+        // One group in the middle of the window: the logo, the prompt box and its hints.
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Fill(1),
+                Constraint::Length(wordmark_height(area.width)),
+                Constraint::Length(1),
+                Constraint::Length(prompt_height),
+                Constraint::Length(HINT_ROWS),
+                Constraint::Fill(1),
+            ])
+            .split(area);
+        (
+            layout[1],
+            Rect::default(),
+            column(layout[3], columns),
+            column(layout[4], columns),
+        )
+    } else {
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(prompt_height),
+                Constraint::Length(HINT_ROWS),
+            ])
+            .split(area);
+        (
+            Rect::default(),
+            column(layout[1], columns),
+            column(layout[2], columns),
+            column(layout[3], columns),
+        )
+    };
 
     let no_color = std::env::var_os("NO_COLOR").is_some();
     // The backdrop fills the welcome screen; behind a conversation it is opt-in and dimmed.
@@ -294,10 +319,6 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             Paragraph::new(cool_code_wordmark(launched, logo_area.width))
                 .alignment(Alignment::Center),
             logo_area,
-        );
-        frame.render_widget(
-            Paragraph::new(tagline_lines(launched)).alignment(Alignment::Center),
-            subtitle_area,
         );
     }
 
@@ -369,13 +390,18 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         frame.render_widget(paragraph.scroll((scroll, 0)), history_area);
     }
 
-    let prompt_area = centered_rect(78, 100, prompt_area);
     let prompt_block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(crate::tui::theme::accent()))
         .style(Style::default().bg(crate::tui::theme::input()))
         .padding(ratatui::widgets::Padding::new(2, 0, 1, 0));
-    let prompt_inner = prompt_block.inner(prompt_area);
+    let box_inner = prompt_block.inner(prompt_area);
+    // The text, then a blank row and the status row at the bottom of the box.
+    let status_rows = if box_inner.height >= 3 { 2 } else { 0 };
+    let prompt_inner = Rect {
+        height: box_inner.height - status_rows,
+        ..box_inner
+    };
     let (input_lines, (cursor_line, cursor_column)) =
         wrap_input_at(&app.input, app.input_cursor(), prompt_inner.width);
     let prompt = if app.input.is_empty() {
@@ -410,11 +436,10 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let prompt_scroll = prompt_lines
         .saturating_sub(prompt_inner.height as usize)
         .min(cursor_line) as u16;
+    frame.render_widget(prompt_block, prompt_area);
     frame.render_widget(
-        Paragraph::new(prompt)
-            .scroll((prompt_scroll, 0))
-            .block(prompt_block),
-        prompt_area,
+        Paragraph::new(prompt).scroll((prompt_scroll, 0)),
+        prompt_inner,
     );
     // Only while keys go to the prompt: any window drawn over it takes the cursor away too.
     if app.typing_in_prompt() {
@@ -435,43 +460,6 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         crate::tui::slash::draw_slash(frame, prompt_area, &app.slash, &app.hits);
     }
 
-    let help = Line::from(vec![
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" submit   ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "/settings",
-            Style::default().fg(crate::tui::theme::accent()),
-        ),
-        Span::styled("  ", Style::default()),
-        Span::styled("/effort", Style::default().fg(crate::tui::theme::accent())),
-        Span::styled(
-            "   /mode   /init   @path   Ctrl+↑/↓ scroll   Esc quit",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
-    let help = match app.streaming.as_ref() {
-        Some(turn) => {
-            let mut spans = vec![Span::styled(
-                status_line(turn, std::time::Instant::now()),
-                Style::default().fg(Color::Rgb(120, 170, 200)),
-            )];
-            if let Some(hint) = crate::tui::tracker::status_hint(&app.tracker) {
-                spans.push(Span::styled(
-                    format!(" · {hint}"),
-                    Style::default().fg(Color::Rgb(255, 197, 92)),
-                ));
-            }
-            Line::from(spans)
-        }
-        None => help,
-    };
-    frame.render_widget(Paragraph::new(help).alignment(Alignment::Center), help_area);
-
     let model = app
         .settings
         .model
@@ -482,9 +470,9 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         crate::tui::effort::status_effort_spans(app, animation_tick, std::time::Instant::now());
     let mut status_spans = vec![
         mode_span(&app.settings.permission_mode, true),
-        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(model, Style::default().fg(Color::White)),
-        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
     ];
     status_spans.extend(effort_spans);
     if let Some((text, urgency)) = app.context_status() {
@@ -493,7 +481,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             1 => Color::Rgb(255, 197, 92),
             _ => Color::Rgb(235, 80, 80),
         };
-        status_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+        status_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
         status_spans.push(Span::styled(text, Style::default().fg(color)));
     }
     if let Some(warning) = app.usage_warning.as_ref() {
@@ -509,29 +497,59 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     }
     // Each running mod's own status text, already cleaned and cut short.
     for text in app.extensions.mods.statuses().into_iter().take(3) {
-        status_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+        status_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
         status_spans.push(Span::styled(
             text,
             Style::default().fg(crate::tui::theme::accent_soft()),
         ));
     }
-    let status = Line::from(status_spans);
-    // The one-line message about what just happened sits above the status line.
+    let hints = Style::default().fg(Color::DarkGray);
+    let hint_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Fill(1)])
+        .split(hint_area);
+    match app.streaming.as_ref() {
+        Some(turn) => {
+            let mut spans = vec![Span::styled(
+                status_line(turn, std::time::Instant::now()),
+                Style::default().fg(Color::Rgb(120, 170, 200)),
+            )];
+            if let Some(hint) = crate::tui::tracker::status_hint(&app.tracker) {
+                spans.push(Span::styled(
+                    format!(" · {hint}"),
+                    Style::default().fg(Color::Rgb(255, 197, 92)),
+                ));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), hint_rows[0]);
+        }
+        None => {
+            frame.render_widget(
+                Paragraph::new(Span::styled(app.folder.as_str(), hints)),
+                hint_rows[0],
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled("/", Style::default().fg(crate::tui::theme::accent())),
+                    Span::styled(" commands  ", hints),
+                    Span::styled("@", Style::default().fg(crate::tui::theme::accent())),
+                    Span::styled(" files  ", hints),
+                    Span::styled("Ctrl+↑/↓", Style::default().fg(crate::tui::theme::accent())),
+                    Span::styled(" scroll", hints),
+                ]))
+                .alignment(Alignment::Right),
+                hint_rows[0],
+            );
+        }
+    }
+    // The one-line message about what just happened goes under the hints.
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            app.notice.as_str(),
-            Style::default().fg(Color::DarkGray),
-        ))
-        .alignment(Alignment::Center)
-        .wrap(Wrap { trim: true }),
-        notice_area,
+        Paragraph::new(Span::styled(app.notice.as_str(), hints)).wrap(Wrap { trim: true }),
+        hint_rows[1],
     );
-    frame.render_widget(
-        Paragraph::new(status)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true }),
-        status_area,
-    );
+    if status_rows > 0 {
+        let status_area = Rect::new(box_inner.x, box_inner.bottom() - 1, box_inner.width, 1);
+        frame.render_widget(Paragraph::new(Line::from(status_spans)), status_area);
+    }
 
     if app.settings_view.is_some() {
         draw_settings_view(frame, area, app);
@@ -699,7 +717,7 @@ mod tests {
         assert_eq!(input_visual_lines("short", 20), 1);
         assert_eq!(input_visual_lines(&"x".repeat(45), 20), 3);
         let area = Rect::new(0, 0, 100, 30);
-        assert!(input_prompt_height(&"x".repeat(300), area) > 4);
+        assert!(input_prompt_height(&"x".repeat(300), area, 76) > 4);
     }
 
     #[test]
@@ -1017,18 +1035,18 @@ mod notice_tests {
     }
 
     #[test]
-    fn the_notice_sits_above_the_status_line_not_beside_it() {
+    fn the_notice_sits_under_the_prompt_box_not_beside_the_status() {
         for conversation in [false, true] {
             let rows = rows(&app(conversation), 100, 30);
             let notice = row_of(&rows, "Conversation cleared.");
             let status = row_of(&rows, "no model selected");
             assert!(
-                notice < status,
+                notice > status,
                 "conversation={conversation}: notice row {notice}, status row {status}"
             );
             assert!(
                 !rows[status].contains("Conversation cleared."),
-                "the status line no longer carries the notice"
+                "the status line does not carry the notice"
             );
         }
     }
@@ -1196,5 +1214,184 @@ mod scroll_tests {
             .unwrap();
         app.poll_response();
         assert!(screen(&app, 50, 24).contains("NEWESTWORD"));
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::draw;
+    use crate::Settings;
+    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+
+    fn app(setup: impl FnOnce(&mut Settings)) -> App {
+        let mut settings = Settings::default();
+        settings.background_animation = false;
+        setup(&mut settings);
+        let mut app = App::new(settings);
+        app.trust_prompt = false;
+        app
+    }
+
+    fn drawn(app: &App, width: u16, height: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        terminal.backend().buffer().clone()
+    }
+
+    fn row_text(buffer: &Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol().to_owned())
+            .collect()
+    }
+
+    fn rows(buffer: &Buffer) -> Vec<String> {
+        (0..buffer.area.height)
+            .map(|y| row_text(buffer, y))
+            .collect()
+    }
+
+    fn row_of(rows: &[String], needle: &str) -> usize {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{}", rows.join("\n")))
+    }
+
+    /// How many cells of row `y` have the prompt box's background.
+    fn box_cells(buffer: &Buffer, y: usize) -> usize {
+        (0..buffer.area.width)
+            .filter(|x| buffer[(*x, y as u16)].bg == crate::tui::theme::input())
+            .count()
+    }
+
+    fn chatting(app: &mut App, text: &str) {
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::Assistant,
+            text: text.to_owned(),
+        });
+    }
+
+    #[test]
+    fn the_welcome_screen_is_one_compact_group_with_nothing_at_the_bottom() {
+        let buffer = drawn(&app(|_| {}), 100, 40);
+        let rows = rows(&buffer);
+        let filled = (0..rows.len())
+            .filter(|y| !rows[*y].trim().is_empty())
+            .collect::<Vec<_>>();
+        let (first, last) = (filled[0], *filled.last().unwrap());
+        assert!(
+            last - first < 16,
+            "{} rows used\n{}",
+            last - first + 1,
+            rows.join("\n")
+        );
+        assert!(first > 8, "centered, not stuck to the top: row {first}");
+        assert!(last < 32, "nothing pinned to the bottom: row {last}");
+    }
+
+    #[test]
+    fn the_welcome_screen_shows_the_logo_but_no_tagline_or_version() {
+        let shown = rows(&drawn(&app(|_| {}), 100, 40)).join("\n");
+        assert!(!shown.contains("coding harness"), "{shown}");
+        assert!(!shown.contains("Rust ·"), "{shown}");
+        assert!(!shown.contains("Trusted workspace"), "{shown}");
+    }
+
+    #[test]
+    fn the_prompt_box_is_capped_at_the_chosen_width() {
+        let wide = drawn(&app(|_| {}), 200, 40);
+        let at = row_of(&rows(&wide), "Describe what you want");
+        assert_eq!(box_cells(&wide, at), 76);
+        let hundred = drawn(&app(|s| s.prompt_width = 100), 200, 40);
+        assert_eq!(
+            box_cells(&hundred, row_of(&rows(&hundred), "Describe what")),
+            100
+        );
+        let full = drawn(&app(|s| s.prompt_width = 0), 200, 40);
+        assert_eq!(box_cells(&full, row_of(&rows(&full), "Describe what")), 198);
+        let narrow = drawn(&app(|_| {}), 60, 30);
+        assert_eq!(
+            box_cells(&narrow, row_of(&rows(&narrow), "Describe what")),
+            58
+        );
+    }
+
+    #[test]
+    fn the_status_sits_inside_the_prompt_box_and_the_hints_below_it() {
+        let buffer = drawn(&app(|_| {}), 100, 40);
+        let rows = rows(&buffer);
+        let prompt = row_of(&rows, "Describe what you want");
+        let status = row_of(&rows, "no model selected");
+        assert_eq!(
+            status,
+            prompt + 2,
+            "one blank row, then the status\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            box_cells(&buffer, status) > 0,
+            "the status row is part of the box"
+        );
+        assert!(
+            rows[status + 1].contains("commands"),
+            "{}",
+            rows[status + 1]
+        );
+        assert_eq!(
+            box_cells(&buffer, status + 1),
+            0,
+            "the hints are outside the box"
+        );
+    }
+
+    #[test]
+    fn a_notice_goes_under_the_box_and_never_pushes_the_status_away() {
+        let mut app = app(|_| {});
+        app.notice = "word ".repeat(40);
+        let rows = rows(&drawn(&app, 100, 40));
+        let status = row_of(&rows, "no model selected");
+        let notice = row_of(&rows, "word word");
+        assert!(notice > status, "notice row {notice}, status row {status}");
+    }
+
+    #[test]
+    fn the_folder_is_shown_with_the_home_folder_abbreviated() {
+        use super::shorten_home;
+        use std::path::Path;
+        let home = Path::new("/home/me");
+        assert_eq!(
+            shorten_home(Path::new("/home/me/code/app"), Some(home)),
+            "~/code/app"
+        );
+        assert_eq!(shorten_home(Path::new("/home/me"), Some(home)), "~");
+        assert_eq!(
+            shorten_home(Path::new("/home/mex/app"), Some(home)),
+            "/home/mex/app"
+        );
+        assert_eq!(shorten_home(Path::new("/srv/app"), None), "/srv/app");
+    }
+
+    #[test]
+    fn a_conversation_uses_the_same_column_and_keeps_the_status_in_the_box() {
+        let mut app = app(|_| {});
+        chatting(&mut app, &"alpha beta gamma ".repeat(40));
+        let buffer = drawn(&app, 200, 30);
+        let rows = rows(&buffer);
+        let status = row_of(&rows, "no model selected");
+        assert!(box_cells(&buffer, status) > 0);
+        assert_eq!(box_cells(&buffer, status), 76);
+        let widest = rows
+            .iter()
+            .filter(|row| row.contains("alpha"))
+            .map(|row| row.trim().chars().count())
+            .max()
+            .unwrap();
+        assert!(widest <= 76, "the answer wraps at the column: {widest}");
+        assert!(
+            status >= 24,
+            "the box sits at the bottom of the window: {status}"
+        );
     }
 }
