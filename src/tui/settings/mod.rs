@@ -199,6 +199,13 @@ impl App {
                 _ => {}
             },
             Focus::Content => match key.code {
+                // ←/→ change the value of a row that has a range; elsewhere ← goes back.
+                KeyCode::Left
+                    if view.section == Section::Appearance
+                        && appearance::row_uses_arrows(view.row) =>
+                {
+                    self.handle_appearance_key(key)?
+                }
                 KeyCode::Esc | KeyCode::Left => view.focus = Focus::Sidebar,
                 _ => {
                     let section = view.section;
