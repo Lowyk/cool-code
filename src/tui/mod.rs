@@ -1,8 +1,10 @@
 mod approval;
 mod backdrop;
 mod chatgpt_login;
+mod clipboard;
 mod commands;
 pub(crate) mod context;
+mod conversation_tools;
 mod creators;
 mod dialog;
 mod editing;
@@ -129,6 +131,13 @@ fn run_app(
             |frame| draw(frame, &app, animation_tick),
             || app.cursor.get(),
         )?;
+        // A copy the terminal was asked to do (OSC 52) goes out after the frame.
+        if let Some(escape) = app.clipboard_escape.take() {
+            use std::io::Write as _;
+            let out = terminal.backend_mut();
+            out.write_all(escape.as_bytes())?;
+            out.flush()?;
+        }
         // Redraw faster while the effort picker animates or a response is streaming.
         let flashing = app
             .effort_flash_until

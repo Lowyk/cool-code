@@ -324,6 +324,25 @@ impl App {
             self.finish_command(output);
             return Ok(());
         }
+        for (name, kind) in [("/copy", 0), ("/export", 1), ("/rename", 2)] {
+            if let Some(arguments) = value
+                .strip_prefix(name)
+                .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+            {
+                let output = match kind {
+                    0 => self.copy_command(arguments.trim()),
+                    1 => self.export_command(arguments.trim())?,
+                    _ => self.rename_command(arguments.trim()),
+                };
+                self.finish_command(output);
+                return Ok(());
+            }
+        }
+        if value == "/retry" {
+            let output = self.retry_command()?;
+            self.finish_command(output);
+            return Ok(());
+        }
         if let Some(arguments) = value
             .strip_prefix("/mcp")
             .filter(|rest| rest.is_empty() || rest.starts_with(' '))

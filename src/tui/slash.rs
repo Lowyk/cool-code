@@ -85,6 +85,14 @@ pub(in crate::tui) const COMMANDS: &[BuiltIn] = &[
         "[add <name> <command>|approve|enable|disable|restart|secret|remove <name>]",
         "List and manage MCP servers",
     ),
+    command("copy", "[n]", "Copy the last answer, or its nth code block"),
+    command(
+        "export",
+        "[file]",
+        "Write the conversation to a Markdown file",
+    ),
+    command("retry", "", "Send the last request again"),
+    command("rename", "<title>", "Name this session"),
     command("resume", "[all]", "Continue a saved session"),
     command("clear", "", "Start a new conversation"),
     command("quit", "", "Save the session and exit (also /exit)"),
@@ -546,6 +554,10 @@ mod tests {
             "quit",
             "plugin",
             "mcp",
+            "copy",
+            "export",
+            "retry",
+            "rename",
         ] {
             assert!(seen.contains(expected), "{expected} is missing");
         }

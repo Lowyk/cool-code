@@ -99,7 +99,11 @@ impl App {
                 cwd: current_folder(),
                 created: self.session_created,
                 updated: now(),
-                title: title_of(&transcript),
+                title: self
+                    .custom_title
+                    .clone()
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or_else(|| title_of(&transcript)),
                 provider,
                 model: self.settings.model.clone().unwrap_or_default(),
                 prompts: transcript.iter().filter(|entry| is_prompt(entry)).count(),
@@ -116,6 +120,7 @@ impl App {
     pub(in crate::tui) fn begin_new_session(&mut self) {
         self.session_created = now();
         self.session_id = session::new_id(self.session_created);
+        self.custom_title = None;
     }
 
     pub(in crate::tui) fn resume_session(&mut self, id: &str) {
@@ -145,6 +150,7 @@ impl App {
             .collect();
         self.session_id = loaded.header.id;
         self.session_created = loaded.header.created;
+        self.custom_title = Some(loaded.header.title.clone()).filter(|title| !title.is_empty());
         self.history_scroll = 0;
         self.streaming = None;
         self.tool_approval = None;
