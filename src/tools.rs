@@ -145,6 +145,8 @@ pub(crate) enum ToolSet {
         images: bool,
         /// Skills are installed, so `use_skill` is offered.
         skills: bool,
+        /// MCP servers are running, so their tools are offered too.
+        mcp: bool,
     },
     /// A subagent that may only look: no edits, no commands.
     Explore,
@@ -175,6 +177,7 @@ impl ToolSet {
                 workflows,
                 images,
                 skills,
+                mcp,
             } => {
                 let mut tools = definitions_for_mode(if plan_mode { "plan" } else { "auto" });
                 if workflows {
@@ -185,6 +188,9 @@ impl ToolSet {
                 }
                 if skills {
                     tools.push(use_skill_definition());
+                }
+                if mcp {
+                    tools.extend(crate::extensions::mcp_hub::hub().definitions());
                 }
                 tools
             }
@@ -1230,6 +1236,7 @@ mod tests {
             workflows: false,
             images: false,
             skills,
+            mcp: false,
         };
         assert!(main(false, true).allows("use_skill"));
         assert!(main(true, true).allows("use_skill"), "Plan mode too");

@@ -1433,6 +1433,7 @@ mod tests {
             images: false,
             plan_mode: false,
             workflows: false,
+            mcp: false,
         });
         assert!(openai_outside_plan.as_array().unwrap().iter().all(|tool| {
             tool.pointer("/function/name").and_then(Value::as_str) != Some("request_plan_approval")
@@ -1442,7 +1443,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: true,
-                workflows: false
+                workflows: false,
+                mcp: false,
             })
             .as_array()
             .unwrap()
@@ -1457,7 +1459,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: true,
-                workflows: false
+                workflows: false,
+                mcp: false,
             })
             .as_array()
             .unwrap()
@@ -1469,7 +1472,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: false,
-                workflows: false
+                workflows: false,
+                mcp: false,
             })
             .as_array()
             .unwrap()
@@ -1481,7 +1485,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: true,
-                workflows: false
+                workflows: false,
+                mcp: false,
             })[0]["functionDeclarations"]
                 .as_array()
                 .unwrap()
@@ -1493,7 +1498,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: false,
-                workflows: false
+                workflows: false,
+                mcp: false,
             })[0]["functionDeclarations"]
                 .as_array()
                 .unwrap()
@@ -1505,6 +1511,7 @@ mod tests {
             images: false,
             plan_mode: true,
             workflows: false,
+            mcp: false,
         });
         let google_json = google_specs.to_string();
         assert!(google_json.contains("\"type\":\"object\""));

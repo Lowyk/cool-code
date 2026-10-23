@@ -1318,7 +1318,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: false,
-                workflows: true
+                workflows: true,
+                mcp: false,
             }]
         );
         let off = Scripted::new(|_, _| say("done"));
@@ -1331,7 +1332,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: false,
-                workflows: false
+                workflows: false,
+                mcp: false,
             }]
         );
         assert!(
@@ -1339,7 +1341,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: false,
-                workflows: false
+                workflows: false,
+                mcp: false,
             }
             .allows("spawn_subagents")
         );
@@ -1348,7 +1351,8 @@ mod tests {
                 skills: false,
                 images: false,
                 plan_mode: false,
-                workflows: true
+                workflows: true,
+                mcp: false,
             }
             .allows("spawn_subagents")
         );

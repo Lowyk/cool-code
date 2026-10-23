@@ -124,6 +124,7 @@ pub(crate) fn assemble(
         plan_mode: settings.permission_mode == "plan",
         workflows: workflows.is_some(),
         images: crate::imagegen::available(settings),
+        mcp: false,
     }
     .definitions()
     .into_iter()
