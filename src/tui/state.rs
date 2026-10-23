@@ -154,6 +154,8 @@ pub(super) struct App {
     pub(super) notice: String,
     pub(super) running: bool,
     pub(super) launched_at: std::time::Instant,
+    /// What the last Esc or Ctrl+C asked for and when; a second press soon after does it.
+    pub(super) exit_armed: Option<(ExitAsk, std::time::Instant)>,
     /// A name the user gave the session with `/rename`.
     pub(super) custom_title: Option<String>,
     /// The working folder as shown under the prompt, with the home folder written `~`.
@@ -573,6 +575,7 @@ impl App {
             running: true,
             launched_at: std::time::Instant::now(),
             custom_title: None,
+            exit_armed: None,
             folder: crate::tui::render::folder_label(),
         }
     }
@@ -620,6 +623,57 @@ impl App {
             tokens
         };
         Some(used)
+    }
+
+    /// Esc in the prompt: the first press says what the second one does, so a stray key never
+    /// loses a half-written prompt or closes the program.
+    pub(super) fn press_escape(&mut self, now: std::time::Instant) {
+        let ask = if self.input.is_empty() {
+            ExitAsk::Quit
+        } else {
+            ExitAsk::Clear
+        };
+        if self.take_armed(ask, now) {
+            self.confirm(ask);
+        } else {
+            self.exit_armed = Some((ask, now));
+            self.notice = match ask {
+                ExitAsk::Clear => "Press Esc again to clear the text.",
+                ExitAsk::Quit => "Press Esc again to quit.",
+            }
+            .to_owned();
+        }
+    }
+
+    /// Ctrl+C: clears the text at once; with nothing typed it asks, like Esc, before quitting.
+    pub(super) fn press_ctrl_c(&mut self, now: std::time::Instant) {
+        if !self.input.is_empty() {
+            self.confirm(ExitAsk::Clear);
+            self.exit_armed = Some((ExitAsk::Quit, now));
+            self.notice = "Cleared the text. Press Ctrl+C again to quit.".to_owned();
+        } else if self.take_armed(ExitAsk::Quit, now) {
+            self.confirm(ExitAsk::Quit);
+        } else {
+            self.exit_armed = Some((ExitAsk::Quit, now));
+            self.notice = "Press Ctrl+C again to quit.".to_owned();
+        }
+    }
+
+    /// Whether a press of the same kind came within the last two seconds (and forgets it).
+    fn take_armed(&mut self, ask: ExitAsk, now: std::time::Instant) -> bool {
+        let armed = self.exit_armed.take();
+        matches!(armed, Some((earlier, at)) if earlier == ask
+            && now.saturating_duration_since(at) <= EXIT_WINDOW)
+    }
+
+    fn confirm(&mut self, ask: ExitAsk) {
+        match ask {
+            ExitAsk::Clear => {
+                self.set_input(String::new());
+                self.notice = "Cleared.".to_owned();
+            }
+            ExitAsk::Quit => self.running = false,
+        }
     }
 
     /// Shows or hides the sidebar (Ctrl+B) and remembers the choice.
@@ -801,3 +855,13 @@ pub(super) fn answer_footer(
         details,
     }
 }
+
+/// What a second press of Esc or Ctrl+C would do.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ExitAsk {
+    Clear,
+    Quit,
+}
+
+/// How long after the first press a second one still counts.
+const EXIT_WINDOW: Duration = Duration::from_secs(2);
