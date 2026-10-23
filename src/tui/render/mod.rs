@@ -1,5 +1,6 @@
 mod dialogs;
 pub(super) mod forms;
+mod history;
 mod motion;
 
 use crate::policy::mode_label;
@@ -14,7 +15,7 @@ use crate::tui::render::dialogs::{
 pub(super) use crate::tui::render::dialogs::{privacy_dialog, trust_dialog, ultimate_dialog};
 use crate::tui::render::motion::pulse_spans;
 use crate::tui::settings::draw_settings_view;
-use crate::tui::state::{App, StreamingTurn, TranscriptKind};
+use crate::tui::state::{App, StreamingTurn};
 use crate::tui::stats_view::draw_stats;
 use crate::tui::wordmark::{cool_code_wordmark, wordmark_height};
 use crate::{PulseMode, provider};
@@ -72,34 +73,9 @@ pub(super) fn status_line(turn: &StreamingTurn, now: std::time::Instant) -> Stri
     )
 }
 
-/// Puts `marker` before the first line of an entry and an indent before the rest.
-fn marked(marker: Span<'static>, body: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    if body.is_empty() {
-        return vec![Line::from(marker)];
-    }
-    body.into_iter()
-        .enumerate()
-        .map(|(index, mut line)| {
-            let lead = if index == 0 {
-                marker.clone()
-            } else {
-                Span::raw("  ")
-            };
-            line.spans.insert(0, lead);
-            line
-        })
-        .collect()
-}
-
 /// The answer being written. Lines that are complete are drawn as Markdown; the line in
 /// progress is plain text with the pulse, and becomes Markdown when its line ends.
 fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> {
-    let marker = Span::styled(
-        "• ",
-        Style::default()
-            .fg(crate::tui::theme::accent_soft())
-            .add_modifier(Modifier::BOLD),
-    );
     let (done, current) = match turn.text.rfind('\n') {
         Some(index) => turn.text.split_at(index + 1),
         None => ("", turn.text.as_str()),
@@ -120,7 +96,7 @@ fn streaming_lines(turn: &StreamingTurn, mode: PulseMode) -> Vec<Line<'static>> 
         Style::default().fg(crate::tui::theme::accent()),
     ));
     lines.push(Line::from(tail));
-    marked(marker, lines)
+    lines
 }
 
 pub(super) fn wrap_input_text(input: &str, width: u16) -> (Vec<String>, (usize, usize)) {
@@ -256,7 +232,12 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             area,
         );
     }
-    let columns = app.settings.prompt_columns(area.width.saturating_sub(2));
+    let available = area.width.saturating_sub(2);
+    let columns = if app.transcript.is_empty() {
+        app.settings.prompt_columns(available)
+    } else {
+        app.settings.chat_columns(available)
+    };
     let prompt_height = input_prompt_height(&app.input, area, columns);
     let (logo_area, history_area, prompt_area, hint_area) = if app.transcript.is_empty() {
         // One group in the middle of the window: the logo, the prompt box and its hints.
@@ -328,71 +309,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     }
 
     if !app.transcript.is_empty() {
-        let mut lines = Vec::new();
-        for entry in &app.transcript {
-            let (marker, color, content_color) = match entry.kind {
-                TranscriptKind::User => ("> ", crate::tui::theme::accent_bright(), Color::White),
-                TranscriptKind::Assistant => ("• ", crate::tui::theme::accent_soft(), Color::White),
-                TranscriptKind::CommandOutput => {
-                    ("  ", Color::Rgb(185, 195, 205), Color::Rgb(200, 205, 212))
-                }
-                TranscriptKind::Error => {
-                    ("| ", Color::Rgb(255, 100, 110), Color::Rgb(255, 145, 150))
-                }
-            };
-            if entry.kind == TranscriptKind::Assistant {
-                let marker = Span::styled(
-                    marker,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                );
-                lines.extend(marked(marker, crate::tui::markdown::render(&entry.text)));
-                lines.push(Line::from(""));
-                continue;
-            }
-            let mut content_lines = entry.text.lines();
-            lines.push(Line::from(vec![
-                Span::styled(
-                    marker,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    content_lines.next().unwrap_or_default(),
-                    Style::default().fg(content_color),
-                ),
-            ]));
-            for content_line in content_lines {
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        "{}{content_line}",
-                        if entry.kind == TranscriptKind::Error {
-                            "| "
-                        } else {
-                            "  "
-                        }
-                    ),
-                    Style::default().fg(if entry.kind == TranscriptKind::Error {
-                        color
-                    } else {
-                        content_color
-                    }),
-                )));
-            }
-            lines.push(Line::from(""));
-        }
-        if let Some(turn) = app.streaming.as_ref()
-            && turn.tool.is_none()
-        {
-            lines.extend(streaming_lines(turn, app.settings.pulse));
-        }
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-        // Exact count from the same word wrapping the paragraph draws with; estimating it
-        // from character widths under-counts and hides the end of long answers.
-        let wrapped_line_count = paragraph.line_count(history_area.width.max(1));
-        let max_scroll = wrapped_line_count
-            .saturating_sub(history_area.height as usize)
-            .min(u16::MAX as usize) as u16;
-        let scroll = max_scroll.saturating_sub(app.history_scroll.min(max_scroll));
-        frame.render_widget(paragraph.scroll((scroll, 0)), history_area);
+        history::draw_history(frame, history_area, app);
     }
 
     let prompt_block = Block::default()
@@ -480,15 +397,6 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
     ];
     status_spans.extend(effort_spans);
-    if let Some((text, urgency)) = app.context_status() {
-        let color = match urgency {
-            0 => Color::DarkGray,
-            1 => Color::Rgb(255, 197, 92),
-            _ => Color::Rgb(235, 80, 80),
-        };
-        status_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-        status_spans.push(Span::styled(text, Style::default().fg(color)));
-    }
     if let Some(warning) = app.usage_warning.as_ref() {
         let color = match warning.severity {
             crate::tui::usage_warnings::Severity::Low => Color::Rgb(255, 197, 92),
@@ -528,6 +436,33 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             Constraint::Fill(1),
         ])
         .split(hint_area);
+    let accent = Style::default().fg(crate::tui::theme::accent());
+    // On the right: the keys that help on this screen, and in a conversation the context used.
+    let mut right = Vec::new();
+    if app.transcript.is_empty() {
+        right.extend([
+            Span::styled("/", accent),
+            Span::styled(" commands  ", hints),
+            Span::styled("@", accent),
+            Span::styled(" files  ", hints),
+            Span::styled("Ctrl+P", accent),
+            Span::styled(" palette", hints),
+        ]);
+    } else {
+        if let Some((text, urgency)) = app.context_line() {
+            let color = match urgency {
+                0 => Color::Gray,
+                1 => Color::Rgb(255, 197, 92),
+                _ => Color::Rgb(235, 80, 80),
+            };
+            right.push(Span::styled(text, Style::default().fg(color)));
+            right.push(Span::raw("  "));
+        }
+        right.extend([
+            Span::styled("Ctrl+P", accent),
+            Span::styled(" commands", hints),
+        ]);
+    }
     match app.streaming.as_ref() {
         Some(turn) => {
             let mut spans = vec![Span::styled(
@@ -548,15 +483,7 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
                 hint_rows[1],
             );
             frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled("/", Style::default().fg(crate::tui::theme::accent())),
-                    Span::styled(" commands  ", hints),
-                    Span::styled("@", Style::default().fg(crate::tui::theme::accent())),
-                    Span::styled(" files  ", hints),
-                    Span::styled("Ctrl+↑/↓", Style::default().fg(crate::tui::theme::accent())),
-                    Span::styled(" scroll", hints),
-                ]))
-                .alignment(Alignment::Right),
+                Paragraph::new(Line::from(right)).alignment(Alignment::Right),
                 hint_rows[1],
             );
         }
@@ -903,6 +830,7 @@ mod backdrop_tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: "hello".to_owned(),
+            footer: None,
         });
         assert_eq!(particle_count(&app), 0);
     }
@@ -913,6 +841,7 @@ mod backdrop_tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::Assistant,
             text: "hello".to_owned(),
+            footer: None,
         });
         app
     }
@@ -1050,6 +979,7 @@ mod notice_tests {
             app.transcript.push(TranscriptEntry {
                 kind: TranscriptKind::User,
                 text: "hello".to_owned(),
+                footer: None,
             });
         }
         app
@@ -1136,6 +1066,7 @@ mod streaming_tests {
         app.transcript.push(crate::tui::state::TranscriptEntry {
             kind: crate::tui::state::TranscriptKind::User,
             text: "hi".to_owned(),
+            footer: None,
         });
         let (sender, receiver) = mpsc::channel();
         app.pending = Some(receiver);
@@ -1188,6 +1119,7 @@ mod scroll_tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::Assistant,
             text,
+            footer: None,
         });
         app
     }
@@ -1242,7 +1174,7 @@ mod scroll_tests {
 mod layout_tests {
     use super::draw;
     use crate::Settings;
-    use crate::tui::state::{App, TranscriptEntry, TranscriptKind};
+    use crate::tui::state::{AnswerFooter, App, TranscriptEntry, TranscriptKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -1291,6 +1223,7 @@ mod layout_tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::Assistant,
             text: text.to_owned(),
+            footer: None,
         });
     }
 
@@ -1395,25 +1328,161 @@ mod layout_tests {
         assert_eq!(shorten_home(Path::new("/srv/app"), None), "/srv/app");
     }
 
+    fn say(app: &mut App, kind: TranscriptKind, text: &str) {
+        app.transcript.push(TranscriptEntry {
+            kind,
+            text: text.to_owned(),
+            footer: None,
+        });
+    }
+
     #[test]
-    fn a_conversation_uses_the_same_column_and_keeps_the_status_in_the_box() {
+    fn a_conversation_uses_the_whole_window_unless_a_chat_width_is_set() {
         let mut app = app(|_| {});
         chatting(&mut app, &"alpha beta gamma ".repeat(40));
         let buffer = drawn(&app, 200, 30);
         let rows = rows(&buffer);
         let status = row_of(&rows, "no model selected");
-        assert!(box_cells(&buffer, status) > 0);
-        assert_eq!(box_cells(&buffer, status), 76);
+        assert_eq!(box_cells(&buffer, status), 198, "the box spans the window");
         let widest = rows
             .iter()
             .filter(|row| row.contains("alpha"))
             .map(|row| row.trim().chars().count())
             .max()
             .unwrap();
-        assert!(widest <= 76, "the answer wraps at the column: {widest}");
+        assert!(widest > 150, "the answer uses the width: {widest}");
         assert!(
             status >= 24,
             "the box sits at the bottom of the window: {status}"
         );
+        // The welcome screen is still the narrow one.
+        let welcome = drawn(&self::app(|_| {}), 200, 30);
+        let at = row_of(&self::rows(&welcome), "Describe what");
+        assert_eq!(box_cells(&welcome, at), 76);
+    }
+
+    #[test]
+    fn a_chat_width_caps_the_conversation_and_centers_it() {
+        let mut app = app(|s| s.chat_width = 100);
+        chatting(&mut app, &"alpha beta gamma ".repeat(40));
+        let buffer = drawn(&app, 200, 30);
+        let rows = rows(&buffer);
+        assert_eq!(box_cells(&buffer, row_of(&rows, "no model selected")), 100);
+        let widest = rows
+            .iter()
+            .filter(|row| row.contains("alpha"))
+            .map(|row| row.trim().chars().count())
+            .max()
+            .unwrap();
+        assert!(widest <= 100, "{widest}");
+    }
+
+    #[test]
+    fn a_user_message_is_a_tinted_block_with_an_accent_bar_and_padding_rows() {
+        let mut app = app(|_| {});
+        say(&mut app, TranscriptKind::User, "please fix the build");
+        say(&mut app, TranscriptKind::Assistant, "On it.");
+        let buffer = drawn(&app, 100, 30);
+        let rows = rows(&buffer);
+        let at = row_of(&rows, "please fix the build");
+        for row in [at - 1, at, at + 1] {
+            assert!(
+                rows[row].contains('▌'),
+                "the bar on row {row}: {}",
+                rows[row]
+            );
+            assert_eq!(
+                buffer[(60, row as u16)].bg,
+                crate::tui::theme::input(),
+                "the tint reaches far past the text on row {row}"
+            );
+        }
+        assert_ne!(
+            buffer[(60, at as u16 + 2)].bg,
+            crate::tui::theme::input(),
+            "and stops"
+        );
+        assert!(!rows[at].contains("> "), "no `>` marker: {}", rows[at]);
+    }
+
+    #[test]
+    fn a_long_user_message_is_tinted_on_every_wrapped_row() {
+        let mut app = app(|_| {});
+        say(&mut app, TranscriptKind::User, &"word ".repeat(60));
+        let buffer = drawn(&app, 60, 30);
+        let rows = rows(&buffer);
+        let first = row_of(&rows, "word word");
+        let tinted = (first..first + 8)
+            .filter(|row| buffer[(55, *row as u16)].bg == crate::tui::theme::input())
+            .count();
+        assert!(tinted >= 6, "{tinted} tinted rows\n{}", rows.join("\n"));
+    }
+
+    #[test]
+    fn answers_have_no_bullet_and_end_with_a_footer_when_they_have_one() {
+        let mut app = app(|_| {});
+        say(&mut app, TranscriptKind::User, "hi");
+        app.transcript.push(TranscriptEntry {
+            kind: TranscriptKind::Assistant,
+            text: "Hello there.".to_owned(),
+            footer: Some(AnswerFooter {
+                mode: "manual".to_owned(),
+                details: "Some Model · 2.4s · 4.8 tok/s".to_owned(),
+            }),
+        });
+        say(&mut app, TranscriptKind::Assistant, "No footer here.");
+        let rows = rows(&drawn(&app, 100, 30));
+        let answer = row_of(&rows, "Hello there.");
+        assert!(!rows[answer].contains('•'), "{}", rows[answer]);
+        assert!(
+            rows[answer].starts_with("   Hello"),
+            "indented: {:?}",
+            rows[answer]
+        );
+        let footer = row_of(&rows, "Some Model · 2.4s · 4.8 tok/s");
+        assert_eq!(footer, answer + 2, "a blank row, then the footer");
+        assert!(rows[footer].contains("Manual"), "{}", rows[footer]);
+        let plain = row_of(&rows, "No footer here.");
+        assert!(
+            !rows[plain + 2].contains("·"),
+            "no footer under it: {}",
+            rows[plain + 2]
+        );
+    }
+
+    #[test]
+    fn context_is_written_briefly_with_its_share_of_the_window() {
+        use crate::tui::state::context_brief;
+        assert_eq!(context_brief(7_966, Some(200_000)), "8.0K (4%)");
+        assert_eq!(context_brief(512, Some(1_000)), "512 (51%)");
+        assert_eq!(context_brief(42_000, None), "42K");
+        assert_eq!(context_brief(1_250_000, Some(2_000_000)), "1.3M (63%)");
+        assert_eq!(context_brief(0, Some(100)), "0 (0%)");
+        assert_eq!(context_brief(9_960, None), "10K", "no \"10.0K\"");
+        assert_eq!(context_brief(999_600, None), "1.0M");
+    }
+
+    #[test]
+    fn the_bottom_line_of_a_conversation_has_the_folder_and_the_palette_hint() {
+        let mut app = app(|_| {});
+        app.folder = "~/work/app".to_owned();
+        chatting(&mut app, "hello");
+        let buffer = drawn(&app, 120, 30);
+        let rows = rows(&buffer);
+        let status = row_of(&rows, "no model selected");
+        let line = &rows[status + 2];
+        assert!(line.trim_start().starts_with("~/work/app"), "{line:?}");
+        assert!(line.trim_end().ends_with("Ctrl+P commands"), "{line:?}");
+        // With a conversation behind it the context used comes first.
+        let text = "a".repeat(40_000);
+        app.messages
+            .push(crate::provider::ChatMessage::user_with_images(
+                text.clone(),
+                text,
+                Vec::new(),
+            ));
+        let rows = rows(&drawn(&app, 120, 30));
+        let line = &rows[row_of(&rows, "no model selected") + 2];
+        assert!(line.contains("K  Ctrl+P commands"), "{line:?}");
     }
 }

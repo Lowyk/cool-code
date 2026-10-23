@@ -645,10 +645,12 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: "what changed?".to_owned(),
+            footer: None,
         });
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::Assistant,
             text: text.to_owned(),
+            footer: None,
         });
         app
     }

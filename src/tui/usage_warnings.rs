@@ -207,6 +207,7 @@ impl App {
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::CommandOutput,
                     text: format!("!! {} !!", warning.message),
+                    footer: None,
                 });
                 self.history_scroll = 0;
                 self.notice = warning.message.clone();

@@ -639,13 +639,22 @@ fn main() {
     }
 }
 
+fn columns_for(width: u16, available: u16) -> u16 {
+    match width {
+        0 => available,
+        width => width.max(40).min(available),
+    }
+}
+
 impl Settings {
     /// How many columns the prompt box and the conversation use in a window `available` wide.
     pub(crate) fn prompt_columns(&self, available: u16) -> u16 {
-        match self.prompt_width {
-            0 => available,
-            width => width.max(40).min(available),
-        }
+        columns_for(self.prompt_width, available)
+    }
+
+    /// The same for a conversation, which uses the whole window unless a width is chosen.
+    pub(crate) fn chat_columns(&self, available: u16) -> u16 {
+        columns_for(self.chat_width, available)
     }
 }
 

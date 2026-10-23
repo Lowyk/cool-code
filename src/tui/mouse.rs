@@ -482,6 +482,7 @@ mod frame_tests {
             app.transcript.push(TranscriptEntry {
                 kind: TranscriptKind::Assistant,
                 text: format!("answer line {index}"),
+                footer: None,
             });
         }
         drawn(&app, 100, 30);
