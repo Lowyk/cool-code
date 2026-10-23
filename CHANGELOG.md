@@ -5,6 +5,25 @@ All notable changes are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
+Cool Code 0.3 connects the harness to external tools and makes the interface more compact. MCP
+servers can now give the model more tools, always behind an approval step; installed plugins can
+be updated safely; and the welcome screen and conversation take about half the vertical space and
+a fraction of the width they did.
+
+**Highlights**
+
+- **MCP servers.** Connect local MCP servers (stdio). Each one runs only after you approved its
+  exact command, receives only the secrets you give it, and every tool call asks you first.
+- **Plugin updates.** `/plugin update` shows what changed in a plugin's commands, mods and MCP
+  servers and changes nothing until you confirm.
+- **A compact interface.** One centered welcome group, a prompt box of a width you choose with
+  the status line inside it, and nothing pinned to the bottom of the window.
+- **Clearer input fields.** The API key and URL fields look like inputs and say what to paste.
+- **Fixes.** The text cursor no longer shows over windows drawn on top of the prompt, and two
+  flaky tests are stable.
+
 ### Added
 
 - `/plugin update <name> [git-url or folder]` updates an installed plugin from where it came
@@ -38,6 +57,25 @@ All notable changes are listed here, newest first. The format follows
   prompt.
 - The markdown timing test no longer fails on a busy machine, and a subagent cancel test no
   longer fails about one run in four.
+
+### Upgrade notes
+
+- Settings files from 0.2 load without changes. The prompt box and the conversation are now 76
+  columns wide by default instead of most of the window; change it in Settings → Appearance →
+  Prompt width (up to 200 columns or the whole window).
+- The status line moved from the bottom of the window into the prompt box, and the tagline and
+  version lines left the welcome screen (`coolcode --version` still prints the version).
+- MCP servers start only after you approve them, so nothing changes for anyone who does not
+  configure one. The system prompt is at version 5.
+
+### Known limitations
+
+- MCP servers must be local programs (stdio). Servers reached over HTTP, and the sampling,
+  roots and elicitation features of the protocol, are not supported, and `coolcode run` does not
+  start MCP servers.
+- Only the text a tool returns is kept; images, audio and files become a short note.
+- There is no "always allow this tool": every MCP call asks, except in Accept Everything.
+- Subagents that edit files still run one at a time.
 
 ## [0.2.0] - 2026-10-10
 
