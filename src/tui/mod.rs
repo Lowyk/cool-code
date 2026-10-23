@@ -339,13 +339,14 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
         let slash = app.slash.is_open() && app.mention.is_none();
         match key.code {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.open_tracker(),
+            // Browsing wins over a popup the recalled text opened (a recalled `/model`).
+            KeyCode::Up if app.history_open() && !control => app.history_up(),
+            KeyCode::Down if app.history_open() && !control => app.history_down(),
             KeyCode::Up if app.mention.is_some() && !control => app.mention_move(-1),
             KeyCode::Down if app.mention.is_some() && !control => app.mention_move(1),
             KeyCode::Tab if app.mention.is_some() => app.accept_mention(),
             KeyCode::Up if slash && !control => app.slash_move(-1),
             KeyCode::Down if slash && !control => app.slash_move(1),
-            KeyCode::Up if app.history_open() && !control => app.history_up(),
-            KeyCode::Down if app.history_open() && !control => app.history_down(),
             KeyCode::Tab if slash => app.accept_slash(),
             KeyCode::Esc if slash => app.dismiss_slash(),
             KeyCode::Enter
