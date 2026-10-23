@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 pub(crate) mod mcp;
+pub(crate) mod mcp_client;
 pub(crate) mod mod_host;
 pub(crate) mod mods;
 pub(crate) mod plugins;
