@@ -339,15 +339,18 @@ fn short_hash(server: &str, tool: &str) -> String {
 /// changing its descriptions.
 fn intern(text: &str) -> &'static str {
     static KNOWN: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    const MAX_KEPT: usize = 4096;
-    let mut known = KNOWN
-        .get_or_init(Mutex::default)
+    keep(KNOWN.get_or_init(Mutex::default), text, 4096)
+}
+
+/// [`intern`] with its own set and limit.
+fn keep(set: &Mutex<HashSet<&'static str>>, text: &str, limit: usize) -> &'static str {
+    let mut known = set
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(found) = known.get(text) {
         return found;
     }
-    if known.len() >= MAX_KEPT {
+    if known.len() >= limit {
         return "(too many tools)";
     }
     let kept: &'static str = Box::leak(text.to_owned().into_boxed_str());
@@ -536,9 +539,37 @@ mod tests {
     }
 
     #[test]
-    fn interning_keeps_each_text_once() {
+    fn interning_keeps_each_text_once_and_only_so_many() {
         let first = intern("a tool name from a test");
         let second = intern("a tool name from a test");
         assert!(std::ptr::eq(first, second));
+        let set = Mutex::default();
+        assert_eq!(keep(&set, "one", 2), "one");
+        assert_eq!(keep(&set, "two", 2), "two");
+        assert_eq!(keep(&set, "three", 2), "(too many tools)");
+        assert_eq!(
+            keep(&set, "one", 2),
+            "one",
+            "a known text still works at the limit"
+        );
+    }
+
+    #[test]
+    fn a_slow_start_that_was_replaced_cannot_overwrite_the_newer_server() {
+        let hub = Hub::default();
+        let slow = Timeouts {
+            start: Duration::from_millis(600),
+            call: Duration::from_secs(1),
+        };
+        hub.start_with(helper("silent"), Vec::new(), slow);
+        let mut newer = helper("basic");
+        newer.id = helper("silent").id;
+        hub.start_with(newer.clone(), Vec::new(), quick());
+        wait_for(&hub, &newer.id, |phase| *phase == Phase::Ready);
+        // The first start gives up after 600 ms; the newer server must be untouched by that.
+        std::thread::sleep(Duration::from_millis(1200));
+        let status = hub.statuses().into_iter().next().expect("one server");
+        assert_eq!(status.phase, Phase::Ready, "{status:?}");
+        hub.stop_all();
     }
 }
