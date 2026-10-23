@@ -336,6 +336,10 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             return Ok(());
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Only a press of Esc or Ctrl+C right after the last one counts as the second.
+        if !matches!(key.code, KeyCode::Esc) && !(control && key.code == KeyCode::Char('c')) {
+            app.exit_armed = None;
+        }
         let slash = app.slash.is_open() && app.mention.is_none();
         match key.code {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.open_tracker(),
@@ -360,13 +364,13 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Enter if slash && app.slash_takes_enter() => app.accept_slash(),
             KeyCode::Esc if app.mention.is_some() => app.dismiss_mention(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.running = false;
+                app.press_ctrl_c(std::time::Instant::now());
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::ALT) => {
                 app.toggle_chain()?
             }
             KeyCode::Esc if app.streaming.is_some() => app.cancel_turn(),
-            KeyCode::Esc => app.running = false,
+            KeyCode::Esc => app.press_escape(std::time::Instant::now()),
             KeyCode::Enter => app.submit()?,
             KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.history_scroll = app.history_scroll.saturating_add(3)
@@ -632,6 +636,82 @@ mod tests {
     }
 
     #[test]
+    fn esc_asks_twice_before_clearing_text_or_quitting() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        // Unsent text: the first Esc only says what the second does.
+        app.set_input("a long prompt");
+        app.press_escape(start);
+        assert_eq!(app.input, "a long prompt");
+        assert!(app.notice.contains("clear the text"), "{}", app.notice);
+        app.press_escape(start + Duration::from_secs(1));
+        assert_eq!(app.input, "", "cleared by the second");
+        assert!(app.running, "and the program is still here");
+        // An empty prompt: the same for quitting.
+        app.press_escape(start + Duration::from_secs(2));
+        assert!(app.running);
+        assert!(app.notice.contains("quit"), "{}", app.notice);
+        app.press_escape(start + Duration::from_secs(3));
+        assert!(!app.running, "the second Esc within two seconds quits");
+    }
+
+    #[test]
+    fn a_slow_second_esc_or_another_key_starts_over() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.press_escape(start);
+        app.press_escape(start + Duration::from_secs(5));
+        assert!(app.running, "too late: it only armed again");
+        app.press_escape(start + Duration::from_secs(6));
+        assert!(!app.running);
+        // Any other key in between disarms it.
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        handle_key(&mut app, key_press(KeyCode::Esc)).unwrap();
+        handle_key(&mut app, key_press(KeyCode::Right)).unwrap();
+        handle_key(&mut app, key_press(KeyCode::Esc)).unwrap();
+        assert!(app.running, "a key in between starts over");
+        handle_key(&mut app, key_press(KeyCode::Char('x'))).unwrap();
+        handle_key(&mut app, key_press(KeyCode::Esc)).unwrap();
+        assert_eq!(
+            app.input, "x",
+            "the first Esc after typing only arms the clear"
+        );
+        // A different ask is not the second press of this one.
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.exit_armed = Some((crate::tui::state::ExitAsk::Clear, start));
+        app.press_escape(start);
+        assert!(
+            app.running,
+            "an armed clear does not make an empty prompt quit"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_clears_text_at_once_and_quits_on_the_second_press() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.set_input("oops");
+        app.press_ctrl_c(start);
+        assert_eq!(app.input, "");
+        assert!(app.running);
+        app.press_ctrl_c(start + Duration::from_secs(1));
+        assert!(!app.running, "quits when pressed again soon after");
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.press_ctrl_c(start);
+        assert!(app.running, "an empty prompt only asks");
+        assert!(app.notice.contains("again"), "{}", app.notice);
+    }
+
+    #[test]
     fn ctrl_p_opens_the_command_list_in_an_empty_prompt_only() {
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
@@ -751,9 +831,11 @@ mod tests {
     }
 
     #[test]
-    fn esc_without_running_turn_still_quits() {
+    fn esc_without_running_turn_quits_on_the_second_press() {
         let mut app = App::new(Settings::default());
         app.trust_prompt = false;
+        handle_key(&mut app, esc()).expect("esc");
+        assert!(app.running, "the first press only asks");
         handle_key(&mut app, esc()).expect("esc");
         assert!(!app.running);
     }
