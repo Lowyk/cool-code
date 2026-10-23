@@ -171,6 +171,8 @@ struct Settings {
     backdrop_in_chat: bool,
     /// Draw the backdrop dimmer behind the conversation so text stays easy to read.
     dim_backdrop_in_chat: bool,
+    /// Columns of the prompt box and the conversation; 0 uses the whole window.
+    prompt_width: u16,
     pulse: PulseMode,
     motion_prompt_answered: bool,
     max_tool_rounds: usize,
@@ -342,6 +344,7 @@ impl Default for Settings {
             theme: ThemeId::Cool,
             backdrop_in_chat: false,
             dim_backdrop_in_chat: true,
+            prompt_width: 76,
             pulse: PulseMode::Words,
             motion_prompt_answered: false,
             max_tool_rounds: 40,
@@ -618,6 +621,16 @@ fn main() {
     }
 }
 
+impl Settings {
+    /// How many columns the prompt box and the conversation use in a window `available` wide.
+    pub(crate) fn prompt_columns(&self, available: u16) -> u16 {
+        match self.prompt_width {
+            0 => available,
+            width => width.max(40).min(available),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -804,6 +817,22 @@ mod tests {
             Some("abc")
         );
         assert_eq!(back.disabled_mods, ["clock"]);
+    }
+
+    #[test]
+    fn the_prompt_width_defaults_to_76_and_zero_means_the_whole_window() {
+        let old: Settings = toml::from_str("permission_mode = \"plan\"\n").expect("parse");
+        assert_eq!(old.prompt_width, 76);
+        assert_eq!(old.prompt_columns(200), 76);
+        assert_eq!(old.prompt_columns(50), 50, "never wider than the window");
+        let full: Settings = toml::from_str("prompt_width = 0\n").expect("parse");
+        assert_eq!(full.prompt_columns(200), 200);
+        let silly: Settings = toml::from_str("prompt_width = 3\n").expect("parse");
+        assert_eq!(
+            silly.prompt_columns(200),
+            40,
+            "a floor keeps the prompt usable"
+        );
     }
 
     #[test]

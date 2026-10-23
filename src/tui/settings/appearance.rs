@@ -16,12 +16,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 /// One row per theme, then light mode, the three backdrop switches and the effort-name switch.
-pub(super) const ROWS: usize = THEMES.len() + 5;
+pub(super) const ROWS: usize = THEMES.len() + 6;
 const LIGHT_MODE: usize = THEMES.len();
 const WELCOME_BACKDROP: usize = THEMES.len() + 1;
 const CHAT_BACKDROP: usize = THEMES.len() + 2;
 const DIM_IN_CHAT: usize = THEMES.len() + 3;
 const ANIMATE_EFFORT: usize = THEMES.len() + 4;
+const PROMPT_WIDTH: usize = THEMES.len() + 5;
+/// The usual widths Enter cycles through; 0 is the whole window.
+const WIDTH_CHOICES: [u16; 5] = [76, 100, 120, 160, 0];
+const WIDTH_STEP: u16 = 4;
+const WIDTH_MIN: u16 = 60;
+const WIDTH_MAX: u16 = 200;
 
 /// Width of the option list; the preview takes the rest when there is room for it.
 const LIST_WIDTH: u16 = 40;
@@ -99,7 +105,8 @@ fn line_of(row: usize) -> usize {
     match row {
         row if row <= LIGHT_MODE => row + 1,
         row if row <= DIM_IN_CHAT => row + 3,
-        row => row + 5,
+        row if row <= ANIMATE_EFFORT => row + 5,
+        row => row + 8,
     }
 }
 
@@ -192,6 +199,20 @@ fn option_lines(
     let mut preview = vec![Span::raw("      ")];
     preview.extend(effort_preview(settings.effort_always_animated, tick));
     lines.push(Line::from(preview));
+    lines.push(Line::from(""));
+    lines.push(heading("Layout"));
+    lines.push(Line::from(vec![
+        marker(PROMPT_WIDTH),
+        Span::raw("  "),
+        Span::styled(format!("{:<21}", "Prompt width"), label_style(PROMPT_WIDTH)),
+        Span::styled(
+            match settings.prompt_width {
+                0 => "whole window".to_owned(),
+                width => format!("{width} columns"),
+            },
+            Style::default().fg(Color::Rgb(185, 195, 205)),
+        ),
+    ]));
     lines
 }
 
@@ -264,6 +285,10 @@ fn draw_preview(
             }
             .to_owned(),
         ),
+        PROMPT_WIDTH => {
+            draw_width_preview(frame, area, settings.prompt_width);
+            return;
+        }
         _ => {
             draw_effort_preview(frame, area, settings.effort_always_animated, tick);
             return;
@@ -397,6 +422,50 @@ fn draw_sample(
     }
 }
 
+/// A bar as wide as the prompt would be, next to a bar for the widest setting.
+fn draw_width_preview(frame: &mut ratatui::Frame<'_>, area: Rect, width: u16) {
+    let room = area.width.saturating_sub(2).max(1);
+    let share =
+        |columns: u16| ((u32::from(columns) * u32::from(room)) / u32::from(WIDTH_MAX)) as usize;
+    let filled = if width == 0 {
+        room as usize
+    } else {
+        share(width).max(1)
+    };
+    let bar = |count: usize, color: Color| {
+        Line::from(Span::styled("▆".repeat(count), Style::default().fg(color)))
+    };
+    let lines = vec![
+        Line::from(Span::styled(
+            if width == 0 {
+                "The prompt and the conversation use the whole width of the window.".to_owned()
+            } else {
+                format!("The prompt and the conversation are {width} columns wide.")
+            },
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        bar(filled.min(room as usize), theme::accent()),
+        bar(room as usize, Color::DarkGray),
+        Line::from(Span::styled(
+            "your width, against a 200-column window",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Preview ")
+                .border_style(Style::default().fg(theme::accent())),
+        ),
+        Rect {
+            height: area.height.min(9),
+            ..area
+        },
+    );
+}
+
 fn draw_effort_preview(frame: &mut ratatui::Frame<'_>, area: Rect, animated: bool, tick: usize) {
     let mut status = vec![Span::styled(
         "effort ",
@@ -434,6 +503,22 @@ fn draw_effort_preview(frame: &mut ratatui::Frame<'_>, area: Rect, animated: boo
     );
 }
 
+/// Whether ←/→ change this row's value instead of leaving the section.
+pub(super) fn row_uses_arrows(row: usize) -> bool {
+    row == PROMPT_WIDTH
+}
+
+/// One step wider or narrower: 60 to 200 columns, then the whole window (0) beyond the top.
+fn step_width(current: u16, wider: bool) -> u16 {
+    match (current, wider) {
+        (0, true) => 0,
+        (0, false) => WIDTH_MAX,
+        (width, true) if width >= WIDTH_MAX => 0,
+        (width, true) => (width + WIDTH_STEP).min(WIDTH_MAX),
+        (width, false) => width.saturating_sub(WIDTH_STEP).max(WIDTH_MIN),
+    }
+}
+
 impl App {
     pub(super) fn handle_appearance_key(&mut self, key: event::KeyEvent) -> Result<()> {
         let Some(view) = self.settings_view.as_mut() else {
@@ -442,6 +527,19 @@ impl App {
         match key.code {
             KeyCode::Up => view.row = view.row.saturating_sub(1),
             KeyCode::Down => view.row = (view.row + 1).min(ROWS - 1),
+            KeyCode::Left | KeyCode::Right if view.row == PROMPT_WIDTH => {
+                let wider = key.code == KeyCode::Right;
+                self.settings.prompt_width = step_width(self.settings.prompt_width, wider);
+                write_settings(&self.settings)?;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if view.row == PROMPT_WIDTH => {
+                let at = WIDTH_CHOICES
+                    .iter()
+                    .position(|width| *width == self.settings.prompt_width);
+                self.settings.prompt_width =
+                    WIDTH_CHOICES[at.map_or(0, |at| (at + 1) % WIDTH_CHOICES.len())];
+                write_settings(&self.settings)?;
+            }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let settings = &mut self.settings;
                 match view.row {
@@ -467,7 +565,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANIMATE_EFFORT, CHAT_BACKDROP, LIGHT_MODE, ROWS, WELCOME_BACKDROP, effort_preview,
+        ANIMATE_EFFORT, CHAT_BACKDROP, LIGHT_MODE, PROMPT_WIDTH, ROWS, WELCOME_BACKDROP,
+        effort_preview,
     };
     use crate::tui::render::draw;
     use crate::tui::settings::Section;
@@ -525,6 +624,7 @@ mod tests {
             ("While chatting", CHAT_BACKDROP),
             ("Dim while chatting", super::DIM_IN_CHAT),
             ("Animate effort name", ANIMATE_EFFORT),
+            ("Prompt width", PROMPT_WIDTH),
             (crate::tui::theme::THEMES[2].name, 2),
         ] {
             click_text(&mut app, label);
@@ -536,6 +636,54 @@ mod tests {
         assert_ne!(
             app.settings.light_mode, before,
             "the second click switched it"
+        );
+    }
+
+    #[test]
+    fn the_prompt_width_row_shows_its_value_and_the_arrows_change_it() {
+        let mut app = app();
+        down(&mut app, PROMPT_WIDTH);
+        assert!(text(&frame(&app)).contains("76 columns"));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.settings.prompt_width, 80);
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.settings.prompt_width, 72);
+        app.settings.prompt_width = 60;
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.settings.prompt_width, 60, "not below 60");
+        app.settings.prompt_width = 200;
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.settings.prompt_width, 0, "past 200 is the whole window");
+        assert!(text(&frame(&app)).contains("whole window"));
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.settings.prompt_width, 200);
+    }
+
+    #[test]
+    fn the_prompt_width_row_previews_the_width_not_the_effort_name() {
+        let mut app = app();
+        down(&mut app, PROMPT_WIDTH);
+        let shown = text(&frame(&app));
+        assert!(!shown.contains("In the status line"), "{shown}");
+        assert!(shown.contains("76 columns wide"), "{shown}");
+        app.settings.prompt_width = 0;
+        assert!(text(&frame(&app)).contains("whole width"));
+    }
+
+    #[test]
+    fn enter_on_the_prompt_width_row_cycles_through_the_usual_widths() {
+        let mut app = app();
+        down(&mut app, PROMPT_WIDTH);
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Enter);
+            seen.push(app.settings.prompt_width);
+        }
+        assert_eq!(seen, [100, 120, 160, 0, 76]);
+        assert!(
+            !app.settings.effort_always_animated,
+            "the row is not the effort switch"
         );
     }
 
