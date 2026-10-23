@@ -76,7 +76,6 @@ pub(crate) struct ToolOutput {
 type Reply = Result<Value, String>;
 
 struct Inner {
-    id: String,
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<u64, Sender<Reply>>>,
@@ -152,7 +151,6 @@ impl Client {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let inner = Arc::new(Inner {
-            id: info.id.clone(),
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
@@ -537,7 +535,6 @@ fn skip_escape(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 pub(crate) mod tests {
     use super::*;
     use crate::extensions::mcp::{ServerInfo, ServerManifest, Source};
-    use std::io::BufRead as _;
 
     /// Marks the test binary's own run as an MCP server (see [`mcp_helper_process`]).
     const HELPER: &str = "coolcode-mcp-helper";

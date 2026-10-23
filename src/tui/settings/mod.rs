@@ -3,7 +3,7 @@ pub(in crate::tui) mod auto_mode;
 mod auto_switch;
 mod general;
 mod models;
-mod plugins;
+pub(in crate::tui) mod plugins;
 mod privacy;
 mod providers;
 pub(in crate::tui) use providers::remaining_bar;
@@ -101,6 +101,8 @@ pub(in crate::tui) struct SettingsView {
     pub(in crate::tui) privacy_sub: Option<crate::tui::settings::privacy::PrivacySub>,
     /// A yes-or-no question in Settings > Plugins.
     pub(in crate::tui) plugin_confirm: Option<plugins::PluginConfirm>,
+    /// Typing the secret values of an MCP server, in Settings > Plugins.
+    pub(in crate::tui) mcp_secret: Option<plugins::SecretInput>,
 }
 
 impl SettingsView {
@@ -116,6 +118,7 @@ impl SettingsView {
             tree: crate::tui::widgets::tree::TreeState::default(),
             privacy_sub: None,
             plugin_confirm: None,
+            mcp_secret: None,
         }
     }
 }
@@ -170,7 +173,10 @@ impl App {
                 Routed::Moved | Routed::Other => Ok(()),
             };
         }
-        if view.model_edit.is_some() || view.privacy_sub.is_some() || view.plugin_confirm.is_some()
+        if view.model_edit.is_some()
+            || view.privacy_sub.is_some()
+            || view.plugin_confirm.is_some()
+            || view.mcp_secret.is_some()
         {
             let section = view.section;
             return self.handle_section_key(section, key);
