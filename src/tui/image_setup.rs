@@ -141,7 +141,7 @@ pub(in crate::tui) fn draw_image_setup(
         )),
         Line::from(""),
     ];
-    let field = |index: usize, label: &str, value: String| {
+    let field = |index: usize, label: &str, value: String, hint: &str| {
         let current = setup.focus == index;
         vec![
             Line::from(vec![
@@ -160,21 +160,37 @@ pub(in crate::tui) fn draw_image_setup(
                     },
                 ),
             ]),
-            Line::from(Span::styled(
-                format!("    {value}"),
-                Style::default().fg(Color::Rgb(185, 195, 205)),
-            )),
+            {
+                let caret = || Span::styled("▏", Style::default().fg(crate::tui::theme::accent()));
+                let mut spans = vec![Span::raw("   ")];
+                if current {
+                    spans.push(caret());
+                }
+                if value.is_empty() {
+                    spans.push(Span::styled(hint.to_owned(), dim));
+                } else {
+                    spans.push(Span::styled(
+                        value,
+                        Style::default().fg(Color::Rgb(185, 195, 205)),
+                    ));
+                    if current {
+                        spans.push(caret());
+                    }
+                }
+                Line::from(spans)
+            },
             Line::from(""),
         ]
     };
-    lines.extend(field(0, "API address", setup.base_url.clone()));
-    lines.extend(field(1, "Model", setup.model.clone()));
+    lines.extend(field(
+        0,
+        "API address",
+        setup.base_url.clone(),
+        "https://api.example.com/v1",
+    ));
+    lines.extend(field(1, "Model", setup.model.clone(), "model id"));
     let masked = if setup.key.is_empty() {
-        if setup.had_key {
-            "(leave blank to keep the saved key)".to_owned()
-        } else {
-            String::new()
-        }
+        String::new()
     } else {
         "•".repeat(setup.key.chars().count().min(42))
     };
@@ -182,6 +198,11 @@ pub(in crate::tui) fn draw_image_setup(
         2,
         "API key · kept in the OS credential store",
         masked,
+        if setup.had_key {
+            "•••••••• saved · type to replace"
+        } else {
+            "paste your API key here"
+        },
     ));
     let button = |index: usize, label: &str| {
         let current = setup.focus == index;
@@ -313,6 +334,20 @@ mod tests {
             "the key never reaches the settings file"
         );
         let _ = crate::secrets::delete(&key_name());
+    }
+
+    #[test]
+    fn an_empty_key_field_says_where_to_paste_it_and_the_focused_field_has_a_caret() {
+        let mut app = fresh_app();
+        app.open_image_setup();
+        app.handle_image_setup_key(key(KeyCode::Tab)).unwrap();
+        app.handle_image_setup_key(key(KeyCode::Tab)).unwrap();
+        let shown = screen(&app);
+        assert!(shown.contains("paste your API key here"), "{shown}");
+        assert_eq!(shown.matches('▏').count(), 1, "{shown}");
+        type_text(&mut app, "abc");
+        let typed = screen(&app);
+        assert!(!typed.contains("paste your API key here"), "{typed}");
     }
 
     #[test]
