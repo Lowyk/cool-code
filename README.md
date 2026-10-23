@@ -162,7 +162,7 @@ An **MCP server** is a program that gives the model more tools. List it in `~/.c
 
 ### Long conversations
 
-The status line shows how full the model's context is (`ctx 42k/200k`, yellow above 80% and red above 95%; without a reported window just the size). Before a request would fill the window, the older conversation is replaced by a short briefing the model writes, and the recent part stays word for word; if a provider says a request was too large, the same thing happens and the request is retried. `/compact` does it on demand, and **Settings → General → Auto-compact** turns the automatic version off. The window comes from what the provider reports for the model, so a provider that does not report one is only condensed when it complains. The summary is an estimate-driven approximation: sizes are counted at about four characters a token.
+The bottom line of a conversation shows how full the model's context is (`42K (21%)`, yellow above 80% and red above 95%; without a reported window just the size). Before a request would fill the window, the older conversation is replaced by a short briefing the model writes, and the recent part stays word for word; if a provider says a request was too large, the same thing happens and the request is retried. `/compact` does it on demand, and **Settings → General → Auto-compact** turns the automatic version off. The window comes from what the provider reports for the model, so a provider that does not report one is only condensed when it complains. The summary is an estimate-driven approximation: sizes are counted at about four characters a token.
 
 ### Scripts and CI
 
@@ -183,6 +183,10 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/usage`, `/stats [clear]` | Provider usage, your own usage history |
 | `/compact` | Condense the older conversation into a summary now |
 | `/undo` | Take back the file changes from the model's last turn |
+| `/retry` | Send the last request again (file changes it made stay; `/undo` takes them back) |
+| `/copy [n]` | Copy the last answer, or its nth code block, to the clipboard |
+| `/export [file]` | Write the conversation as Markdown to a new file |
+| `/rename <title>` | Name this session |
 | `/files`, `/read <path>`, `/search <text>`, `/git status` | Read-only repository helpers (trusted folders) |
 | `/init` | Create a starter `COOL.md` |
 | `/claudemd`, `/agentsmd` | Toggle those files for this project |
@@ -192,7 +196,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/<skill or plugin command> [text]` | Run a skill or a plugin's command |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
-Type `/` for a list of these. Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation.
+Type `/` for a list of these. Attach files with `@path` (see above). **Shift+Enter** or **Alt+Enter** starts a new line, and a pasted block of lines stays in the prompt until you press Enter. **Ctrl+Up/Down** scrolls the conversation. **↑/↓** in an empty prompt recall earlier prompts (kept between runs only while Save sessions is on). **Shift+Tab** cycles the permission mode (never into Accept Everything). **Ctrl+P** opens the list of commands, **Ctrl+B** shows or hides the sidebar. **Esc** and **Ctrl+C** ask before they clear text or quit: press again within two seconds.
 
 Every question (trusting a folder, the privacy check, the Ultimate and large-workflow warnings, files outside the project, resets and deletions) is a dialog with buttons at the bottom right: ←/→ or Tab choose, Enter presses the highlighted one, each button's letter presses it directly (shown in brackets, such as `y` and `n`), and Esc picks the safe one.
 
@@ -209,7 +213,7 @@ Every question (trusting a folder, the privacy check, the Ultimate and large-wor
 
 ## Appearance
 
-Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, Mint, Autumn, Retro (CRT), Synthwave), each with a colour set and an animated backdrop, plus a light mode, options for the backdrop on the welcome screen and while chatting, for animating the effort name, and the prompt width (76 columns by default, 60 to 200, or the whole window; the prompt box and the conversation share it). Next to the options is a live preview of the highlighted one: a theme is shown in its own colours with its backdrop before you pick it, and the effort names under "Animate effort name" move only while it is on. Light mode works with every theme: it keeps each theme's colours but draws them light. `NO_COLOR` turns the backdrop off. The browser page shown after a sign-in looks like a Windows 10 console window in your theme's colours.
+Settings → Appearance has eight themes (Cool, Galaxy, Galaxy (Void), Sakura, Mint, Autumn, Retro (CRT), Synthwave), each with a colour set and an animated backdrop, plus a light mode, options for the backdrop on the welcome screen and while chatting, for animating the effort name, the welcome screen's prompt width (76 columns by default), the width of a conversation (the whole window by default; 60 to 200 or the whole window) and the sidebar (off by default). Next to the options is a live preview of the highlighted one: a theme is shown in its own colours with its backdrop before you pick it, and the effort names under "Animate effort name" move only while it is on. Light mode works with every theme: it keeps each theme's colours but draws them light. `NO_COLOR` turns the backdrop off. The browser page shown after a sign-in looks like a Windows 10 console window in your theme's colours.
 
 ## Principles
 

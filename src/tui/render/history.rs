@@ -46,6 +46,14 @@ fn blocks(app: &App) -> Vec<Block> {
                     tinted: false,
                 }
             }
+            // A tool that ran: one dim line, `▸ name · what it did`.
+            TranscriptKind::CommandOutput if entry.text.starts_with("Tool · ") => Block {
+                lines: plain(
+                    &format!("▸ {}", &entry.text["Tool · ".len()..]),
+                    Color::DarkGray,
+                ),
+                tinted: false,
+            },
             TranscriptKind::CommandOutput => Block {
                 lines: plain(&entry.text, Color::Rgb(200, 205, 212)),
                 tinted: false,

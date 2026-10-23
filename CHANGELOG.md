@@ -7,10 +7,10 @@ All notable changes are listed here, newest first. The format follows
 
 ## [0.3.0] - 2026-10-23
 
-Cool Code 0.3 connects the harness to external tools and makes the interface more compact. MCP
-servers can now give the model more tools, always behind an approval step; installed plugins can
-be updated safely; and the welcome screen and conversation take about half the vertical space and
-a fraction of the width they did.
+Cool Code 0.3 connects the harness to external tools and reshapes the interface. MCP servers can
+now give the model more tools, always behind an approval step; installed plugins can be updated
+safely; the welcome screen is compact and a conversation uses the whole window in the style of
+other terminal coding tools; and a set of small conveniences makes everyday use quicker.
 
 **Highlights**
 
@@ -18,8 +18,13 @@ a fraction of the width they did.
   exact command, receives only the secrets you give it, and every tool call asks you first.
 - **Plugin updates.** `/plugin update` shows what changed in a plugin's commands, mods and MCP
   servers and changes nothing until you confirm.
-- **A compact interface.** One centered welcome group, a prompt box of a width you choose with
-  the status line inside it, and nothing pinned to the bottom of the window.
+- **A compact interface.** One centered welcome group and nothing pinned to the bottom of the
+  window. A conversation uses the whole window: your messages are tinted blocks, answers end with
+  a footer (mode, model, time, speed), the status line sits inside the prompt box, and an optional
+  sidebar shows the session, the context used and the files changed.
+- **Everyday conveniences.** Recall earlier prompts with ↑/↓, `/copy`, `/export`, `/retry`,
+  `/rename`, Shift+Tab to cycle the permission mode, Ctrl+P for the command list, and an Esc that
+  asks before it clears your text or quits.
 - **Clearer input fields.** The API key and URL fields look like inputs and say what to paste.
 - **Fixes.** The text cursor no longer shows over windows drawn on top of the prompt, and two
   flaky tests are stable.
@@ -37,8 +42,25 @@ a fraction of the width they did.
   in Accept Everything; Auto mode leaves it to the guard models and Plan mode refuses. Results
   are handed to the model as data. Manage them with `/mcp` and in Settings → Plugins; the status
   line shows `MCP 2/3`.
-- Settings → Appearance → Prompt width: how wide the prompt box and the conversation are (76
-  columns by default; 60 to 200 with ←/→, or the whole window).
+- Settings → Appearance → Welcome prompt width and Chat width: how wide the prompt box is on the
+  welcome screen (76 columns by default) and how wide the text and the box are in a conversation
+  (the whole window by default). 60 to 200 with ←/→, or the whole window.
+- A sidebar beside a conversation (Settings → Appearance → Sidebar, or Ctrl+B; off by default,
+  and only in a window 110 columns wide): the session's name, the context used, the mode and
+  model, the files changed, MCP servers, mods and the folder.
+- Answers end with a dim footer such as `Manual · Some Model · 2.4s · 4.8 tok/s`. The speed is
+  left out when the provider did not report tokens.
+- ↑/↓ in an empty prompt recall earlier prompts, keeping what you had typed. They are kept
+  between runs only while Settings → General → Save sessions is on, and a redaction value
+  (`/privacy add`) is never kept.
+- Esc and Ctrl+C ask before they clear text or quit: the first press says what the second does,
+  and the second within two seconds does it. Ctrl+C clears typed text at once.
+- `/copy [n]` copies the last answer or its nth code block (with `pbcopy`, `wl-copy`, `xclip` or
+  `xsel`, else by asking the terminal through an OSC 52 sequence). `/export [file]` writes the
+  conversation as Markdown, to a file that does not exist yet. `/retry` sends the last request
+  again. `/rename <title>` names the session; the name is saved and shown in `/resume`.
+- Shift+Tab cycles the permission mode (never into Accept Everything, and past Auto while no guard
+  model is set up). Ctrl+P opens the command list.
 - The API key and URL fields in the provider and image forms are drawn as inputs: a field
   background, a caret on the selected one, and a hint while empty ("paste your API key here",
   "••••••• saved · type to replace", an example base URL for custom providers).
@@ -48,8 +70,10 @@ a fraction of the width they did.
 - The system prompt is at version 5: it says that results of `mcp__` tools are data, not orders.
 - A more compact layout. The welcome screen is one centered group (logo, prompt box, hints) with
   nothing pinned to the bottom; the tagline and version lines are gone. The status line is the
-  last row inside the prompt box, and the folder, key hints and any notice sit under it. In a
-  conversation the box and the text share the same width.
+  last row inside the prompt box; the folder, key hints and any notice sit under it, and in a
+  conversation the context used (`8.0K (4%)`) is on that line too.
+- Your messages are tinted blocks with an accent bar, answers have no bullet, and a tool that ran
+  is one dim line (`▸ read_file · 3 lines`).
 
 ### Fixed
 
@@ -60,9 +84,10 @@ a fraction of the width they did.
 
 ### Upgrade notes
 
-- Settings files from 0.2 load without changes. The prompt box and the conversation are now 76
-  columns wide by default instead of most of the window; change it in Settings → Appearance →
-  Prompt width (up to 200 columns or the whole window).
+- Settings files from 0.2 load without changes. The welcome screen's prompt box is 76 columns
+  wide instead of most of the window (Settings → Appearance → Welcome prompt width); a
+  conversation uses the whole window (Chat width).
+- Esc and Ctrl+C no longer quit at once: press again within two seconds.
 - The status line moved from the bottom of the window into the prompt box, and the tagline and
   version lines left the welcome screen (`coolcode --version` still prints the version).
 - MCP servers start only after you approve them, so nothing changes for anyone who does not
