@@ -416,12 +416,8 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
             .block(prompt_block),
         prompt_area,
     );
-    if !app.picker
-        && !app.confirm_ultimate
-        && !app.trust_prompt
-        && app.tool_approval.is_none()
-        && app.privacy_confirmation.is_none()
-    {
+    // Only while keys go to the prompt: any window drawn over it takes the cursor away too.
+    if app.typing_in_prompt() {
         let visible_line = cursor_line.saturating_sub(prompt_scroll as usize);
         let position = Position::new(
             (prompt_inner.x + cursor_column as u16).min(prompt_inner.right().saturating_sub(1)),
@@ -775,6 +771,38 @@ mod tests {
         let (rows, cursor) = prompt_screen(&app);
         assert_eq!(cursor.x, column_of(&rows[cursor.y as usize], "rst"));
         assert!(rows[cursor.y as usize].contains("› first"));
+    }
+
+    /// Draws the app and says whether the terminal cursor was placed.
+    fn cursor_is_shown(app: &App) -> bool {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal.draw(|frame| draw(frame, app, 0)).expect("draw");
+        app.cursor.get().is_some()
+    }
+
+    #[test]
+    fn the_cursor_is_hidden_while_anything_covers_the_prompt() {
+        let fresh = || {
+            let mut app = App::new(Settings::default());
+            app.trust_prompt = false;
+            app
+        };
+        assert!(cursor_is_shown(&fresh()), "the prompt shows it");
+        let covers: [(&str, fn(&mut App)); 6] = [
+            ("settings", |app| {
+                app.open_settings(crate::tui::settings::Section::General)
+            }),
+            ("mode picker", |app| app.mode_picker = true),
+            ("effort picker", |app| app.picker = true),
+            ("model choices", |app| app.model_choices = Some(Vec::new())),
+            ("subagent tracker", |app| app.tracker.open = true),
+            ("trust prompt", |app| app.trust_prompt = true),
+        ];
+        for (name, open) in covers {
+            let mut app = fresh();
+            open(&mut app);
+            assert!(!cursor_is_shown(&app), "the cursor shows over the {name}");
+        }
     }
 
     #[test]
