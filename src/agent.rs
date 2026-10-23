@@ -2023,7 +2023,8 @@ mod auto_guard_tests {
     /// it. Returns the model-facing name of its `echo` tool and its id.
     fn mcp_server() -> (String, String) {
         use crate::extensions::mcp_client::tests::{helper, quick};
-        use crate::extensions::mcp_hub::{Phase, hub};
+        use crate::extensions::mcp_hub::{Phase, hub, use_private_hub};
+        use_private_hub();
         let mut info = helper("basic");
         let id = format!("t{}", uuid::Uuid::new_v4().simple());
         info.id = id.clone();
