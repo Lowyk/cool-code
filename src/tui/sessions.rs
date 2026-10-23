@@ -140,6 +140,7 @@ impl App {
             .map(|entry| TranscriptEntry {
                 kind: kind_from(&entry.kind),
                 text: entry.text,
+                footer: None,
             })
             .collect();
         self.session_id = loaded.header.id;
@@ -434,11 +435,13 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: prompt.to_owned(),
+            footer: None,
         });
         app.messages.push(ChatMessage::assistant(answer.to_owned()));
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::Assistant,
             text: answer.to_owned(),
+            footer: None,
         });
     }
 
@@ -544,6 +547,7 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: "/model fable".to_owned(),
+            footer: None,
         });
         talk(&mut app, "refactor the parser", "done");
         app.save_session();

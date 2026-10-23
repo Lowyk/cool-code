@@ -84,6 +84,7 @@ impl App {
             self.transcript.push(TranscriptEntry {
                 kind: TranscriptKind::User,
                 text: value.clone(),
+                footer: None,
             });
         }
 
@@ -445,6 +446,7 @@ impl App {
         self.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: user_message.display.clone(),
+            footer: None,
         });
         self.mod_event(crate::extensions::mods::Event::PromptSubmitted {
             chars: user_message.display.chars().count(),
@@ -609,6 +611,7 @@ impl App {
             self.transcript.push(TranscriptEntry {
                 kind: TranscriptKind::Assistant,
                 text: partial.to_owned(),
+                footer: None,
             });
             self.messages.push(provider::ChatMessage::assistant(format!(
                 "{partial}\n\n[interrupted by the user]"
@@ -619,6 +622,7 @@ impl App {
             self.transcript.push(TranscriptEntry {
                 kind: TranscriptKind::CommandOutput,
                 text: "(interrupted)".to_owned(),
+                footer: None,
             });
         }
         self.history_scroll = 0;
@@ -684,6 +688,7 @@ impl App {
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::CommandOutput,
                     text: action,
+                    footer: None,
                 });
                 self.notice = "Workspace tool completed; continuing model turn…".to_owned();
             }
@@ -697,6 +702,7 @@ impl App {
                     self.transcript.push(TranscriptEntry {
                         kind: TranscriptKind::Assistant,
                         text: std::mem::take(&mut turn.text),
+                        footer: None,
                     });
                     turn.arrivals.clear();
                 }
@@ -714,6 +720,7 @@ impl App {
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::CommandOutput,
                     text: summary,
+                    footer: None,
                 });
                 self.history_scroll = 0;
             }
@@ -739,13 +746,22 @@ impl App {
                 self.notice = "The assistant is waiting for your approval.".to_owned();
             }
             Ok(PendingEvent::Finished(Ok(response))) => {
-                self.streaming = None;
+                let finished = self.streaming.take();
                 self.commit_checkpoint();
                 self.messages
                     .push(provider::ChatMessage::assistant(response.text.clone()));
+                let footer = finished.map(|turn| {
+                    crate::tui::state::answer_footer(
+                        &self.settings.permission_mode,
+                        &selected_model_name(&self.settings, &response.model_id),
+                        turn.started.elapsed(),
+                        turn.usage,
+                    )
+                });
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::Assistant,
                     text: response.text.clone(),
+                    footer,
                 });
                 self.history_scroll = 0;
                 if response.failed_over {
@@ -780,6 +796,7 @@ impl App {
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::Error,
                     text: format!("{title}\n{details}"),
+                    footer: None,
                 });
                 self.history_scroll = 0;
                 self.notice = format!("Request failed: {title}");
@@ -790,6 +807,7 @@ impl App {
                 self.transcript.push(TranscriptEntry {
                     kind: TranscriptKind::Error,
                     text: "Request worker stopped unexpectedly.".to_owned(),
+                    footer: None,
                 });
                 self.history_scroll = 0;
                 self.notice = "Request worker stopped unexpectedly.".to_owned();
@@ -993,13 +1011,13 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_shows_how_full_the_context_is() {
+    fn the_bottom_line_shows_how_full_the_context_is() {
         let mut app = App::new(Settings::default());
-        assert_eq!(app.context_status(), None, "nothing to show yet");
+        assert_eq!(app.context_line(), None, "nothing to show yet");
         app.messages.push(asked(&"a".repeat(40_000)));
-        let (text, urgency) = app.context_status().expect("status");
+        let (text, urgency) = app.context_line().expect("status");
         assert!(
-            text.starts_with("ctx 1") && !text.contains('/'),
+            text.ends_with('K') && !text.contains('%'),
             "unknown window: {text}"
         );
         assert_eq!(urgency, 0);
@@ -1017,12 +1035,12 @@ mod tests {
         app.settings.providers = vec![profile];
         app.settings.active_provider_id = Some("p".to_owned());
         app.settings.model = Some("m".to_owned());
-        let (text, urgency) = app.context_status().expect("status");
-        assert!(text.ends_with("/16k"), "{text}");
+        let (text, urgency) = app.context_line().expect("status");
+        assert!(text.ends_with("%)"), "{text}");
         assert_eq!(urgency, 1, "above 80%");
         app.messages.push(asked(&"a".repeat(9_000)));
         assert_eq!(
-            app.context_status().unwrap().1,
+            app.context_line().unwrap().1,
             2,
             "above 95%, and the count follows the conversation"
         );
@@ -1189,6 +1207,7 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: "write a parser".to_owned(),
+            footer: None,
         });
         sender
             .send(PendingEvent::Finished(Ok(provider::Completion {
@@ -1207,6 +1226,68 @@ mod tests {
         assert_eq!(
             saved.transcript.last().map(|e| e.text.as_str()),
             Some("Done.")
+        );
+    }
+
+    #[test]
+    fn a_finished_answer_gets_a_footer_with_the_mode_the_model_and_the_time() {
+        let (mut app, sender) = streaming_app();
+        app.settings.permission_mode = "manual".to_owned();
+        if let Some(turn) = app.streaming.as_mut() {
+            turn.started = std::time::Instant::now() - std::time::Duration::from_secs(4);
+            turn.usage = Some(40);
+        }
+        sender
+            .send(PendingEvent::Finished(Ok(provider::Completion {
+                text: "Done.".to_owned(),
+                provider_id: None,
+                model_id: "some-model".to_owned(),
+                failed_over: false,
+                tool_calls: Vec::new(),
+            })))
+            .unwrap();
+        app.poll_response();
+        let footer = app
+            .transcript
+            .last()
+            .and_then(|entry| entry.footer.clone())
+            .expect("a footer");
+        assert_eq!(footer.mode, "manual");
+        assert!(
+            footer.details.starts_with("Some Model · 4."),
+            "{}",
+            footer.details
+        );
+        assert!(footer.details.ends_with(" tok/s"), "{}", footer.details);
+    }
+
+    #[test]
+    fn the_footer_leaves_out_what_it_does_not_know() {
+        use crate::tui::state::answer_footer;
+        let two_four = std::time::Duration::from_millis(2400);
+        assert_eq!(
+            answer_footer("auto", "Some Model", two_four, Some(11)).details,
+            "Some Model · 2.4s · 4.6 tok/s"
+        );
+        assert_eq!(
+            answer_footer("auto", "Some Model", two_four, None).details,
+            "Some Model · 2.4s"
+        );
+        assert_eq!(
+            answer_footer(
+                "auto",
+                "Some Model",
+                std::time::Duration::from_millis(100),
+                Some(50)
+            )
+            .details,
+            "Some Model · 0.1s",
+            "no speed from a tenth of a second"
+        );
+        assert_eq!(
+            answer_footer("auto", "m", std::time::Duration::from_secs(75), Some(0)).details,
+            "m · 1m 15s",
+            "no speed from no tokens"
         );
     }
 
@@ -1450,6 +1531,7 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::Assistant,
             text: "old conversation".to_owned(),
+            footer: None,
         });
         app.messages.push(provider::ChatMessage::assistant(
             "old conversation".to_owned(),

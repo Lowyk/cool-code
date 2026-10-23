@@ -1291,6 +1291,7 @@ mod tests {
         app.transcript.push(crate::tui::state::TranscriptEntry {
             kind: crate::tui::state::TranscriptKind::Assistant,
             text: "hello".to_owned(),
+            footer: None,
         });
         app.picker = true;
         app.picker_index = effort_index;

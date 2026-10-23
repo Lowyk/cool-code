@@ -472,6 +472,7 @@ mod tests {
         app.transcript.push(crate::tui::state::TranscriptEntry {
             kind: crate::tui::state::TranscriptKind::User,
             text: "hello".to_owned(),
+            footer: None,
         });
         app.save_session();
         app.open_settings(Section::General);

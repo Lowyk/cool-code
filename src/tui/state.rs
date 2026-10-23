@@ -168,6 +168,17 @@ pub(super) enum TranscriptKind {
 pub(super) struct TranscriptEntry {
     pub(super) kind: TranscriptKind,
     pub(super) text: String,
+    /// What is shown under a finished answer: the mode, the model, how long it took.
+    pub(super) footer: Option<AnswerFooter>,
+}
+
+/// The dim line under an answer, like `Build · model · 2.4s · 4.8 tok/s`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AnswerFooter {
+    /// The permission mode the answer was given in (its settings value, such as `manual`).
+    pub(super) mode: String,
+    /// The rest of the line: the model, the time and the speed.
+    pub(super) details: String,
 }
 
 pub(super) struct PrivacyPrompt {
@@ -584,7 +595,8 @@ impl App {
 
     /// How full the model's context is: the status-line text and how urgent it is (0 calm, 1
     /// getting full, 2 nearly full). `None` while the conversation is empty.
-    pub(super) fn context_status(&self) -> Option<(String, u8)> {
+    /// The estimated size of the conversation sent with the next request.
+    fn context_used(&self) -> Option<u64> {
         if self.messages.is_empty() {
             return None;
         }
@@ -601,33 +613,26 @@ impl App {
             self.context_cache.set((self.messages.len(), last, tokens));
             tokens
         };
-        let text = match crate::context::window_tokens(&self.settings) {
-            Some(window) => {
-                let urgency = if used * 100 >= window * 95 {
-                    2
-                } else if used * 100 >= window * crate::context::COMPACT_AT_PERCENT {
-                    1
-                } else {
-                    0
-                };
-                return Some((
-                    format!(
-                        "ctx {}/{}",
-                        crate::context::thousands(used),
-                        crate::context::thousands(window)
-                    ),
-                    urgency,
-                ));
-            }
-            None => format!("ctx {}", crate::context::thousands(used)),
+        Some(used)
+    }
+
+    /// The context as the bottom line shows it (`8.0K (4%)`), and how urgent it is (0 to 2).
+    pub(super) fn context_line(&self) -> Option<(String, u8)> {
+        let used = self.context_used()?;
+        let window = crate::context::window_tokens(&self.settings);
+        let urgency = match window {
+            Some(window) if used * 100 >= window * 95 => 2,
+            Some(window) if used * 100 >= window * crate::context::COMPACT_AT_PERCENT => 1,
+            _ => 0,
         };
-        Some((text, 0))
+        Some((context_brief(used, window), urgency))
     }
 
     pub(super) fn finish_command(&mut self, output: impl Into<String>) {
         self.transcript.push(TranscriptEntry {
             kind: TranscriptKind::CommandOutput,
             text: output.into(),
+            footer: None,
         });
         self.history_scroll = 0;
     }
@@ -688,5 +693,57 @@ impl App {
         self.mode_picker = false;
         self.notice = format!("Mode set to {}.", mode_label(mode));
         Ok(())
+    }
+}
+
+/// A token count written briefly: `512`, `8.0K`, `42K`, `1.3M`, with the share of the window
+/// when it is known.
+pub(super) fn context_brief(used: u64, window: Option<u64>) -> String {
+    // One decimal, rounded half up, under ten units; whole units above.
+    let short = |tokens: u64| {
+        let tenths = |unit: u64| (tokens * 10 + unit / 2) / unit;
+        if tokens < 1_000 {
+            tokens.to_string()
+        } else if tokens < 9_950 {
+            format!("{}.{}K", tenths(1_000) / 10, tenths(1_000) % 10)
+        } else if tokens < 999_500 {
+            format!("{}K", (tokens + 500) / 1_000)
+        } else if tokens < 9_950_000 {
+            format!("{}.{}M", tenths(1_000_000) / 10, tenths(1_000_000) % 10)
+        } else {
+            format!("{}M", (tokens + 500_000) / 1_000_000)
+        }
+    };
+    match window {
+        Some(window) if window > 0 => {
+            format!("{} ({}%)", short(used), (used * 100 + window / 2) / window)
+        }
+        _ => short(used),
+    }
+}
+
+/// The footer of an answer: the mode, the model, how long it took and, when the provider
+/// reported the tokens and the time is long enough to mean something, the speed.
+pub(super) fn answer_footer(
+    mode: &str,
+    model: &str,
+    elapsed: Duration,
+    output_tokens: Option<u64>,
+) -> AnswerFooter {
+    let seconds = elapsed.as_secs_f64();
+    let time = if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        format!("{}m {:02}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+    };
+    let mut details = format!("{model} · {time}");
+    if let Some(tokens) = output_tokens.filter(|tokens| *tokens > 0)
+        && seconds >= 0.5
+    {
+        details.push_str(&format!(" · {:.1} tok/s", tokens as f64 / seconds));
+    }
+    AnswerFooter {
+        mode: mode.to_owned(),
+        details,
     }
 }

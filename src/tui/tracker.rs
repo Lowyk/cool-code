@@ -470,6 +470,7 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: "split it up".to_owned(),
+            footer: None,
         });
         let (sender, receiver) = mpsc::channel();
         app.pending = Some(receiver);

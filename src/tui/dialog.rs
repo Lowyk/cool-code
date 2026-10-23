@@ -398,6 +398,7 @@ mod window_tests {
         app.transcript.push(crate::tui::state::TranscriptEntry {
             kind: crate::tui::state::TranscriptKind::User,
             text: "hi".to_owned(),
+            footer: None,
         });
         let (response, _decision) = std::sync::mpsc::sync_channel(1);
         app.tool_approval = Some(crate::agent::ToolApproval {

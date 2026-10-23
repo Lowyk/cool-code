@@ -111,6 +111,7 @@ impl App {
                 if approved { "Approved" } else { "Declined" },
                 approval.title
             ),
+            footer: None,
         });
         self.approval_scroll = 0;
         self.approval_expanded = false;
@@ -246,6 +247,7 @@ mod tests {
         app.transcript.push(TranscriptEntry {
             kind: TranscriptKind::User,
             text: "please run the tests".to_owned(),
+            footer: None,
         });
         let (response, decision) = mpsc::sync_channel(1);
         app.tool_approval = Some(ToolApproval {
