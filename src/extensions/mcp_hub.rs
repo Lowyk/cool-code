@@ -85,8 +85,26 @@ fn lock(servers: &Mutex<Servers>) -> MutexGuard<'_, Servers> {
 
 /// The hub the whole program shares.
 pub(crate) fn hub() -> &'static Hub {
+    #[cfg(test)]
+    if let Some(private) = PRIVATE.with(std::cell::Cell::get) {
+        return private;
+    }
     static HUB: OnceLock<Hub> = OnceLock::new();
     HUB.get_or_init(Hub::default)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRIVATE: std::cell::Cell<Option<&'static Hub>> = const { std::cell::Cell::new(None) };
+}
+
+/// Gives the current test thread a hub of its own, so servers a test starts are not seen by the
+/// tests that run beside it.
+#[cfg(test)]
+pub(crate) fn use_private_hub() -> &'static Hub {
+    let private: &'static Hub = Box::leak(Box::default());
+    PRIVATE.with(|slot| slot.set(Some(private)));
+    private
 }
 
 impl Hub {
