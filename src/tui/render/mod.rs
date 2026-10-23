@@ -183,8 +183,8 @@ pub(super) fn input_prompt_height(input: &str, area: Rect, columns: u16) -> u16 
     needed.clamp(4, available) as u16
 }
 
-/// Rows under the prompt box: the key hints or turn status, then room for a wrapped notice.
-const HINT_ROWS: u16 = 3;
+/// Rows under the prompt box: a gap, the key hints or turn status, then room for a wrapped notice.
+const HINT_ROWS: u16 = 4;
 
 /// `width` columns in the middle of `area`.
 fn column(area: Rect, width: u16) -> Rect {
@@ -506,7 +506,11 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
     let hints = Style::default().fg(Color::DarkGray);
     let hint_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Fill(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
         .split(hint_area);
     match app.streaming.as_ref() {
         Some(turn) => {
@@ -520,12 +524,12 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
                     Style::default().fg(Color::Rgb(255, 197, 92)),
                 ));
             }
-            frame.render_widget(Paragraph::new(Line::from(spans)), hint_rows[0]);
+            frame.render_widget(Paragraph::new(Line::from(spans)), hint_rows[1]);
         }
         None => {
             frame.render_widget(
                 Paragraph::new(Span::styled(app.folder.as_str(), hints)),
-                hint_rows[0],
+                hint_rows[1],
             );
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
@@ -537,14 +541,14 @@ fn draw_dark(frame: &mut ratatui::Frame<'_>, app: &App, animation_tick: usize) {
                     Span::styled(" scroll", hints),
                 ]))
                 .alignment(Alignment::Right),
-                hint_rows[0],
+                hint_rows[1],
             );
         }
     }
     // The one-line message about what just happened goes under the hints.
     frame.render_widget(
         Paragraph::new(Span::styled(app.notice.as_str(), hints)).wrap(Wrap { trim: true }),
-        hint_rows[1],
+        hint_rows[2],
     );
     if status_rows > 0 {
         let status_area = Rect::new(box_inner.x, box_inner.bottom() - 1, box_inner.width, 1);
@@ -1335,12 +1339,12 @@ mod layout_tests {
             "the status row is part of the box"
         );
         assert!(
-            rows[status + 1].contains("commands"),
+            rows[status + 2].contains("commands"),
             "{}",
-            rows[status + 1]
+            rows[status + 2]
         );
         assert_eq!(
-            box_cells(&buffer, status + 1),
+            box_cells(&buffer, status + 2),
             0,
             "the hints are outside the box"
         );
