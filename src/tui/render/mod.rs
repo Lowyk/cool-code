@@ -1481,7 +1481,7 @@ mod layout_tests {
                 text,
                 Vec::new(),
             ));
-        let rows = rows(&drawn(&app, 120, 30));
+        let rows = self::rows(&drawn(&app, 120, 30));
         let line = &rows[row_of(&rows, "no model selected") + 2];
         assert!(line.contains("K  Ctrl+P commands"), "{line:?}");
     }
