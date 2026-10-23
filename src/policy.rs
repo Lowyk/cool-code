@@ -50,6 +50,24 @@ pub(crate) fn auto_approve_command(permission_mode: &str, command: &str) -> bool
     )
 }
 
+/// The modes Shift+Tab goes through, in order. Accept Everything is left out on purpose: one
+/// stray key must never switch off every question, so it is only reached by choosing it.
+const CYCLE: [&str; 5] = ["auto", "accept-edits", "accept-minimal", "manual", "plan"];
+
+/// The mode after `current` for Shift+Tab. Auto is skipped while no guard model can judge
+/// actions. From a mode outside the cycle (Accept Everything) it goes to Manual, the next one in
+/// the list of modes.
+pub(crate) fn next_mode(current: &str, auto_ready: bool) -> &'static str {
+    let start = match CYCLE.iter().position(|mode| *mode == current) {
+        Some(at) => at + 1,
+        None => CYCLE.iter().position(|mode| *mode == "manual").unwrap_or(0),
+    };
+    (0..CYCLE.len())
+        .map(|step| CYCLE[(start + step) % CYCLE.len()])
+        .find(|mode| *mode != "auto" || auto_ready)
+        .unwrap_or("manual")
+}
+
 pub(crate) fn mode_label(mode: &str) -> &'static str {
     MODES[mode_index(mode)].0
 }
@@ -93,6 +111,38 @@ mod tests {
     fn manual_mode_asks_before_every_command() {
         for command in ALLOWLISTED_COMMANDS {
             assert!(!auto_approve_command("manual", command), "{command}");
+        }
+    }
+
+    #[test]
+    fn shift_tab_goes_round_the_modes_without_ever_entering_accept_everything() {
+        let mut mode = "auto";
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            mode = super::next_mode(mode, true);
+            seen.push(mode);
+        }
+        assert_eq!(
+            seen,
+            ["accept-edits", "accept-minimal", "manual", "plan", "auto"]
+        );
+        // Auto is skipped while it cannot be used.
+        assert_eq!(super::next_mode("plan", false), "accept-edits");
+        assert_eq!(super::next_mode("manual", false), "plan");
+        // Leaving Accept Everything goes to Manual, and nothing leads into it.
+        assert_eq!(super::next_mode("accept-everything", true), "manual");
+        for mode in [
+            "",
+            "auto",
+            "accept-edits",
+            "accept-minimal",
+            "manual",
+            "plan",
+            "nonsense",
+        ] {
+            for ready in [true, false] {
+                assert_ne!(super::next_mode(mode, ready), "accept-everything", "{mode}");
+            }
         }
     }
 

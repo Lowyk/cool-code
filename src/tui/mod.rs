@@ -380,6 +380,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) -> Result<()> {
             KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.history_scroll = app.history_scroll.saturating_sub(3)
             }
+            KeyCode::BackTab => app.cycle_mode()?,
             KeyCode::Char('b') if control => app.toggle_sidebar()?,
             KeyCode::Char('p') if control => app.open_palette(),
             KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -711,6 +712,20 @@ mod tests {
         app.press_ctrl_c(start);
         assert!(app.running, "an empty prompt only asks");
         assert!(app.notice.contains("again"), "{}", app.notice);
+    }
+
+    #[test]
+    fn shift_tab_changes_the_mode_and_says_which() {
+        let mut app = App::new(Settings::default());
+        app.trust_prompt = false;
+        app.settings.permission_mode = "manual".to_owned();
+        handle_key(&mut app, with(KeyCode::BackTab, KeyModifiers::SHIFT)).unwrap();
+        assert_eq!(app.settings.permission_mode, "plan");
+        assert!(app.notice.contains("Plan"), "{}", app.notice);
+        // Auto has no guard here, so the next step skips it.
+        handle_key(&mut app, with(KeyCode::BackTab, KeyModifiers::SHIFT)).unwrap();
+        assert_eq!(app.settings.permission_mode, "accept-edits");
+        assert!(app.input.is_empty());
     }
 
     #[test]
