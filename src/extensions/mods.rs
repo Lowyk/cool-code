@@ -92,18 +92,23 @@ impl ModManifest {
 
     /// The command line exactly as it will run, for showing to the user.
     pub(crate) fn command_line(&self) -> String {
-        std::iter::once(&self.command)
-            .chain(&self.args)
-            .map(|part| {
-                if !part.is_empty() && !part.contains(|c: char| c.is_whitespace() || c == '"') {
-                    part.clone()
-                } else {
-                    format!("\"{}\"", part.replace('"', "\\\""))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+        command_line(&self.command, &self.args)
     }
+}
+
+/// `command` and `args` as one line, quoting the parts that need it.
+pub(crate) fn command_line(command: &str, args: &[String]) -> String {
+    std::iter::once(command)
+        .chain(args.iter().map(String::as_str))
+        .map(|part| {
+            if !part.is_empty() && !part.contains(|c: char| c.is_whitespace() || c == '"') {
+                part.to_owned()
+            } else {
+                format!("\"{}\"", part.replace('"', "\\\""))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A mod found on disk.

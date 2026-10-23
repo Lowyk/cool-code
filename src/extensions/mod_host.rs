@@ -44,31 +44,43 @@ const PASSED_VARIABLES: [&str; 18] = [
     "COMSPEC",
 ];
 
-/// The program to start: an absolute path as written, a relative path inside the mod's folder,
-/// or a bare name looked up on PATH.
-fn program(info: &ModInfo) -> Result<PathBuf, String> {
-    let command = Path::new(&info.manifest.command);
-    if command.is_absolute() {
-        return Ok(command.to_path_buf());
+/// The program to start: an absolute path as written, a relative path inside `dir`, or a bare
+/// name looked up on PATH.
+pub(crate) fn program(command: &str, dir: &Path) -> Result<PathBuf, String> {
+    let path = Path::new(command);
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
     }
-    if !info.manifest.command.contains(['/', '\\']) {
-        return Ok(command.to_path_buf());
+    if !command.contains(['/', '\\']) {
+        return Ok(path.to_path_buf());
     }
-    let folder = info
-        .dir
+    let folder = dir
         .canonicalize()
         .map_err(|error| format!("its folder cannot be read ({error})"))?;
     let real = folder
-        .join(command)
+        .join(path)
         .canonicalize()
-        .map_err(|error| format!("{} cannot be found ({error})", info.manifest.command))?;
+        .map_err(|error| format!("{command} cannot be found ({error})"))?;
     if !real.starts_with(&folder) {
-        return Err(format!(
-            "{} leads outside the mod's folder",
-            info.manifest.command
-        ));
+        return Err(format!("{command} leads outside the program's folder"));
     }
     Ok(real)
+}
+
+/// A command that runs `program` in `dir` with only the harmless variables of the user's
+/// environment (see [`PASSED_VARIABLES`]); the caller adds anything else on purpose.
+pub(crate) fn scrubbed_command(program: PathBuf, args: &[String], dir: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(dir)
+        .env_clear()
+        .envs(std::env::vars().filter(|(name, _)| {
+            PASSED_VARIABLES
+                .iter()
+                .any(|passed| passed.eq_ignore_ascii_case(name))
+        }));
+    command
 }
 
 /// What a mod's threads report to the interface.
@@ -272,16 +284,8 @@ fn run(
             text,
         });
     };
-    let started = program(&info).and_then(|program| {
-        Command::new(program)
-            .args(&info.manifest.args)
-            .current_dir(&info.dir)
-            .env_clear()
-            .envs(std::env::vars().filter(|(name, _)| {
-                PASSED_VARIABLES
-                    .iter()
-                    .any(|passed| passed.eq_ignore_ascii_case(name))
-            }))
+    let started = program(&info.manifest.command, &info.dir).and_then(|program| {
+        scrubbed_command(program, &info.manifest.args, &info.dir)
             .env("COOLCODE_MOD", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -489,10 +493,11 @@ pub(crate) mod tests {
         let mut info = helper("echo", &[]);
         info.dir = folder.clone();
         info.manifest.command = "bin/inside.sh".to_owned();
-        assert!(program(&info).is_ok());
+        assert!(program(&info.manifest.command, &info.dir).is_ok());
         info.manifest.command = "bin/outside".to_owned();
-        let error = program(&info).expect_err("a link out of the folder");
-        assert!(error.contains("outside the mod's folder"), "{error}");
+        let error =
+            program(&info.manifest.command, &info.dir).expect_err("a link out of the folder");
+        assert!(error.contains("leads outside"), "{error}");
         std::fs::remove_dir_all(folder).ok();
     }
 
