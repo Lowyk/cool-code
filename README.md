@@ -148,9 +148,13 @@ A skill is a folder with a `SKILL.md` (a `name` and a `description` in its front
 
 ### Plugins and mods
 
-A **plugin** is a folder or Git repository with a `plugin.toml` that can add skills, slash commands that expand to a prompt, and mods. `/plugin install <git-url or folder>` fetches it into a staging folder and shows exactly what it adds, including every mod's command line; nothing is installed or run until you press **y**. `/plugin list` and `/plugin remove <name>` manage them, and **Settings → Plugins** switches plugins and mods on and off.
+A **plugin** is a folder or Git repository with a `plugin.toml` that can add skills, slash commands that expand to a prompt, and mods. `/plugin install <git-url or folder>` fetches it into a staging folder and shows exactly what it adds, including every mod's command line; nothing is installed or run until you press **y**. `/plugin list` and `/plugin remove <name>` manage them, and **Settings → Plugins** switches plugins, mods and MCP servers on and off.
 
 A **mod** is a small program (from a plugin or `~/.coolcode/mods/<name>/mod.toml`) that receives events such as "turn finished" as JSON lines and can put a short text in the status line or show a notice. It runs only after you approved its manifest, again whenever the manifest changes, without your environment's API keys, and it is stopped when Cool Code exits. Mods only watch: they cannot approve, block or change anything. A mod that crashes, hangs or prints garbage is reported and ignored. The formats and the protocol are in [docs/extensions.md](docs/extensions.md).
+
+### MCP servers
+
+An **MCP server** is a program that gives the model more tools. List it in `~/.coolcode/mcp.toml` (or add it with `/mcp add <name> <command> [arguments…]`, or let a plugin bring one), then approve it: **Settings → Plugins** or `/mcp approve <name>` shows its exact command first, and nothing runs before you press **y**. Its tools reach the model as `mcp__<server>__<tool>`, and every call asks you first (Auto mode: the guard models decide; Accept Everything: no question; Plan mode: refused). Secrets such as an access token are set hidden in Settings → Plugins and kept in the OS credential store, never in a file. What a tool returns is treated as data, not instructions. Only local (stdio) servers are supported in this release. Details: [docs/extensions.md](docs/extensions.md).
 
 ### Undo
 
@@ -184,6 +188,7 @@ The status line shows how full the model's context is (`ctx 42k/200k`, yellow ab
 | `/claudemd`, `/agentsmd` | Toggle those files for this project |
 | `/privacy [add\|clear\|revoke]` | Local redaction values and acknowledgements |
 | `/plugin [install <source>\|list\|remove <name>]` | Install, list or remove plugins |
+| `/mcp [add <name> <command>\|approve\|enable\|disable\|restart\|secret\|remove <name>]` | List and manage MCP servers |
 | `/<skill or plugin command> [text]` | Run a skill or a plugin's command |
 | `/resume [all]`, `/clear`, `/quit` | Sessions and exit |
 
