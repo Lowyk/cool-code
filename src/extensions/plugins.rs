@@ -7,6 +7,7 @@
 //! a plugin declares has to stay inside its own folder.
 
 use crate::extensions::Dirs;
+use crate::extensions::mcp::{ServerInfo, ServerManifest, Source as McpSource};
 use crate::extensions::mods::{ModInfo, ModManifest};
 use crate::extensions::skills::Skill;
 use anyhow::{Context, Result, bail};
@@ -35,6 +36,9 @@ pub(crate) struct Manifest {
     pub(crate) commands: Vec<PluginCommand>,
     #[serde(default)]
     pub(crate) mods: Vec<ModManifest>,
+    /// MCP servers that give the model more tools.
+    #[serde(default)]
+    pub(crate) mcp: Vec<ServerManifest>,
 }
 
 /// A slash command that expands to a prompt.
@@ -93,8 +97,14 @@ impl Manifest {
         if self.description.trim().is_empty() || self.description.chars().count() > 300 {
             bail!("the plugin needs a description of at most 300 characters");
         }
-        if self.skills.len() > 16 || self.commands.len() > 50 || self.mods.len() > 16 {
-            bail!("a plugin can list at most 16 skill folders, 50 commands and 16 mods");
+        if self.skills.len() > 16
+            || self.commands.len() > 50
+            || self.mods.len() > 16
+            || self.mcp.len() > 16
+        {
+            bail!(
+                "a plugin can list at most 16 skill folders, 50 commands, 16 mods and 16 MCP servers"
+            );
         }
         let root = dir
             .canonicalize()
@@ -146,6 +156,15 @@ impl Manifest {
                 bail!("the mod {} is listed twice", entry.name);
             }
         }
+        for (index, entry) in self.mcp.iter().enumerate() {
+            entry.validate()?;
+            if self.mcp[..index]
+                .iter()
+                .any(|earlier| earlier.name == entry.name)
+            {
+                bail!("the MCP server {} is listed twice", entry.name);
+            }
+        }
         Ok(())
     }
 }
@@ -191,6 +210,25 @@ impl Plugin {
     pub(crate) fn mods(&self) -> Vec<ModInfo> {
         mods_in(&self.manifest, &self.dir)
     }
+
+    /// Its MCP servers, with ids of the form `plugin/server`.
+    pub(crate) fn mcp_servers(&self) -> Vec<ServerInfo> {
+        mcp_in(&self.manifest, &self.dir)
+    }
+}
+
+fn mcp_in(manifest: &Manifest, dir: &Path) -> Vec<ServerInfo> {
+    manifest
+        .mcp
+        .iter()
+        .map(|entry| {
+            ServerInfo::new(
+                McpSource::Plugin(manifest.name.clone()),
+                entry.clone(),
+                dir.to_path_buf(),
+            )
+        })
+        .collect()
 }
 
 fn mods_in(manifest: &Manifest, dir: &Path) -> Vec<ModInfo> {
@@ -500,12 +538,33 @@ impl Staged {
                 }
             ));
         }
+        lines.push(format!(
+            "MCP servers ({}), programs that give the model more tools:",
+            manifest.mcp.len()
+        ));
+        for entry in &manifest.mcp {
+            lines.push(format!("  {}: runs {}", entry.name, entry.command_line()));
+            lines.push(format!("    in {}", self.target.display()));
+            lines.push(format!(
+                "    secrets: {}",
+                if entry.env.is_empty() {
+                    "none".to_owned()
+                } else {
+                    entry.env.join(", ")
+                }
+            ));
+        }
         lines
     }
 
     /// Its mods as they will be once installed.
     pub(crate) fn mods(&self) -> Vec<ModInfo> {
         mods_in(&self.manifest, &self.target)
+    }
+
+    /// Its MCP servers as they will be once installed.
+    pub(crate) fn mcp_servers(&self) -> Vec<ServerInfo> {
+        mcp_in(&self.manifest, &self.target)
     }
 
     /// Moves the plugin into place. Refuses to replace anything.
@@ -625,6 +684,47 @@ events = ["turn_finished", "tool_started"]
         ] {
             assert_eq!(for_git(Path::new(given)), PathBuf::from(plain), "{given}");
         }
+    }
+
+    #[test]
+    fn a_plugin_lists_mcp_servers_that_are_checked_and_get_the_plugins_name_in_their_id() {
+        let folder = source_folder();
+        let server = |name: &str| ServerManifest {
+            name: name.to_owned(),
+            command: "npx".to_owned(),
+            ..Default::default()
+        };
+        assert!(
+            manifest_with(|m| m.mcp = vec![server("files")])
+                .validate(&folder)
+                .is_ok()
+        );
+        for (bad, reason) in [
+            (
+                manifest_with(|m| m.mcp = vec![server("Bad Name")]),
+                "not valid",
+            ),
+            (
+                manifest_with(|m| m.mcp = vec![server("a"), server("a")]),
+                "twice",
+            ),
+            (
+                manifest_with(|m| m.mcp = (0..17).map(|n| server(&format!("s{n}"))).collect()),
+                "at most",
+            ),
+        ] {
+            let error = bad.validate(&folder).expect_err(reason);
+            assert!(format!("{error:#}").contains(reason), "{reason}: {error:#}");
+        }
+        let plugin = Plugin {
+            manifest: manifest_with(|m| m.mcp = vec![server("files")]),
+            dir: folder.clone(),
+            enabled: true,
+        };
+        let servers = plugin.mcp_servers();
+        assert_eq!(servers[0].id, "reviewer/files");
+        assert_eq!(servers[0].dir, folder);
+        assert_eq!(servers[0].source, McpSource::Plugin("reviewer".to_owned()));
     }
 
     fn dirs() -> Dirs {

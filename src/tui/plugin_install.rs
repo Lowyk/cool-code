@@ -167,11 +167,13 @@ impl App {
     fn install_reviewed(&mut self, staged: Staged) -> Result<()> {
         let name = staged.manifest.name.clone();
         let mods = staged.mods();
+        let servers = staged.mcp_servers();
         let summary = format!(
-            "Installed {name}: {} skill(s), {} command(s), {} mod(s).",
+            "Installed {name}: {} skill(s), {} command(s), {} mod(s), {} MCP server(s).",
             staged.skills.len(),
             staged.manifest.commands.len(),
-            mods.len()
+            mods.len(),
+            servers.len()
         );
         if let Err(error) = staged.install() {
             self.notice = format!("Could not install the plugin: {error:#}");
@@ -179,6 +181,9 @@ impl App {
         }
         for info in &mods {
             crate::extensions::mods::approve(&mut self.settings, info);
+        }
+        for info in &servers {
+            crate::extensions::mcp::approve(&mut self.settings, info);
         }
         self.settings
             .disabled_plugins
@@ -203,6 +208,7 @@ impl App {
         self.settings
             .disabled_mods
             .retain(|id| !id.starts_with(&prefix));
+        crate::extensions::mcp::forget_plugin(&mut self.settings, name);
         for id in self.extensions.mods.running_ids() {
             if id.starts_with(&prefix) {
                 self.extensions.mods.stop(&id);
@@ -291,6 +297,12 @@ name = "status"
 command = "python3"
 args = ["mods/status.py", "--every", "5 s"]
 events = ["turn_finished"]
+
+[[mcp]]
+name = "files"
+command = "npx"
+args = ["-y", "fs"]
+env = ["TOKEN"]
 "#,
         )
         .unwrap();
@@ -382,6 +394,9 @@ events = ["turn_finished"]
             "/review: Review the staged changes",
             "python3 mods/status.py --every \"5 s\"",
             "turn_finished",
+            "MCP servers (1)",
+            "files: runs npx -y fs",
+            "secrets: TOKEN",
         ] {
             assert!(shown.contains(expected), "{expected}:\n{shown}");
         }
@@ -396,6 +411,7 @@ events = ["turn_finished"]
         assert!(!app.plugin_review_open());
         assert!(!target.exists());
         assert!(app.settings.approved_mods.is_empty());
+        assert!(app.settings.approved_mcp.is_empty());
         assert!(
             app.notice.contains("Nothing was installed"),
             "{}",
@@ -423,6 +439,13 @@ events = ["turn_finished"]
             .expect("approved");
         let (mods, _) = crate::extensions::mods::discover(&app.extensions.dirs, &app.settings);
         assert_eq!(*approved, crate::extensions::mods::manifest_hash(&mods[0]));
+        let (servers, _) =
+            crate::extensions::mcp::discover(&app.extensions.dirs, None, &app.settings);
+        assert_eq!(servers[0].id, "reviewer/files");
+        assert!(
+            crate::extensions::mcp::should_run(&app.settings, &servers[0]),
+            "the server the user was shown is approved"
+        );
         assert!(run(&mut app, "/plugin list").contains("reviewer 1.2.0"));
         let catalog = app.slash_catalog();
         assert!(catalog.iter().any(|item| item.name == "review"));
@@ -451,6 +474,7 @@ events = ["turn_finished"]
         assert!(said.contains("Removed"), "{said}");
         assert!(!home.join(".coolcode/plugins/reviewer").exists());
         assert!(app.settings.approved_mods.is_empty());
+        assert!(app.settings.approved_mcp.is_empty());
         assert!(app.settings.disabled_plugins.is_empty());
         assert!(!app.slash_catalog().iter().any(|item| item.name == "review"));
     }
