@@ -202,10 +202,15 @@ pub(super) fn shorten_home(path: &std::path::Path, home: Option<&std::path::Path
     if let Some(home) = home
         && let Ok(rest) = path.strip_prefix(home)
     {
-        return if rest.as_os_str().is_empty() {
+        let separator = std::path::MAIN_SEPARATOR_STR;
+        let parts = rest
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        return if parts.is_empty() {
             "~".to_owned()
         } else {
-            format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display())
+            format!("~{separator}{}", parts.join(separator))
         };
     }
     path.display().to_string()
@@ -1377,9 +1382,10 @@ mod layout_tests {
         use super::shorten_home;
         use std::path::Path;
         let home = Path::new("/home/me");
+        let separator = std::path::MAIN_SEPARATOR;
         assert_eq!(
             shorten_home(Path::new("/home/me/code/app"), Some(home)),
-            "~/code/app"
+            format!("~{separator}code{separator}app")
         );
         assert_eq!(shorten_home(Path::new("/home/me"), Some(home)), "~");
         assert_eq!(
